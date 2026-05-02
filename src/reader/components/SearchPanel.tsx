@@ -1,3 +1,5 @@
+import type { RefObject } from "react";
+
 export default function SearchPanel(props: {
   query: string;
   onQueryChange: (q: string) => void;
@@ -5,6 +7,7 @@ export default function SearchPanel(props: {
   loading: boolean;
   results: { cfi: string; excerpt: string }[];
   onOpen: (cfi: string) => void;
+  inputRef?: RefObject<HTMLInputElement | null>;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -12,6 +15,7 @@ export default function SearchPanel(props: {
 
       <div style={{ display: "flex", gap: 8 }}>
         <input
+          ref={props.inputRef}
           value={props.query}
           onChange={(e) => props.onQueryChange(e.currentTarget.value)}
           placeholder="输入关键词"
@@ -48,4 +52,3 @@ export default function SearchPanel(props: {
     </div>
   );
 }
-

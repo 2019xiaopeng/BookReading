@@ -50,6 +50,8 @@ export default function ReaderPage() {
   const controllerRef = useRef<ReaderController | null>(null);
   const persistTimerRef = useRef<number | null>(null);
   const lastCfiRef = useRef<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const wheelCooldownRef = useRef(0);
 
   useEffect(() => {
     (async () => {
@@ -166,6 +168,90 @@ export default function ReaderPage() {
     controllerRef.current.setTheme(settings.theme);
     controllerRef.current.setFontSizePercent(settings.fontSizePercent);
   }, [settings.theme, settings.fontSizePercent]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const active = document.activeElement as HTMLElement | null;
+      const tag = active?.tagName?.toLowerCase();
+      const isTyping = tag === "input" || tag === "textarea" || active?.isContentEditable;
+
+      if (e.ctrlKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setIsImmersive(false);
+        setSideTab("search");
+        requestAnimationFrame(() => searchInputRef.current?.focus());
+        return;
+      }
+
+      if (e.ctrlKey && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        setIsImmersive((v) => !v);
+        return;
+      }
+
+      if (e.ctrlKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        const cfi = lastCfiRef.current;
+        if (!book || !cfi) return;
+        void (async () => {
+          const bm = await addBookmark(book.id, cfi, null);
+          setBookmarks((prev) => [bm, ...prev]);
+          setSideTab("bookmarks");
+        })();
+        return;
+      }
+
+      if (isTyping) return;
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        void animateTurn("prev");
+        return;
+      }
+
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        void animateTurn("next");
+        return;
+      }
+
+      if (e.key === "Escape") {
+        if (isImmersive) {
+          e.preventDefault();
+          setIsImmersive(false);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [book, isImmersive, settings.pageAnimation]);
+
+  useEffect(() => {
+    const el = viewerRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      const now = Date.now();
+      if (now - wheelCooldownRef.current < 300) return;
+      if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
+      e.preventDefault();
+      wheelCooldownRef.current = now;
+      void animateTurn(e.deltaY > 0 ? "next" : "prev");
+    };
+
+    const onDblClick = () => {
+      setIsImmersive((v) => !v);
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("dblclick", onDblClick);
+
+    return () => {
+      el.removeEventListener("wheel", onWheel as any);
+      el.removeEventListener("dblclick", onDblClick);
+    };
+  }, [settings.pageAnimation]);
 
   async function persistSettings(next: ReaderSettings) {
     await setSetting("theme", next.theme);
@@ -402,6 +488,7 @@ export default function ReaderPage() {
 
             {sideTab === "search" ? (
               <SearchPanel
+                inputRef={searchInputRef}
                 query={searchQuery}
                 onQueryChange={setSearchQuery}
                 loading={searchLoading}
