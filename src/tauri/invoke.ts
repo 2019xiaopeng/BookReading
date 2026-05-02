@@ -37,3 +37,18 @@ export async function getSettings(): Promise<Record<string, string>> {
 export async function setSetting(key: string, value: string): Promise<void> {
   return invoke<void>("set_setting", { key, value });
 }
+
+export type ReadingState = {
+  book_id: string;
+  cfi: string;
+  percent: number | null;
+  updated_at: number;
+};
+
+export async function getReadingState(bookId: string): Promise<ReadingState | null> {
+  return invoke<ReadingState | null>("get_reading_state", { book_id: bookId });
+}
+
+export async function upsertReadingState(bookId: string, cfi: string, percent: number | null): Promise<void> {
+  return invoke<void>("upsert_reading_state", { book_id: bookId, cfi, percent });
+}

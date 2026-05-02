@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import type { Book } from "../tauri/invoke";
-import { getSettings, listBooks, setSetting } from "../tauri/invoke";
+import { getReadingState, getSettings, listBooks, setSetting, upsertReadingState } from "../tauri/invoke";
 import { createReader, type ReaderController, type TocItem } from "../reader/epub/reader";
 import SettingsPanel from "../reader/components/SettingsPanel";
 import { defaultSettings } from "../reader/settings/defaults";
@@ -20,6 +20,8 @@ export default function ReaderPage() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<ReaderController | null>(null);
+  const persistTimerRef = useRef<number | null>(null);
+  const lastCfiRef = useRef<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -54,17 +56,37 @@ export default function ReaderPage() {
       controllerRef.current = await createReader({
         container: containerRef.current,
         libraryPath: book.library_path,
-        onRelocated: ({ percent }) => {
+        onRelocated: ({ cfi, percent }) => {
+          lastCfiRef.current = cfi;
           if (typeof percent === "number") setPercent(percent);
+
+          if (persistTimerRef.current) {
+            window.clearTimeout(persistTimerRef.current);
+          }
+          persistTimerRef.current = window.setTimeout(() => {
+            const lastCfi = lastCfiRef.current;
+            if (!lastCfi) return;
+            void upsertReadingState(book.id, lastCfi, typeof percent === "number" ? percent : null);
+          }, 1500);
         },
         onTocLoaded: (toc) => setToc(toc),
       });
 
       controllerRef.current.setTheme(settings.theme);
       controllerRef.current.setFontSizePercent(settings.fontSizePercent);
+
+      const state = await getReadingState(book.id);
+      if (state?.cfi) {
+        await controllerRef.current.display(state.cfi);
+        if (typeof state.percent === "number") setPercent(state.percent);
+      }
     })();
 
     return () => {
+      if (persistTimerRef.current) {
+        window.clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
       controllerRef.current?.destroy();
       controllerRef.current = null;
     };
