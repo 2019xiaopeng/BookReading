@@ -669,6 +669,12 @@
           margin: 18,
         });
 
+        const [readerPrefs, setReaderPrefs] = useState({
+          pageMode: "tap",
+          brightness: 0.92,
+          keepScreenOn: true,
+        });
+
         const [pdfSplitPrefs, setPdfSplitPrefs] = useState({
           strength: "standard",
           minSegHeight: 320,
@@ -726,12 +732,153 @@
         const [epubLoc, setEpubLoc] = useState({ chapter: 3, chapters: 18, percent: 0.28 });
         const [tocOpen, setTocOpen] = useState(false);
 
+        const [bookmarks, setBookmarks] = useState([]);
+        const [annotations, setAnnotations] = useState([]);
+        const [highlightDraft, setHighlightDraft] = useState({ color: "amber", note: "" });
+        const [searchDraft, setSearchDraft] = useState({ query: "" });
+        const [progressDraft, setProgressDraft] = useState({ value: 0 });
+
         const currentTheme = readingPrefs.theme;
         const isDark = currentTheme === "night";
 
         function showToast(text) {
           setToast(text);
           window.setTimeout(() => setToast(null), 1800);
+        }
+
+        function getActiveLocator() {
+          if (!activeBook) return null;
+          if (route.name === "pdfReader") return { type: "pdf", page: pdfLoc.page, segment: pdfLoc.segment };
+          if (route.name === "epubReader") return { type: "epub", chapter: epubLoc.chapter };
+          if (route.name === "textReader") return { type: "text", page: textLoc.page };
+          return null;
+        }
+
+        function formatLocator(locator) {
+          if (!locator) return "";
+          if (locator.type === "pdf") return `第 ${locator.page} 页 · 段 ${locator.segment}`;
+          if (locator.type === "epub") return `第 ${locator.chapter} 章`;
+          if (locator.type === "text") return `第 ${locator.page} 页`;
+          return "";
+        }
+
+        function isCurrentBookmarked() {
+          if (!activeBook) return false;
+          const loc = getActiveLocator();
+          if (!loc) return false;
+          return bookmarks.some((b) => b.bookId === activeBook.id && JSON.stringify(b.locator) === JSON.stringify(loc));
+        }
+
+        function toggleBookmark() {
+          if (!activeBook) return;
+          const loc = getActiveLocator();
+          if (!loc) return;
+          const exists = bookmarks.some((b) => b.bookId === activeBook.id && JSON.stringify(b.locator) === JSON.stringify(loc));
+          if (exists) {
+            setBookmarks((prev) => prev.filter((b) => !(b.bookId === activeBook.id && JSON.stringify(b.locator) === JSON.stringify(loc))));
+            showToast("已移除书签");
+            return;
+          }
+          setBookmarks((prev) => [
+            {
+              id: `bm_${Date.now()}`,
+              bookId: activeBook.id,
+              locator: loc,
+              label: formatLocator(loc),
+              createdAt: Date.now(),
+            },
+            ...prev,
+          ]);
+          showToast("已添加书签");
+        }
+
+        function openReaderMenu() {
+          if (!activeBook) return;
+          setSheet("readerMenu");
+        }
+
+        function openHighlight() {
+          if (!activeBook) return;
+          setHighlightDraft({ color: "amber", note: "" });
+          setSheet("highlight");
+        }
+
+        function saveHighlight() {
+          if (!activeBook) return;
+          const loc = getActiveLocator();
+          if (!loc) return;
+          const sampleText =
+            activeBook.format === "PDF"
+              ? "（PDF 子页）选中区域的文本层可能缺失，此处可存截图或坐标。"
+              : "「夜里下雨时，城市像被抛光过的石头。」";
+          setAnnotations((prev) => [
+            {
+              id: `hl_${Date.now()}`,
+              bookId: activeBook.id,
+              locator: loc,
+              color: highlightDraft.color,
+              text: sampleText,
+              note: highlightDraft.note,
+              createdAt: Date.now(),
+            },
+            ...prev,
+          ]);
+          showToast("已保存标注");
+          setSheet(null);
+        }
+
+        function openSearch() {
+          if (!activeBook) return;
+          if (activeBook.format === "PDF") {
+            showToast("PDF 搜索依赖文本层（原型略）");
+            return;
+          }
+          setSearchDraft({ query: "" });
+          setRoute({ name: "search", bookId: activeBook.id, returnTo: route });
+        }
+
+        function openBookmarks() {
+          if (!activeBook) return;
+          setRoute({ name: "bookmarks", bookId: activeBook.id, returnTo: route });
+        }
+
+        function openAnnotations() {
+          if (!activeBook) return;
+          setRoute({ name: "annotations", bookId: activeBook.id, returnTo: route });
+        }
+
+        function openProgress() {
+          if (!activeBook) return;
+          const loc = getActiveLocator();
+          if (!loc) return;
+          if (loc.type === "pdf") setProgressDraft({ value: (loc.page - 1) * pdfLoc.segmentsInPage + loc.segment });
+          if (loc.type === "epub") setProgressDraft({ value: loc.chapter });
+          if (loc.type === "text") setProgressDraft({ value: loc.page });
+          setSheet("progress");
+        }
+
+        function jumpProgress() {
+          if (!activeBook) return;
+          const v = progressDraft.value;
+          if (route.name === "pdfReader") {
+            const perPage = pdfLoc.segmentsInPage || 6;
+            const nextPage = Math.max(1, Math.ceil(v / perPage));
+            const nextSeg = Math.max(1, v - (nextPage - 1) * perPage);
+            setPdfLoc((p) => ({ ...p, page: nextPage, segment: nextSeg }));
+            updateProgress(activeBook.id, clamp(v / (pdfLoc.totalSegments || 1240), 0, 1));
+          }
+          if (route.name === "epubReader") {
+            const c = clamp(v, 1, epubLoc.chapters);
+            setEpubLoc((p) => ({ ...p, chapter: c, percent: clamp(c / p.chapters, 0, 1) }));
+            updateProgress(activeBook.id, clamp(c / epubLoc.chapters, 0, 1));
+          }
+          if (route.name === "textReader") {
+            const p = clamp(v, 1, textLoc.totalPages);
+            setTextLoc((prev) => ({ ...prev, page: p }));
+            updateProgress(activeBook.id, clamp(p / textLoc.totalPages, 0, 1));
+          }
+          showToast("已跳转");
+          setSheet(null);
         }
 
         function openBook(bookId) {
@@ -822,6 +969,12 @@
             setTocOpen(false);
             return;
           }
+          if (route.returnTo) {
+            setSheet(null);
+            setTocOpen(false);
+            setRoute(route.returnTo);
+            return;
+          }
           setSheet(null);
           setTocOpen(false);
           setRoute({ name: "shelf" });
@@ -834,6 +987,10 @@
 
         function openImport() {
           setRoute({ name: "import" });
+        }
+
+        function openTransfer() {
+          setRoute({ name: "transfer" });
         }
 
         function importMock(kind) {
@@ -888,6 +1045,18 @@
             >
               <div style={{ display: "grid", gap: 16 }}>
                 <div style={{ display: "grid", gap: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 900, color: "rgba(18,19,22,0.78)" }}>翻页方式</div>
+                  <Segmented
+                    value={readerPrefs.pageMode}
+                    options={[
+                      { value: "tap", label: "点击翻页" },
+                      { value: "scroll", label: "上下滚动" },
+                    ]}
+                    onChange={(v) => setReaderPrefs((p) => ({ ...p, pageMode: v }))}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gap: 10 }}>
                   <div style={{ fontSize: 12, fontWeight: 900, color: "rgba(18,19,22,0.78)" }}>主题</div>
                   <Segmented
                     value={readingPrefs.theme}
@@ -929,6 +1098,39 @@
                   formatValue={(v) => `${v}px`}
                   onChange={(v) => setReadingPrefs((p) => ({ ...p, margin: v }))}
                 />
+
+                <SliderRow
+                  label="亮度"
+                  value={readerPrefs.brightness}
+                  min={0.3}
+                  max={1}
+                  step={0.02}
+                  formatValue={(v) => `${Math.round(v * 100)}%`}
+                  onChange={(v) => setReaderPrefs((p) => ({ ...p, brightness: v }))}
+                />
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "grid", gap: 3 }}>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: "rgba(18,19,22,0.78)" }}>屏幕常亮</div>
+                    <div style={{ fontSize: 12, fontWeight: 650, color: "rgba(18,19,22,0.58)", lineHeight: 1.35 }}>阅读时不自动息屏（真实实现会调用系统 flag）</div>
+                  </div>
+                  <button
+                    onClick={() => setReaderPrefs((p) => ({ ...p, keepScreenOn: !p.keepScreenOn }))}
+                    style={{
+                      height: 34,
+                      padding: "0 12px",
+                      borderRadius: 999,
+                      border: "1px solid rgba(18,19,22,0.12)",
+                      background: readerPrefs.keepScreenOn ? "rgba(14,111,92,0.12)" : "rgba(18,19,22,0.06)",
+                      color: readerPrefs.keepScreenOn ? "rgba(14,111,92,0.95)" : "rgba(18,19,22,0.68)",
+                      fontSize: 12,
+                      fontWeight: 900,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {readerPrefs.keepScreenOn ? "开启" : "关闭"}
+                  </button>
+                </div>
 
                 {isPdf ? (
                   <div style={{ display: "grid", gap: 14, paddingTop: 8, borderTop: "1px solid rgba(18,19,22,0.10)" }}>
@@ -988,6 +1190,129 @@
                     <PrimaryButton label="完成" onClick={() => setSheet(null)} />
                   </div>
                 )}
+              </div>
+            </Sheet>
+          );
+        }
+
+        function ReaderMenuSheet() {
+          if (!activeBook) return null;
+          const isPdf = activeBook.format === "PDF";
+          const canSearch = !isPdf;
+          const canToc = activeBook.format === "EPUB";
+          return (
+            <Sheet
+              open={sheet === "readerMenu"}
+              title="阅读菜单"
+              subtitle={activeBook ? `${activeBook.title} · ${activeBook.format}` : ""}
+              onClose={() => setSheet(null)}
+            >
+              <div style={{ display: "grid", gap: 10 }}>
+                {canToc ? <GhostButton label="目录" onClick={() => { setSheet(null); setTocOpen(true); }} /> : null}
+                {canSearch ? <GhostButton label="搜索" onClick={() => { setSheet(null); openSearch(); }} /> : null}
+                <GhostButton label="进度跳转" onClick={() => { setSheet(null); openProgress(); }} />
+                <GhostButton label="书签列表" onClick={() => { setSheet(null); openBookmarks(); }} />
+                <GhostButton label="标注与笔记" onClick={() => { setSheet(null); openAnnotations(); }} />
+                <GhostButton label="添加标注" onClick={() => openHighlight()} />
+                <PrimaryButton label="设置" onClick={() => openSettings()} />
+              </div>
+            </Sheet>
+          );
+        }
+
+        function HighlightSheet() {
+          if (!activeBook) return null;
+          const colors = [
+            { key: "amber", label: "琥珀", bg: "rgba(192,74,26,0.16)", fg: "rgba(192,74,26,0.95)" },
+            { key: "moss", label: "苔绿", bg: "rgba(14,111,92,0.16)", fg: "rgba(14,111,92,0.95)" },
+            { key: "slate", label: "石墨", bg: "rgba(18,19,22,0.10)", fg: "rgba(18,19,22,0.82)" },
+          ];
+          return (
+            <Sheet
+              open={sheet === "highlight"}
+              title="添加标注"
+              subtitle={`${formatLocator(getActiveLocator())} · 本地保存`}
+              onClose={() => setSheet(null)}
+            >
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {colors.map((c) => {
+                    const active = highlightDraft.color === c.key;
+                    return (
+                      <button
+                        key={c.key}
+                        onClick={() => setHighlightDraft((p) => ({ ...p, color: c.key }))}
+                        style={{
+                          height: 34,
+                          padding: "0 12px",
+                          borderRadius: 999,
+                          border: active ? "1px solid rgba(18,19,22,0.16)" : "1px solid rgba(18,19,22,0.10)",
+                          background: active ? c.bg : "rgba(255,255,255,0.78)",
+                          color: c.fg,
+                          fontSize: 12,
+                          fontWeight: 900,
+                          cursor: "pointer",
+                          boxShadow: active ? "0 12px 26px rgba(0,0,0,0.10)" : "none",
+                        }}
+                      >
+                        {c.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <textarea
+                  value={highlightDraft.note}
+                  onChange={(e) => setHighlightDraft((p) => ({ ...p, note: e.target.value }))}
+                  placeholder="写一条笔记（可选）"
+                  rows={3}
+                  style={{
+                    width: "100%",
+                    resize: "none",
+                    borderRadius: 16,
+                    padding: 12,
+                    border: "1px solid rgba(18,19,22,0.12)",
+                    background: "rgba(255,255,255,0.80)",
+                    fontSize: 13,
+                    fontWeight: 650,
+                    outline: "none",
+                  }}
+                />
+                <div style={{ display: "flex", gap: 10 }}>
+                  <GhostButton label="取消" onClick={() => setSheet(null)} />
+                  <PrimaryButton label="保存" onClick={() => saveHighlight()} />
+                </div>
+              </div>
+            </Sheet>
+          );
+        }
+
+        function ProgressSheet() {
+          if (!activeBook) return null;
+          const loc = getActiveLocator();
+          if (!loc) return null;
+          const isPdf = loc.type === "pdf";
+          const isEpub = loc.type === "epub";
+          const isText = loc.type === "text";
+          const max = isPdf ? pdfLoc.totalSegments || 1240 : isEpub ? epubLoc.chapters : textLoc.totalPages;
+          const min = 1;
+          const label = isPdf ? "子页序号" : isEpub ? "章节" : "页码";
+
+          return (
+            <Sheet open={sheet === "progress"} title="进度跳转" subtitle={`${label} · ${formatLocator(loc)}`} onClose={() => setSheet(null)}>
+              <div style={{ display: "grid", gap: 14 }}>
+                <SliderRow
+                  label={label}
+                  value={progressDraft.value}
+                  min={min}
+                  max={max}
+                  step={1}
+                  formatValue={(v) => `${v}/${max}`}
+                  onChange={(v) => setProgressDraft({ value: v })}
+                />
+                <div style={{ display: "flex", gap: 10 }}>
+                  <GhostButton label="取消" onClick={() => setSheet(null)} />
+                  <PrimaryButton label="跳转" onClick={() => jumpProgress()} />
+                </div>
               </div>
             </Sheet>
           );
@@ -1113,14 +1438,24 @@
                   </IconButton>
                 }
                 right={
-                  <IconButton
-                    label="筛选"
-                    onClick={() => {
-                      showToast("长按可管理书籍（原型略）");
-                    }}
-                  >
-                    ⌁
-                  </IconButton>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <IconButton
+                      label="传书"
+                      onClick={() => {
+                        openTransfer();
+                      }}
+                    >
+                      ⌂
+                    </IconButton>
+                    <IconButton
+                      label="管理"
+                      onClick={() => {
+                        showToast("长按管理 / 分组（后续）");
+                      }}
+                    >
+                      ⌁
+                    </IconButton>
+                  </div>
                 }
               />
 
@@ -1310,6 +1645,203 @@
           );
         }
 
+        function TransferScreen() {
+          const [tab, setTab] = useState("receive");
+          const [paired, setPaired] = useState(false);
+          const [incoming, setIncoming] = useState([
+            { id: "in_1", name: "城与盐.epub", format: "EPUB", progress: 1 },
+            { id: "in_2", name: "漫画卷01.pdf", format: "PDF", progress: 0.42 },
+          ]);
+
+          useEffect(() => {
+            if (!paired) return;
+            const t = window.setInterval(() => {
+              setIncoming((prev) =>
+                prev.map((x) => {
+                  if (x.progress >= 1) return x;
+                  return { ...x, progress: clamp(x.progress + 0.08 + Math.random() * 0.06, 0, 1) };
+                }),
+              );
+            }, 460);
+            return () => window.clearInterval(t);
+          }, [paired]);
+
+          function addIncomingMock() {
+            const id = `in_${Date.now()}`;
+            setIncoming((prev) => [
+              { id, name: "新上传：notes.md", format: "MD", progress: 0.02 },
+              ...prev,
+            ]);
+          }
+
+          return (
+            <div style={{ minHeight: "100%", background: "var(--paper)" }}>
+              <TopBar
+                title="局域网传书"
+                subtitle="同一 Wi‑Fi · 扫码或输入地址上传"
+                left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
+                right={<div />}
+              />
+
+              <div style={{ padding: 14, display: "grid", gap: 14 }}>
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.78)",
+                    border: "1px solid rgba(18,19,22,0.10)",
+                    borderRadius: 18,
+                    padding: 12,
+                    boxShadow: "0 16px 50px rgba(0,0,0,0.10)",
+                    display: "grid",
+                    gap: 10,
+                  }}
+                >
+                  <Segmented
+                    value={tab}
+                    options={[
+                      { value: "receive", label: "接收" },
+                      { value: "send", label: "发送" },
+                    ]}
+                    onChange={(v) => setTab(v)}
+                  />
+
+                  {tab === "receive" ? (
+                    <div style={{ display: "grid", gap: 12 }}>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ fontSize: 13, fontWeight: 900 }}>电脑端上传地址</div>
+                          <Pill label={paired ? "已连接" : "未连接"} tone={paired ? "ok" : "accent"} />
+                        </div>
+                        <div style={{ fontSize: 12, color: "rgba(18,19,22,0.62)", fontWeight: 650, lineHeight: 1.45 }}>
+                          在电脑浏览器打开：<span style={{ fontWeight: 900 }}>http://192.168.1.12:18080</span>（示例）
+                        </div>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "148px 1fr", gap: 12, alignItems: "center" }}>
+                        <div
+                          style={{
+                            height: 148,
+                            borderRadius: 18,
+                            border: "1px solid rgba(18,19,22,0.12)",
+                            background:
+                              "linear-gradient(135deg, rgba(18,19,22,0.06), rgba(18,19,22,0.02)), repeating-linear-gradient(90deg, rgba(18,19,22,0.12) 0 2px, transparent 2px 8px)",
+                            display: "grid",
+                            placeItems: "center",
+                            boxShadow: "0 18px 44px rgba(0,0,0,0.10)",
+                            position: "relative",
+                            overflow: "hidden",
+                          }}
+                        >
+                          <div style={{ position: "absolute", inset: 18, borderRadius: 14, background: "rgba(255,255,255,0.70)" }} />
+                          <div style={{ position: "relative", fontSize: 12, fontWeight: 950, color: "rgba(18,19,22,0.72)" }}>QR</div>
+                        </div>
+                        <div style={{ display: "grid", gap: 10 }}>
+                          <div style={{ fontSize: 12, color: "rgba(18,19,22,0.62)", fontWeight: 650, lineHeight: 1.45 }}>
+                            电脑端网页可批量拖拽上传。手机端接收后自动入库；PDF 会开始后台拆分。
+                          </div>
+                          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                            <GhostButton
+                              label="模拟扫码连接"
+                              onClick={() => {
+                                setPaired(true);
+                                showToast("已连接到电脑端");
+                              }}
+                            />
+                            <GhostButton label="模拟上传一本" onClick={() => addIncomingMock()} />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 12 }}>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <div style={{ fontSize: 13, fontWeight: 900 }}>从手机发送到电脑</div>
+                        <div style={{ fontSize: 12, color: "rgba(18,19,22,0.62)", fontWeight: 650, lineHeight: 1.45 }}>
+                          手机作为发送端时，可扫码电脑端提供的接收页面。此功能后置（原型占位）。
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 10 }}>
+                        <GhostButton label="返回接收" onClick={() => setTab("receive")} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.70)",
+                    border: "1px solid rgba(18,19,22,0.10)",
+                    borderRadius: 18,
+                    padding: 14,
+                    display: "grid",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontSize: 13, fontWeight: 900 }}>接收记录</div>
+                    <Pill label={`${incoming.length} 项`} tone="neutral" />
+                  </div>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {incoming.map((x) => (
+                      <div
+                        key={x.id}
+                        style={{
+                          borderRadius: 16,
+                          border: "1px solid rgba(18,19,22,0.10)",
+                          background: "rgba(255,255,255,0.78)",
+                          padding: 12,
+                          display: "grid",
+                          gap: 8,
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                          <div style={{ fontSize: 13, fontWeight: 900, color: "rgba(18,19,22,0.86)", lineHeight: 1.25 }}>{x.name}</div>
+                          <Pill label={x.format} tone={x.format === "PDF" ? "accent" : "neutral"} />
+                        </div>
+                        <div style={{ height: 10, borderRadius: 999, border: "1px solid rgba(18,19,22,0.10)", background: "rgba(18,19,22,0.03)", overflow: "hidden" }}>
+                          <div
+                            style={{
+                              height: "100%",
+                              width: `${Math.round(x.progress * 100)}%`,
+                              background: x.progress >= 1 ? "linear-gradient(90deg, rgba(14,111,92,0.88), rgba(14,111,92,0.46))" : "linear-gradient(90deg, rgba(192,74,26,0.88), rgba(192,74,26,0.40))",
+                              borderRadius: 999,
+                              transition: "width 220ms ease",
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "rgba(18,19,22,0.58)" }}>{Math.round(x.progress * 100)}%</div>
+                          {x.progress >= 1 ? (
+                            <button
+                              onClick={() => {
+                                const kind = x.format.toLowerCase();
+                                importMock(kind === "pdf" ? "pdf" : kind === "epub" ? "epub" : kind === "md" ? "md" : "txt");
+                              }}
+                              style={{
+                                height: 30,
+                                padding: "0 10px",
+                                borderRadius: 999,
+                                border: "1px solid rgba(18,19,22,0.12)",
+                                background: "rgba(255,255,255,0.78)",
+                                fontSize: 12,
+                                fontWeight: 900,
+                                cursor: "pointer",
+                              }}
+                            >
+                              入库
+                            </button>
+                          ) : (
+                            <span style={{ fontSize: 12, fontWeight: 650, color: "rgba(18,19,22,0.48)" }}>传输中</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
         function PdfProcessingScreen() {
           const b = activeBook;
           const progress = pdfJob.bookId === b?.id ? pdfJob.progress : 0;
@@ -1484,7 +2016,12 @@
                     </div>
                   </div>
                 }
-                right={<IconButton label="设置" onClick={() => openSettings()}>⚙</IconButton>}
+                right={
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <IconButton label="书签" onClick={() => toggleBookmark()}>{isCurrentBookmarked() ? "★" : "☆"}</IconButton>
+                    <IconButton label="菜单" onClick={() => openReaderMenu()}>⋯</IconButton>
+                  </div>
+                }
               />
 
               <div style={{ padding: 14, display: "grid", gap: 12 }}>
@@ -1608,7 +2145,12 @@
                     </div>
                   </div>
                 }
-                right={<IconButton label="设置" onClick={() => openSettings()}>⚙</IconButton>}
+                right={
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <IconButton label="书签" onClick={() => toggleBookmark()}>{isCurrentBookmarked() ? "★" : "☆"}</IconButton>
+                    <IconButton label="菜单" onClick={() => openReaderMenu()}>⋯</IconButton>
+                  </div>
+                }
               />
 
               <div style={{ padding: 14, display: "grid", gap: 12 }}>
@@ -1681,12 +2223,8 @@
                 }
                 right={
                   <div style={{ display: "flex", gap: 10 }}>
-                    <IconButton label="目录" onClick={() => setTocOpen(true)}>
-                      ☰
-                    </IconButton>
-                    <IconButton label="设置" onClick={() => openSettings()}>
-                      ⚙
-                    </IconButton>
+                    <IconButton label="书签" onClick={() => toggleBookmark()}>{isCurrentBookmarked() ? "★" : "☆"}</IconButton>
+                    <IconButton label="菜单" onClick={() => openReaderMenu()}>⋯</IconButton>
                   </div>
                 }
               />
@@ -1739,12 +2277,310 @@
           );
         }
 
+        function BookmarksScreen() {
+          const b = activeBook;
+          const list = useMemo(() => bookmarks.filter((x) => x.bookId === b?.id), [bookmarks, b?.id]);
+
+          return (
+            <div style={{ minHeight: "100%", background: "var(--paper)" }}>
+              <TopBar
+                title="书签"
+                subtitle={b ? b.title : ""}
+                left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
+                right={<div />}
+              />
+              <div style={{ padding: 14, display: "grid", gap: 12 }}>
+                {list.length === 0 ? (
+                  <div
+                    style={{
+                      background: "rgba(255,255,255,0.78)",
+                      border: "1px solid rgba(18,19,22,0.10)",
+                      borderRadius: 18,
+                      padding: 16,
+                      display: "grid",
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ fontSize: 14, fontWeight: 950 }}>暂无书签</div>
+                    <div style={{ fontSize: 12, fontWeight: 650, color: "rgba(18,19,22,0.62)", lineHeight: 1.45 }}>
+                      在阅读页点击「☆」即可添加书签。
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {list.map((x) => (
+                      <button
+                        key={x.id}
+                        onClick={() => {
+                          showToast(`跳转：${x.label}`);
+                          setRoute(route.returnTo || { name: "shelf" });
+                        }}
+                        style={{
+                          border: "none",
+                          padding: 0,
+                          background: "transparent",
+                          cursor: "pointer",
+                          textAlign: "left",
+                        }}
+                      >
+                        <div
+                          style={{
+                            background: "rgba(255,255,255,0.78)",
+                            border: "1px solid rgba(18,19,22,0.10)",
+                            borderRadius: 18,
+                            padding: 14,
+                            display: "grid",
+                            gap: 8,
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                            <div style={{ fontSize: 13, fontWeight: 950, color: "rgba(18,19,22,0.86)" }}>{x.label}</div>
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setBookmarks((prev) => prev.filter((b) => b.id !== x.id));
+                                showToast("已删除书签");
+                              }}
+                              style={{
+                                height: 30,
+                                padding: "0 10px",
+                                borderRadius: 999,
+                                border: "1px solid rgba(18,19,22,0.12)",
+                                background: "rgba(255,255,255,0.70)",
+                                fontSize: 12,
+                                fontWeight: 900,
+                                cursor: "pointer",
+                              }}
+                            >
+                              删除
+                            </button>
+                          </div>
+                          <div style={{ fontSize: 12, fontWeight: 650, color: "rgba(18,19,22,0.60)", lineHeight: 1.45 }}>
+                            点击跳转回阅读位置（原型模拟）。
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        }
+
+        function AnnotationsScreen() {
+          const b = activeBook;
+          const list = useMemo(() => annotations.filter((x) => x.bookId === b?.id), [annotations, b?.id]);
+          const toneMap = {
+            amber: { bg: "rgba(192,74,26,0.14)", fg: "rgba(192,74,26,0.95)" },
+            moss: { bg: "rgba(14,111,92,0.14)", fg: "rgba(14,111,92,0.95)" },
+            slate: { bg: "rgba(18,19,22,0.10)", fg: "rgba(18,19,22,0.82)" },
+          };
+
+          return (
+            <div style={{ minHeight: "100%", background: "var(--paper)" }}>
+              <TopBar
+                title="标注与笔记"
+                subtitle={b ? b.title : ""}
+                left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
+                right={
+                  <IconButton
+                    label="新增"
+                    onClick={() => {
+                      setSheet("highlight");
+                    }}
+                  >
+                    ✎
+                  </IconButton>
+                }
+              />
+              <div style={{ padding: 14, display: "grid", gap: 12 }}>
+                {list.length === 0 ? (
+                  <div
+                    style={{
+                      background: "rgba(255,255,255,0.78)",
+                      border: "1px solid rgba(18,19,22,0.10)",
+                      borderRadius: 18,
+                      padding: 16,
+                      display: "grid",
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ fontSize: 14, fontWeight: 950 }}>暂无标注</div>
+                    <div style={{ fontSize: 12, fontWeight: 650, color: "rgba(18,19,22,0.62)", lineHeight: 1.45 }}>
+                      阅读页 → 菜单 → 「添加标注」即可保存高亮与笔记。
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {list.map((x) => {
+                      const t = toneMap[x.color] || toneMap.slate;
+                      return (
+                        <div
+                          key={x.id}
+                          style={{
+                            background: "rgba(255,255,255,0.78)",
+                            border: "1px solid rgba(18,19,22,0.10)",
+                            borderRadius: 18,
+                            padding: 14,
+                            display: "grid",
+                            gap: 10,
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                            <span style={{ fontSize: 12, fontWeight: 900, color: "rgba(18,19,22,0.62)" }}>{formatLocator(x.locator)}</span>
+                            <span
+                              style={{
+                                height: 24,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                padding: "0 10px",
+                                borderRadius: 999,
+                                background: t.bg,
+                                color: t.fg,
+                                fontSize: 12,
+                                fontWeight: 900,
+                              }}
+                            >
+                              高亮
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 13, fontWeight: 750, color: "rgba(18,19,22,0.86)", lineHeight: 1.55 }}>
+                            {x.text}
+                          </div>
+                          {x.note ? (
+                            <div style={{ borderLeft: "2px solid rgba(18,19,22,0.14)", paddingLeft: 10, color: "rgba(18,19,22,0.62)", fontSize: 12, fontWeight: 650, lineHeight: 1.45 }}>
+                              {x.note}
+                            </div>
+                          ) : null}
+                          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <button
+                              onClick={() => {
+                                setAnnotations((prev) => prev.filter((a) => a.id !== x.id));
+                                showToast("已删除标注");
+                              }}
+                              style={{
+                                height: 30,
+                                padding: "0 10px",
+                                borderRadius: 999,
+                                border: "1px solid rgba(18,19,22,0.12)",
+                                background: "rgba(255,255,255,0.70)",
+                                fontSize: 12,
+                                fontWeight: 900,
+                                cursor: "pointer",
+                              }}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        }
+
+        function SearchScreen() {
+          const b = activeBook;
+          const [query, setQuery] = useState(searchDraft.query || "");
+          const results = useMemo(() => {
+            if (!query.trim()) return [];
+            const currentLabel = b?.format === "EPUB" ? "当前章" : "当前位置";
+            const corpus = [
+              { loc: currentLabel, snippet: "夜里下雨时，城市像被抛光过的石头。" },
+              { loc: "第 5 章", snippet: "目录采用章节级加载，跳转后进度自动保存。" },
+              { loc: "第 11 章", snippet: "你可以把句子读慢一点，让它们在心里停一拍。" },
+            ];
+            return corpus.filter((x) => x.snippet.includes(query.trim()));
+          }, [query, b?.format]);
+
+          return (
+            <div style={{ minHeight: "100%", background: "var(--paper)" }}>
+              <TopBar title="搜索" subtitle={b ? b.title : ""} left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>} right={<div />} />
+              <div style={{ padding: 14, display: "grid", gap: 12 }}>
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.78)",
+                    border: "1px solid rgba(18,19,22,0.10)",
+                    borderRadius: 18,
+                    padding: 12,
+                    display: "grid",
+                    gap: 10,
+                  }}
+                >
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="输入关键词"
+                    style={{
+                      width: "100%",
+                      height: 44,
+                      borderRadius: 14,
+                      border: "1px solid rgba(18,19,22,0.12)",
+                      background: "rgba(255,255,255,0.86)",
+                      padding: "0 12px",
+                      fontSize: 14,
+                      fontWeight: 650,
+                      outline: "none",
+                    }}
+                  />
+                  <div style={{ fontSize: 12, fontWeight: 650, color: "rgba(18,19,22,0.58)", lineHeight: 1.4 }}>
+                    纯本地搜索：为 txt/md/epub 建索引；PDF 仅在有文本层时可用。
+                  </div>
+                </div>
+
+                {query.trim() && results.length === 0 ? (
+                  <div style={{ fontSize: 12, fontWeight: 650, color: "rgba(18,19,22,0.62)" }}>未找到匹配结果（原型）</div>
+                ) : null}
+
+                <div style={{ display: "grid", gap: 10 }}>
+                  {results.map((r, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => {
+                        showToast(`跳转：${r.loc}`);
+                        setRoute(route.returnTo || { name: "shelf" });
+                      }}
+                      style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", textAlign: "left" }}
+                    >
+                      <div
+                        style={{
+                          background: "rgba(255,255,255,0.78)",
+                          border: "1px solid rgba(18,19,22,0.10)",
+                          borderRadius: 18,
+                          padding: 14,
+                          display: "grid",
+                          gap: 8,
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ fontSize: 12, fontWeight: 900, color: "rgba(18,19,22,0.62)" }}>{r.loc}</div>
+                          <Pill label="结果" tone="neutral" />
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 750, color: "rgba(18,19,22,0.86)", lineHeight: 1.55 }}>{r.snippet}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
         function ScreenRouter() {
           if (route.name === "import") return <ImportScreen />;
+          if (route.name === "transfer") return <TransferScreen />;
           if (route.name === "pdfProcessing") return <PdfProcessingScreen />;
           if (route.name === "pdfReader") return <PdfReaderScreen />;
           if (route.name === "epubReader") return <EpubReaderScreen />;
           if (route.name === "textReader") return <TextReaderScreen />;
+          if (route.name === "bookmarks") return <BookmarksScreen />;
+          if (route.name === "annotations") return <AnnotationsScreen />;
+          if (route.name === "search") return <SearchScreen />;
           return <ShelfScreen />;
         }
 
@@ -1759,7 +2595,7 @@
             if (!bid) return;
             setActiveBookId(bid);
           }
-          if (route.name === "epubReader" || route.name === "textReader") {
+          if (route.name === "epubReader" || route.name === "textReader" || route.name === "bookmarks" || route.name === "annotations" || route.name === "search") {
             const bid = route.bookId;
             if (!bid) return;
             setActiveBookId(bid);
@@ -1780,8 +2616,21 @@
             <AndroidFrame time={time} battery={88} darkMode={false}>
               <div style={{ minHeight: "100%", position: "relative", background: isDark ? "#0d0e10" : "var(--paper)" }}>
                 <ScreenRouter />
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    background: "rgba(0,0,0,1)",
+                    opacity: clamp(1 - readerPrefs.brightness, 0, 0.75),
+                    pointerEvents: "none",
+                    zIndex: 45,
+                  }}
+                />
                 <TocDrawer />
                 <ReadingSettingsSheet />
+                <ReaderMenuSheet />
+                <HighlightSheet />
+                <ProgressSheet />
                 <BottomToast show={!!toast} text={toast || ""} />
               </div>
             </AndroidFrame>
@@ -1794,4 +2643,3 @@
     </script>
   </body>
 </html>
-
