@@ -318,6 +318,38 @@
         );
       }
 
+      function ReaderChrome({ children, night = false }) {
+        const bg = night
+          ? "linear-gradient(180deg, rgba(11,11,13,1), rgba(7,7,9,1))"
+          : "linear-gradient(180deg, var(--paper-0), var(--paper-1))";
+        return (
+          <div style={{ height: "100%", width: "100%", position: "relative", overflow: "hidden", background: bg }}>
+            {!night ? (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: -60,
+                  background:
+                    "radial-gradient(980px 620px at 18% 18%, rgba(180,110,60,0.06), transparent 60%), radial-gradient(980px 720px at 86% 16%, rgba(70,150,120,0.05), transparent 62%)",
+                  pointerEvents: "none",
+                }}
+              />
+            ) : null}
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "repeating-linear-gradient(0deg, rgba(0,0,0,0.04) 0 1px, transparent 1px 3px)",
+                opacity: night ? 0.10 : 0.045,
+                mixBlendMode: night ? "normal" : "multiply",
+                pointerEvents: "none",
+              }}
+            />
+            <div style={{ position: "absolute", inset: 0 }}>{children}</div>
+          </div>
+        );
+      }
+
       function TopBar({ title, subtitle, left, right }) {
         return (
           <div style={{ padding: "16px 16px 12px 16px", position: "sticky", top: 0, zIndex: 30 }}>
@@ -591,11 +623,43 @@
         const [transfer, setTransfer] = useState({ paired: false, items: [] });
 
         const isNight = readerPrefs.theme === "night";
+        const [hudVisible, setHudVisible] = useState(false);
+        const hudHideRef = useRef(null);
+        const [pageHint, setPageHint] = useState(null);
 
         function notify(msg) {
           setToast(msg);
           window.setTimeout(() => setToast(null), 1700);
         }
+
+        function showHUD({ autoHide = true } = {}) {
+          setHudVisible(true);
+          if (!autoHide) return;
+          if (hudHideRef.current) window.clearTimeout(hudHideRef.current);
+          hudHideRef.current = window.setTimeout(() => {
+            setHudVisible(false);
+          }, 2600);
+        }
+
+        function hideHUD() {
+          if (hudHideRef.current) window.clearTimeout(hudHideRef.current);
+          setHudVisible(false);
+        }
+
+        function flashHint(text) {
+          setPageHint(text);
+          window.setTimeout(() => setPageHint(null), 900);
+        }
+
+        useEffect(() => {
+          if (sheet) showHUD({ autoHide: false });
+        }, [sheet]);
+
+        useEffect(() => {
+          return () => {
+            if (hudHideRef.current) window.clearTimeout(hudHideRef.current);
+          };
+        }, []);
 
         function goBack() {
           if (route.returnTo) {
@@ -612,6 +676,7 @@
           const b = library.find((x) => x.id === bookId);
           if (!b) return;
           setActiveBookId(bookId);
+          hideHUD();
           if (b.format === "PDF") setRoute({ name: "readerPdf", bookId });
           else if (b.format === "EPUB") setRoute({ name: "readerEpub", bookId });
           else setRoute({ name: "readerText", bookId });
@@ -838,8 +903,22 @@
         }
 
         function ReaderHeader({ title, subtitle }) {
+          const open = hudVisible;
           return (
-            <div style={{ padding: "12px 16px 10px 16px", position: "sticky", top: 0, zIndex: 30 }}>
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                zIndex: 50,
+                padding: "12px 16px 10px 16px",
+                pointerEvents: open ? "auto" : "none",
+                opacity: open ? 1 : 0,
+                transform: open ? "translateY(0)" : "translateY(-10px)",
+                transition: "opacity 180ms ease, transform 220ms ease",
+              }}
+            >
               <div
                 style={{
                   borderRadius: 20,
@@ -876,25 +955,27 @@
           );
         }
 
-        function ReaderCanvas({ children, onTapLeft, onTapRight }) {
+        function ReaderCanvas({ children, onTapLeft, onTapRight, onTapCenter }) {
           const bg = isNight ? "linear-gradient(180deg, rgba(12,12,14,1), rgba(8,8,10,1))" : "linear-gradient(180deg, var(--paper-0), var(--paper-1))";
           const edge = isNight ? "rgba(255,255,255,0.10)" : "rgba(20,22,26,0.10)";
+          const immersive = !hudVisible && !sheet;
           return (
-            <div style={{ padding: "0 16px 18px 16px" }}>
+            <div style={{ padding: immersive ? 0 : "0 16px 18px 16px" }}>
               <div
                 style={{
-                  borderRadius: 24,
-                  border: `1px solid ${edge}`,
+                  borderRadius: immersive ? 0 : 24,
+                  border: immersive ? "none" : `1px solid ${edge}`,
                   background: bg,
-                  boxShadow: isNight ? "0 20px 70px rgba(0,0,0,0.42)" : "var(--shadow-2)",
+                  boxShadow: immersive ? "none" : isNight ? "0 20px 70px rgba(0,0,0,0.42)" : "var(--shadow-2)",
                   overflow: "hidden",
                   position: "relative",
                 }}
               >
                 <div style={{ position: "absolute", inset: 0, background: "repeating-linear-gradient(0deg, rgba(0,0,0,0.04) 0 1px, transparent 1px 3px)", opacity: isNight ? 0.08 : 0.04, pointerEvents: "none" }} />
                 <div style={{ position: "relative" }}>{children}</div>
-                <button onClick={onTapLeft} style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: "36%", border: "none", background: "transparent", cursor: "pointer" }} />
-                <button onClick={onTapRight} style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: "36%", border: "none", background: "transparent", cursor: "pointer" }} />
+                <button onClick={onTapLeft} style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: "35%", border: "none", background: "transparent", cursor: "pointer" }} />
+                <button onClick={onTapCenter} style={{ position: "absolute", left: "35%", top: 0, bottom: 0, width: "30%", border: "none", background: "transparent", cursor: "pointer" }} />
+                <button onClick={onTapRight} style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: "35%", border: "none", background: "transparent", cursor: "pointer" }} />
               </div>
             </div>
           );
@@ -916,18 +997,28 @@
           );
 
           function next() {
-            setTextLoc((p) => ({ ...p, page: Math.min(p.totalPages, p.page + 1) }));
-            updateProgress(b.id, clamp((textLoc.page + 1) / textLoc.totalPages, 0, 1));
+            hideHUD();
+            setTextLoc((p) => {
+              const page = Math.min(p.totalPages, p.page + 1);
+              updateProgress(b.id, clamp(page / p.totalPages, 0, 1));
+              flashHint(`第 ${page}/${p.totalPages} 页`);
+              return { ...p, page };
+            });
           }
           function prev() {
-            setTextLoc((p) => ({ ...p, page: Math.max(1, p.page - 1) }));
-            updateProgress(b.id, clamp((textLoc.page - 1) / textLoc.totalPages, 0, 1));
+            hideHUD();
+            setTextLoc((p) => {
+              const page = Math.max(1, p.page - 1);
+              updateProgress(b.id, clamp(page / p.totalPages, 0, 1));
+              flashHint(`第 ${page}/${p.totalPages} 页`);
+              return { ...p, page };
+            });
           }
 
           return (
-            <UIChrome>
+            <ReaderChrome night={isNight}>
               <ReaderHeader title={b.title} subtitle={`${b.format} · 第 ${textLoc.page}/${textLoc.totalPages} 页`} />
-              <ReaderCanvas onTapLeft={prev} onTapRight={next}>
+              <ReaderCanvas onTapLeft={prev} onTapCenter={() => (hudVisible ? hideHUD() : showHUD({ autoHide: false }))} onTapRight={next}>
                 <div
                   style={{
                     padding: readerPrefs.margin,
@@ -949,7 +1040,7 @@
                 </div>
               </ReaderCanvas>
               <ReaderOverlays />
-            </UIChrome>
+            </ReaderChrome>
           );
         }
 
@@ -959,26 +1050,30 @@
           const muted = isNight ? "rgba(255,255,255,0.58)" : "rgba(20,22,26,0.60)";
 
           function next() {
+            hideHUD();
             setEpubLoc((p) => {
               const c = Math.min(p.chapters, p.chapter + 1);
               const percent = clamp(c / p.chapters, 0, 1);
               updateProgress(b.id, percent);
+              flashHint(`第 ${c}/${p.chapters} 章`);
               return { ...p, chapter: c, percent };
             });
           }
           function prev() {
+            hideHUD();
             setEpubLoc((p) => {
               const c = Math.max(1, p.chapter - 1);
               const percent = clamp(c / p.chapters, 0, 1);
               updateProgress(b.id, percent);
+              flashHint(`第 ${c}/${p.chapters} 章`);
               return { ...p, chapter: c, percent };
             });
           }
 
           return (
-            <UIChrome>
+            <ReaderChrome night={isNight}>
               <ReaderHeader title={b.title} subtitle={`EPUB · 第 ${epubLoc.chapter}/${epubLoc.chapters} 章 · ${Math.round(epubLoc.percent * 100)}%`} />
-              <ReaderCanvas onTapLeft={prev} onTapRight={next}>
+              <ReaderCanvas onTapLeft={prev} onTapCenter={() => (hudVisible ? hideHUD() : showHUD({ autoHide: false }))} onTapRight={next}>
                 <div style={{ padding: readerPrefs.margin, fontFamily: "var(--serif)", color: ink, fontSize: readerPrefs.fontSize, lineHeight: readerPrefs.lineHeight }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                     <div style={{ fontFamily: "var(--ui)", fontSize: 12, fontWeight: 750, color: muted }}>{b.author}</div>
@@ -994,7 +1089,7 @@
                 </div>
               </ReaderCanvas>
               <ReaderOverlays />
-            </UIChrome>
+            </ReaderChrome>
           );
         }
 
@@ -1006,6 +1101,7 @@
           const globalIndex = (pdfLoc.page - 1) * pageSegments + pdfLoc.segment;
 
           function next() {
+            hideHUD();
             setPdfLoc((p) => {
               const n = { ...p };
               if (n.segment < n.segmentsInPage) n.segment += 1;
@@ -1014,12 +1110,14 @@
                 n.segment = 1;
                 n.segmentsInPage = 5 + ((n.page * 3) % 3);
               }
+              flashHint(`第 ${n.page} 页 · ${n.segment}/${n.segmentsInPage}`);
+              updateProgress(b.id, clamp(((n.page - 1) * p.segmentsInPage + n.segment) / (p.totalSegments || 1240), 0, 1));
               return n;
             });
-            updateProgress(b.id, clamp((globalIndex + 1) / (pdfLoc.totalSegments || 1240), 0, 1));
           }
 
           function prev() {
+            hideHUD();
             setPdfLoc((p) => {
               const n = { ...p };
               if (n.segment > 1) n.segment -= 1;
@@ -1028,15 +1126,16 @@
                 n.segmentsInPage = 5 + ((n.page * 3) % 3);
                 n.segment = n.segmentsInPage;
               }
+              flashHint(`第 ${n.page} 页 · ${n.segment}/${n.segmentsInPage}`);
+              updateProgress(b.id, clamp(((n.page - 1) * p.segmentsInPage + n.segment) / (p.totalSegments || 1240), 0, 1));
               return n;
             });
-            updateProgress(b.id, clamp((globalIndex - 1) / (pdfLoc.totalSegments || 1240), 0, 1));
           }
 
           return (
-            <UIChrome>
+            <ReaderChrome night={isNight}>
               <ReaderHeader title={b.title} subtitle={`PDF 漫画 · 第 ${pdfLoc.page} 页 · 段 ${pdfLoc.segment}/${pdfLoc.segmentsInPage}`} />
-              <ReaderCanvas onTapLeft={prev} onTapRight={next}>
+              <ReaderCanvas onTapLeft={prev} onTapCenter={() => (hudVisible ? hideHUD() : showHUD({ autoHide: false }))} onTapRight={next}>
                 <div style={{ padding: 14 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 12 }}>
                     <Tag label="子页阅读" tone="accent" />
@@ -1072,17 +1171,109 @@
                 </div>
               </ReaderCanvas>
               <ReaderOverlays />
-            </UIChrome>
+            </ReaderChrome>
           );
         }
 
         function ReaderOverlays() {
           const loc = getLocator();
           const brightnessMask = clamp(1 - readerPrefs.brightness, 0, 0.70);
+          const showBottom = hudVisible && !sheet;
+          const progress = activeBook?.progress || 0;
 
           return (
             <>
               <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,1)", opacity: brightnessMask, pointerEvents: "none", zIndex: 35 }} />
+              <div
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  bottom: 22,
+                  display: "grid",
+                  placeItems: "center",
+                  pointerEvents: "none",
+                  zIndex: 55,
+                }}
+              >
+                <div
+                  style={{
+                    opacity: pageHint ? 1 : 0,
+                    transform: pageHint ? "translateY(0)" : "translateY(8px)",
+                    transition: "opacity 180ms ease, transform 220ms ease",
+                    borderRadius: 999,
+                    padding: "8px 12px",
+                    border: "1px solid rgba(255,255,255,0.14)",
+                    background: "rgba(14,15,18,0.76)",
+                    color: "rgba(255,255,255,0.92)",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    letterSpacing: "0.01em",
+                    boxShadow: "0 24px 70px rgba(0,0,0,0.35)",
+                  }}
+                >
+                  {pageHint || ""}
+                </div>
+              </div>
+
+              <div
+                style={{
+                  position: "absolute",
+                  left: 16,
+                  right: 16,
+                  bottom: 14,
+                  zIndex: 60,
+                  pointerEvents: showBottom ? "auto" : "none",
+                  opacity: showBottom ? 1 : 0,
+                  transform: showBottom ? "translateY(0)" : "translateY(12px)",
+                  transition: "opacity 180ms ease, transform 220ms ease",
+                }}
+              >
+                <div
+                  style={{
+                    borderRadius: 22,
+                    border: isNight ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(20,22,26,0.10)",
+                    background: isNight ? "rgba(14,15,18,0.74)" : "rgba(255,255,255,0.62)",
+                    backdropFilter: "blur(14px)",
+                    boxShadow: "0 1px 0 rgba(0,0,0,0.03)",
+                    padding: "10px 12px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                  }}
+                >
+                  <button
+                    onClick={() => openProgressSheet()}
+                    style={{
+                      flex: 1,
+                      border: "none",
+                      background: "transparent",
+                      padding: 0,
+                      cursor: "pointer",
+                      textAlign: "left",
+                      color: isNight ? "rgba(255,255,255,0.92)" : "rgba(20,22,26,0.92)",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 850, opacity: 0.7 }}>进度</div>
+                      <div style={{ fontSize: 12, fontWeight: 900 }}>{Math.round(progress * 100)}%</div>
+                    </div>
+                    <div style={{ marginTop: 8, height: 8, borderRadius: 999, border: isNight ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(20,22,26,0.10)", background: isNight ? "rgba(255,255,255,0.06)" : "rgba(20,22,26,0.05)", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.round(progress * 100)}%`, background: isNight ? "linear-gradient(90deg, rgba(255,255,255,0.74), rgba(255,255,255,0.30))" : "linear-gradient(90deg, color-mix(in oklch, var(--accent) 82%, black 18%), color-mix(in oklch, var(--accent-2) 70%, black 30%))", borderRadius: 999 }} />
+                    </div>
+                  </button>
+
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <IconButton label="标注" onClick={() => openHighlightSheet()} subtle>
+                      <Icon name="note" color={isNight ? "rgba(255,255,255,0.90)" : "rgba(20,22,26,0.84)"} />
+                    </IconButton>
+                    <IconButton label="设置" onClick={() => openSettings()} subtle>
+                      <Icon name="settings" color={isNight ? "rgba(255,255,255,0.90)" : "rgba(20,22,26,0.84)"} />
+                    </IconButton>
+                  </div>
+                </div>
+              </div>
+
               <Sheet
                 open={sheet === "menu"}
                 title="阅读菜单"
@@ -1661,4 +1852,3 @@
     </script>
   </body>
 </html>
-
