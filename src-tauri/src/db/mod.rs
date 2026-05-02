@@ -4,6 +4,8 @@ use rusqlite::Connection;
 
 use crate::app_paths;
 
+pub const SCHEMA_SQL: &str = include_str!("schema.sql");
+
 pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
     let db_path = app_paths::db_path(app)?;
 
@@ -12,7 +14,7 @@ pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
     }
 
     let conn = Connection::open(db_path).map_err(|e| format!("failed to open sqlite: {e}"))?;
-    conn.execute_batch(include_str!("schema.sql"))
+    conn.execute_batch(SCHEMA_SQL)
         .map_err(|e| format!("failed to init sqlite schema: {e}"))?;
 
     Ok(())
@@ -20,7 +22,10 @@ pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
 
 pub fn open_db(app: &tauri::AppHandle) -> Result<Connection, String> {
     let db_path = app_paths::db_path(app)?;
-    Connection::open(db_path).map_err(|e| format!("failed to open sqlite: {e}"))
+    let conn = Connection::open(db_path).map_err(|e| format!("failed to open sqlite: {e}"))?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|e| format!("failed to set sqlite foreign_keys pragma: {e}"))?;
+    Ok(conn)
 }
 
 #[cfg(test)]
@@ -28,7 +33,7 @@ mod tests {
     #[test]
     fn creates_required_tables() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch(include_str!("schema.sql")).unwrap();
+        conn.execute_batch(super::SCHEMA_SQL).unwrap();
 
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table'")
@@ -46,4 +51,3 @@ mod tests {
         assert!(names.contains(&"settings".to_string()));
     }
 }
-
