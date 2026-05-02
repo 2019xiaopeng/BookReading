@@ -31,7 +31,7 @@ export async function createReader(opts: {
   libraryPath: string;
   onRelocated?: (payload: RelocatedPayload) => void;
   onTocLoaded?: (toc: TocItem[]) => void;
-  onSelected?: (cfiRange: string) => void;
+  onSelected?: (payload: { cfiRange: string; text: string }) => void;
 }): Promise<ReaderController> {
   const bytes = await readFile(opts.libraryPath);
   const book: any = ePub(bytes.buffer);
@@ -76,11 +76,20 @@ export async function createReader(opts: {
   });
 
   rendition.on("selected", (cfiRange: string, contents: any) => {
-    opts.onSelected?.(cfiRange);
-    try {
-      contents?.window?.getSelection()?.removeAllRanges();
-    } catch {
-    }
+    void (async () => {
+      let text = "";
+      try {
+        const range = await book.getRange(cfiRange);
+        text = range?.toString?.() ?? "";
+      } catch {
+      }
+
+      opts.onSelected?.({ cfiRange, text });
+      try {
+        contents?.window?.getSelection()?.removeAllRanges();
+      } catch {
+      }
+    })();
   });
 
   const navigation = await book.loaded.navigation;

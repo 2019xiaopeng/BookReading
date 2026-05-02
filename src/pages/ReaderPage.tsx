@@ -1,20 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import type { Book } from "../tauri/invoke";
 import {
   addBookmark,
+  addFavoriteQuote,
   addHighlight,
   deleteBookmark,
+  deleteFavoriteQuote,
   deleteHighlight,
   getReadingState,
   getSettings,
   listBooks,
   listBookmarks,
+  listFavoriteQuotes,
   listHighlights,
   setSetting,
   upsertReadingState,
   type Bookmark,
+  type FavoriteQuote,
   type Highlight,
 } from "../tauri/invoke";
 import { createReader, type ReaderController, type TocItem } from "../reader/epub/reader";
@@ -27,14 +31,16 @@ import type { ReaderSettings, Theme } from "../reader/settings/types";
 
 export default function ReaderPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { bookId } = useParams();
   const [book, setBook] = useState<Book | null>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [percent, setPercent] = useState<number | null>(null);
   const [settings, setSettings] = useState<ReaderSettings>(defaultSettings);
-  const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "search" | "settings">("toc");
+  const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings">("toc");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
+  const [favoriteQuotes, setFavoriteQuotes] = useState<FavoriteQuote[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<{ cfi: string; excerpt: string }[]>([]);
@@ -92,13 +98,28 @@ export default function ReaderPage() {
           }, 1500);
         },
         onTocLoaded: (toc) => setToc(toc),
-        onSelected: (cfiRange) => {
+        onSelected: ({ cfiRange, text }) => {
           void (async () => {
-            const note = window.prompt("添加笔记（可空）", "") ;
-            if (note === null) return;
-            const h = await addHighlight(book.id, cfiRange, "#ffe600", note.trim() ? note : null);
-            setHighlights((prev) => [h, ...prev]);
-            controllerRef.current?.addHighlight(cfiRange);
+            const useFavorite = window.confirm("是否将选中文本加入收藏？\n确定=收藏句子，取消=高亮标注");
+            if (useFavorite) {
+              const note = window.prompt("收藏备注（可空）", "");
+              if (note === null) return;
+              const q = await addFavoriteQuote(
+                book.id,
+                cfiRange,
+                text.trim() ? text : "",
+                note.trim() ? note : null,
+              );
+              setFavoriteQuotes((prev) => [q, ...prev]);
+              setSideTab("favorites");
+            } else {
+              const note = window.prompt("添加笔记（可空）", "");
+              if (note === null) return;
+              const h = await addHighlight(book.id, cfiRange, "#ffe600", note.trim() ? note : null);
+              setHighlights((prev) => [h, ...prev]);
+              controllerRef.current?.addHighlight(cfiRange);
+              setSideTab("highlights");
+            }
           })();
         },
       });
@@ -106,17 +127,27 @@ export default function ReaderPage() {
       controllerRef.current.setTheme(settings.theme);
       controllerRef.current.setFontSizePercent(settings.fontSizePercent);
 
-      const state = await getReadingState(book.id);
-      if (state?.cfi) {
-        await controllerRef.current.display(state.cfi);
-        if (typeof state.percent === "number") setPercent(state.percent);
-      }
-
-      const [bm, hl] = await Promise.all([listBookmarks(book.id), listHighlights(book.id)]);
+      const [bm, hl, fav] = await Promise.all([
+        listBookmarks(book.id),
+        listHighlights(book.id),
+        listFavoriteQuotes({ bookId: book.id }),
+      ]);
       setBookmarks(bm);
       setHighlights(hl);
+      setFavoriteQuotes(fav);
       for (const h of hl) {
         controllerRef.current.addHighlight(h.cfi_range);
+      }
+
+      const cfiFromUrl = new URLSearchParams(location.search).get("cfi");
+      if (cfiFromUrl) {
+        await controllerRef.current.display(cfiFromUrl);
+      } else {
+        const state = await getReadingState(book.id);
+        if (state?.cfi) {
+          await controllerRef.current.display(state.cfi);
+          if (typeof state.percent === "number") setPercent(state.percent);
+        }
       }
     })();
 
@@ -128,7 +159,7 @@ export default function ReaderPage() {
       controllerRef.current?.destroy();
       controllerRef.current = null;
     };
-  }, [book, settings.theme, settings.fontSizePercent]);
+  }, [book, settings.theme, settings.fontSizePercent, location.search]);
 
   useEffect(() => {
     if (!controllerRef.current) return;
@@ -209,6 +240,13 @@ export default function ReaderPage() {
           </button>
           <button
             onClick={() => {
+              setSideTab("favorites");
+            }}
+          >
+            收藏
+          </button>
+          <button
+            onClick={() => {
               setSideTab("search");
             }}
           >
@@ -242,6 +280,9 @@ export default function ReaderPage() {
               </button>
               <button onClick={() => setSideTab("highlights")} disabled={sideTab === "highlights"}>
                 标注
+              </button>
+              <button onClick={() => setSideTab("favorites")} disabled={sideTab === "favorites"}>
+                收藏
               </button>
               <button onClick={() => setSideTab("search")} disabled={sideTab === "search"}>
                 搜索
@@ -318,6 +359,45 @@ export default function ReaderPage() {
                   })();
                 }}
               />
+            ) : null}
+
+            {sideTab === "favorites" ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ fontWeight: 600 }}>收藏句子</div>
+                {favoriteQuotes.length === 0 ? (
+                  <div style={{ color: "rgba(0,0,0,0.6)" }}>暂无收藏</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {favoriteQuotes.map((q) => (
+                      <div
+                        key={q.id}
+                        style={{
+                          border: "1px solid rgba(0,0,0,0.12)",
+                          borderRadius: 10,
+                          padding: 10,
+                          background: "white",
+                        }}
+                      >
+                        <div style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}>{q.text}</div>
+                        {q.note ? <div style={{ whiteSpace: "pre-wrap", color: "rgba(0,0,0,0.7)", marginBottom: 8 }}>{q.note}</div> : null}
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button onClick={() => controllerRef.current?.display(q.cfi_range)}>打开定位</button>
+                          <button
+                            onClick={() => {
+                              void (async () => {
+                                await deleteFavoriteQuote(q.id);
+                                setFavoriteQuotes((prev) => prev.filter((x) => x.id !== q.id));
+                              })();
+                            }}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             ) : null}
 
             {sideTab === "search" ? (
