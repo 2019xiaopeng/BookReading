@@ -22,6 +22,7 @@ export type ReaderController = {
   setFontSizePercent: (percent: number) => void;
   addHighlight: (cfiRange: string) => void;
   removeHighlight: (cfiRange: string) => void;
+  search: (query: string) => Promise<{ cfi: string; excerpt: string }[]>;
   destroy: () => void;
 };
 
@@ -117,6 +118,28 @@ export async function createReader(opts: {
         rendition.annotations.remove(cfiRange);
       } catch {
       }
+    },
+    search: async (query: string) => {
+      const q = query.trim();
+      if (!q) return [];
+      const items: any[] = Array.isArray(book.spine?.spineItems) ? book.spine.spineItems : [];
+      const matches: { cfi: string; excerpt: string }[] = [];
+
+      for (const section of items) {
+        try {
+          await section.load(book.load.bind(book));
+          const found: any[] = section.find(q) || [];
+          for (const m of found) {
+            if (m?.cfi && m?.excerpt) {
+              matches.push({ cfi: String(m.cfi), excerpt: String(m.excerpt) });
+              if (matches.length >= 200) return matches;
+            }
+          }
+        } catch {
+        }
+      }
+
+      return matches;
     },
     destroy: () => {
       try {

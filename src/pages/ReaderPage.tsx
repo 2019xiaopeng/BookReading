@@ -20,6 +20,7 @@ import {
 import { createReader, type ReaderController, type TocItem } from "../reader/epub/reader";
 import BookmarksPanel from "../reader/components/BookmarksPanel";
 import HighlightsPanel from "../reader/components/HighlightsPanel";
+import SearchPanel from "../reader/components/SearchPanel";
 import SettingsPanel from "../reader/components/SettingsPanel";
 import { defaultSettings } from "../reader/settings/defaults";
 import type { ReaderSettings, Theme } from "../reader/settings/types";
@@ -31,9 +32,12 @@ export default function ReaderPage() {
   const [toc, setToc] = useState<TocItem[]>([]);
   const [percent, setPercent] = useState<number | null>(null);
   const [settings, setSettings] = useState<ReaderSettings>(defaultSettings);
-  const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "settings">("toc");
+  const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "search" | "settings">("toc");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState<{ cfi: string; excerpt: string }[]>([]);
   const [isImmersive, setIsImmersive] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
@@ -205,6 +209,13 @@ export default function ReaderPage() {
           </button>
           <button
             onClick={() => {
+              setSideTab("search");
+            }}
+          >
+            搜索
+          </button>
+          <button
+            onClick={() => {
               setSideTab("settings");
             }}
           >
@@ -231,6 +242,9 @@ export default function ReaderPage() {
               </button>
               <button onClick={() => setSideTab("highlights")} disabled={sideTab === "highlights"}>
                 标注
+              </button>
+              <button onClick={() => setSideTab("search")} disabled={sideTab === "search"}>
+                搜索
               </button>
               <button onClick={() => setSideTab("settings")} disabled={sideTab === "settings"}>
                 设置
@@ -303,6 +317,29 @@ export default function ReaderPage() {
                     if (h) controllerRef.current?.removeHighlight(h.cfi_range);
                   })();
                 }}
+              />
+            ) : null}
+
+            {sideTab === "search" ? (
+              <SearchPanel
+                query={searchQuery}
+                onQueryChange={setSearchQuery}
+                loading={searchLoading}
+                results={searchResults}
+                onSearch={() => {
+                  void (async () => {
+                    const ctrl = controllerRef.current;
+                    if (!ctrl) return;
+                    setSearchLoading(true);
+                    try {
+                      const res = await ctrl.search(searchQuery);
+                      setSearchResults(res);
+                    } finally {
+                      setSearchLoading(false);
+                    }
+                  })();
+                }}
+                onOpen={(cfi) => controllerRef.current?.display(cfi)}
               />
             ) : null}
           </div>
