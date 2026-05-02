@@ -1,0 +1,1214 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>本地阅读器原型（v3）</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap" rel="stylesheet" />
+    <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+    <style>
+      :root {
+        --paper: #f6f2ea;
+        --paper-2: #efe9de;
+        --ink: #121316;
+        --ink-2: rgba(18, 19, 22, 0.72);
+        --ink-3: rgba(18, 19, 22, 0.52);
+        --hairline: rgba(18, 19, 22, 0.12);
+        --accent: #c04a1a;
+        --radius: 18px;
+        --ui: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+        --serif: "Noto Serif SC", serif;
+        --ease-out: cubic-bezier(0.2, 0.9, 0.2, 1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        width: 100%;
+      }
+
+      body {
+        margin: 0;
+        background: radial-gradient(1000px 700px at 18% 12%, rgba(192, 74, 26, 0.07), transparent 55%),
+          radial-gradient(900px 760px at 85% 20%, rgba(0, 0, 0, 0.05), transparent 60%),
+          linear-gradient(180deg, var(--paper), var(--paper-2));
+        color: var(--ink);
+        font-family: var(--ui);
+      }
+
+      #root {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 44px 16px;
+      }
+
+      ::selection {
+        background: rgba(192, 74, 26, 0.18);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="text/babel">
+      const { useEffect, useMemo, useRef, useState } = React;
+
+      function clamp(n, min, max) {
+        return Math.max(min, Math.min(max, n));
+      }
+
+      function useNowTime() {
+        const [time, setTime] = useState(() => {
+          const d = new Date();
+          const hh = String(d.getHours()).padStart(2, "0");
+          const mm = String(d.getMinutes()).padStart(2, "0");
+          return `${hh}:${mm}`;
+        });
+
+        useEffect(() => {
+          const t = window.setInterval(() => {
+            const d = new Date();
+            const hh = String(d.getHours()).padStart(2, "0");
+            const mm = String(d.getMinutes()).padStart(2, "0");
+            setTime(`${hh}:${mm}`);
+          }, 15000);
+          return () => window.clearInterval(t);
+        }, []);
+
+        return time;
+      }
+
+      function uid(prefix) {
+        return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now()}`;
+      }
+
+      function Icon({ name, size = 20, color = "currentColor" }) {
+        const s = { width: size, height: size, display: "block" };
+        const common = { stroke: color, strokeWidth: 1.9, fill: "none", strokeLinecap: "round", strokeLinejoin: "round" };
+        if (name === "plus")
+          return (
+            <svg style={s} viewBox="0 0 24 24">
+              <path {...common} d="M12 5v14M5 12h14" />
+            </svg>
+          );
+        if (name === "wifi")
+          return (
+            <svg style={s} viewBox="0 0 24 24">
+              <path {...common} d="M4 9c4.5-4 11.5-4 16 0" />
+              <path {...common} d="M7 12c3-2.7 7-2.7 10 0" opacity="0.9" />
+              <path {...common} d="M10.5 15c1.3-1.1 1.7-1.1 3 0" opacity="0.75" />
+              <path d="M12 18.2h0" stroke={color} strokeWidth="3" strokeLinecap="round" />
+            </svg>
+          );
+        if (name === "dots")
+          return (
+            <svg style={s} viewBox="0 0 24 24">
+              <path d="M6.5 12h0" stroke={color} strokeWidth="3" strokeLinecap="round" />
+              <path d="M12 12h0" stroke={color} strokeWidth="3" strokeLinecap="round" />
+              <path d="M17.5 12h0" stroke={color} strokeWidth="3" strokeLinecap="round" />
+            </svg>
+          );
+        if (name === "chevronLeft")
+          return (
+            <svg style={s} viewBox="0 0 24 24">
+              <path {...common} d="M14.5 5.5 8.5 12l6 6.5" />
+            </svg>
+          );
+        if (name === "bookmark")
+          return (
+            <svg style={s} viewBox="0 0 24 24">
+              <path {...common} d="M7.5 5.5h9A2 2 0 0 1 18.5 7.5v14l-6.5-4-6.5 4v-14A2 2 0 0 1 7.5 5.5z" />
+            </svg>
+          );
+        if (name === "bookmarkFill")
+          return (
+            <svg style={s} viewBox="0 0 24 24">
+              <path d="M7.5 5.5h9A2 2 0 0 1 18.5 7.5v14l-6.5-4-6.5 4v-14A2 2 0 0 1 7.5 5.5z" fill={color} />
+            </svg>
+          );
+        if (name === "search")
+          return (
+            <svg style={s} viewBox="0 0 24 24">
+              <path {...common} d="M10.8 18.2a7.4 7.4 0 1 1 0-14.8 7.4 7.4 0 0 1 0 14.8z" />
+              <path {...common} d="M16.5 16.5 21 21" />
+            </svg>
+          );
+        if (name === "note")
+          return (
+            <svg style={s} viewBox="0 0 24 24">
+              <path {...common} d="M8 4.8h8.6A2.2 2.2 0 0 1 18.8 7v11.4L15.4 21.2H8A2.2 2.2 0 0 1 5.8 19V7A2.2 2.2 0 0 1 8 4.8z" />
+              <path {...common} d="M8.5 9h7M8.5 12.2h7M8.5 15.4H13" opacity="0.85" />
+            </svg>
+          );
+        if (name === "settings")
+          return (
+            <svg style={s} viewBox="0 0 24 24">
+              <path {...common} d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" />
+              <path
+                {...common}
+                d="M19.4 15.1l1.1-2-1.5-2.6-2.3.2a7.6 7.6 0 0 0-1.2-1.2l.2-2.3L12.1 3.5 9.5 5l.2 2.3a7.6 7.6 0 0 0-1.2 1.2l-2.3-.2L4.7 11l1.1 2a8.3 8.3 0 0 0 0 1.9l-1.1 2 1.5 2.6 2.3-.2c.35.44.76.85 1.2 1.2l-.2 2.3 2.6 1.5 2.6-1.5-.2-2.3c.44-.35.85-.76 1.2-1.2l2.3.2 1.5-2.6-1.1-2a8.3 8.3 0 0 0 0-1.9z"
+                opacity="0.9"
+              />
+            </svg>
+          );
+        return null;
+      }
+
+      function AndroidFrame({ children, width = 412, height = 892, time = "9:41", battery = 78 }) {
+        return (
+          <div
+            style={{
+              padding: 12,
+              borderRadius: 46,
+              background: "linear-gradient(180deg, rgba(20,20,22,0.92), rgba(14,14,16,0.98))",
+              boxShadow: "0 0 0 1px rgba(255,255,255,0.06), 0 26px 90px rgba(0,0,0,0.36)",
+            }}
+          >
+            <div style={{ width, height, borderRadius: 36, overflow: "hidden", position: "relative", background: "#fff" }}>
+              <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, #101113, #0b0b0c)", opacity: 0.08, pointerEvents: "none", zIndex: 1 }} />
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 32, padding: "0 20px", display: "flex", alignItems: "center", justifyContent: "space-between", color: "rgba(255,255,255,0.80)", fontSize: 14, fontWeight: 600, zIndex: 30, pointerEvents: "none" }}>
+                <span>{time}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <svg width="14" height="10" viewBox="0 0 14 10" fill="currentColor" opacity="0.9">
+                    <rect x="0" y="6" width="2" height="4" rx="0.5" />
+                    <rect x="4" y="4" width="2" height="6" rx="0.5" />
+                    <rect x="8" y="2" width="2" height="8" rx="0.5" />
+                    <rect x="12" y="0" width="2" height="10" rx="0.5" />
+                  </svg>
+                  <div style={{ width: 22, height: 10, border: "1.5px solid currentColor", borderRadius: 2, padding: 1, position: "relative", opacity: 0.9 }}>
+                    <div style={{ width: `${battery}%`, height: "100%", background: "currentColor", borderRadius: 1 }} />
+                  </div>
+                </div>
+              </div>
+              <div style={{ position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)", width: 14, height: 14, borderRadius: "50%", background: "#000", zIndex: 40, boxShadow: "0 0 0 3px rgba(255,255,255,0.04)" }} />
+              <div style={{ position: "absolute", top: 32, bottom: 26, left: 0, right: 0, zIndex: 10 }}>{children}</div>
+              <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 26, display: "grid", placeItems: "center", zIndex: 25, pointerEvents: "none" }}>
+                <div style={{ width: 104, height: 5, borderRadius: 999, background: "rgba(255,255,255,0.18)", boxShadow: "0 1px 0 rgba(0,0,0,0.6)" }} />
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      function Pill({ label, tone = "neutral" }) {
+        const map = {
+          neutral: { bg: "rgba(18,19,22,0.06)", fg: "rgba(18,19,22,0.78)", bd: "rgba(18,19,22,0.10)" },
+          accent: { bg: "rgba(192,74,26,0.10)", fg: "rgba(192,74,26,0.92)", bd: "rgba(192,74,26,0.18)" },
+          ok: { bg: "rgba(18,19,22,0.06)", fg: "rgba(18,19,22,0.78)", bd: "rgba(18,19,22,0.10)" },
+        };
+        const t = map[tone] || map.neutral;
+        return (
+          <span style={{ height: 24, display: "inline-flex", alignItems: "center", padding: "0 10px", borderRadius: 999, border: `1px solid ${t.bd}`, background: t.bg, color: t.fg, fontSize: 12, fontWeight: 800, letterSpacing: "0.01em" }}>
+            {label}
+          </span>
+        );
+      }
+
+      function IconButton({ label, onClick, children }) {
+        return (
+          <button
+            aria-label={label}
+            onClick={onClick}
+            style={{
+              height: 38,
+              width: 38,
+              borderRadius: 14,
+              border: "1px solid var(--hairline)",
+              background: "rgba(255,255,255,0.72)",
+              backdropFilter: "blur(10px)",
+              display: "grid",
+              placeItems: "center",
+              cursor: "pointer",
+              color: "rgba(18,19,22,0.84)",
+            }}
+          >
+            {children}
+          </button>
+        );
+      }
+
+      function SoftCard({ children }) {
+        return <div style={{ borderRadius: 20, border: "1px solid rgba(18,19,22,0.10)", background: "rgba(255,255,255,0.56)", backdropFilter: "blur(10px)" }}>{children}</div>;
+      }
+
+      function Sheet({ open, title, subtitle, onClose, children }) {
+        return (
+          <div style={{ position: "absolute", inset: 0, zIndex: 80, pointerEvents: open ? "auto" : "none" }}>
+            <div
+              onClick={onClose}
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: open ? "rgba(0,0,0,0.34)" : "rgba(0,0,0,0)",
+                transition: "background 160ms var(--ease-out)",
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                padding: 14,
+                transform: open ? "translateY(0)" : "translateY(18px)",
+                opacity: open ? 1 : 0,
+                transition: "transform 220ms var(--ease-out), opacity 220ms var(--ease-out)",
+              }}
+            >
+              <div style={{ borderRadius: 24, border: "1px solid rgba(255,255,255,0.18)", background: "rgba(18,19,22,0.86)", color: "rgba(255,255,255,0.92)", boxShadow: "0 28px 90px rgba(0,0,0,0.34)", overflow: "hidden" }}>
+                <div style={{ padding: "14px 16px 12px 16px", borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
+                  <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.01em" }}>{title}</div>
+                  {subtitle ? <div style={{ marginTop: 4, fontSize: 12, fontWeight: 650, color: "rgba(255,255,255,0.62)", lineHeight: 1.35 }}>{subtitle}</div> : null}
+                </div>
+                <div style={{ padding: 16 }}>{children}</div>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      function Toast({ show, text }) {
+        return (
+          <div style={{ position: "absolute", left: 16, right: 16, bottom: 16, zIndex: 90, pointerEvents: "none" }}>
+            <div style={{ opacity: show ? 1 : 0, transform: show ? "translateY(0)" : "translateY(10px)", transition: "opacity 180ms var(--ease-out), transform 220ms var(--ease-out)", borderRadius: 18, border: "1px solid rgba(255,255,255,0.16)", background: "rgba(18,19,22,0.86)", color: "rgba(255,255,255,0.92)", padding: "12px 14px", fontSize: 12, fontWeight: 750, boxShadow: "0 28px 90px rgba(0,0,0,0.34)" }}>
+              {text}
+            </div>
+          </div>
+        );
+      }
+
+      function App() {
+        const time = useNowTime();
+        const [route, setRoute] = useState({ name: "shelf" });
+        const [sheet, setSheet] = useState(null);
+        const [toast, setToast] = useState(null);
+        const [hud, setHud] = useState(false);
+        const hudTimer = useRef(null);
+        const [hint, setHint] = useState(null);
+
+        const [prefs, setPrefs] = useState({ theme: "paper", fontSize: 18, lineHeight: 1.85, margin: 22, brightness: 0.95 });
+        const isNight = prefs.theme === "night";
+
+        const [library, setLibrary] = useState(() => [
+          { id: "b1", title: "雾与盐", author: "陈轻舟", format: "EPUB", progress: 0.28, meta: { chapters: 18 } },
+          { id: "b2", title: "黑白线条 · 漫画合辑", author: "Studio M", format: "PDF", progress: 0.02, meta: { pages: 212, segmentsTotal: 1240 } },
+          { id: "b3", title: "写作课笔记", author: "你", format: "MD", progress: 0.62, meta: { words: 13842 } },
+          { id: "b4", title: "北方长夜", author: "无名氏", format: "TXT", progress: 0.14, meta: { words: 420000 } },
+        ]);
+        const [activeId, setActiveId] = useState(null);
+        const activeBook = useMemo(() => library.find((b) => b.id === activeId) || null, [library, activeId]);
+
+        const [bookmarks, setBookmarks] = useState([]);
+        const [annotations, setAnnotations] = useState([]);
+        const [searchQuery, setSearchQuery] = useState("");
+
+        const [epubLoc, setEpubLoc] = useState({ chapter: 3, chapters: 18 });
+        const [textLoc, setTextLoc] = useState({ page: 3, total: 36 });
+        const [pdfLoc, setPdfLoc] = useState({ page: 1, seg: 1, per: 6, total: 1240 });
+
+        function notify(msg) {
+          setToast(msg);
+          window.setTimeout(() => setToast(null), 1600);
+        }
+
+        function hideHUD() {
+          if (hudTimer.current) window.clearTimeout(hudTimer.current);
+          setHud(false);
+        }
+
+        function showHUD(autoHide = true) {
+          setHud(true);
+          if (!autoHide) return;
+          if (hudTimer.current) window.clearTimeout(hudTimer.current);
+          hudTimer.current = window.setTimeout(() => setHud(false), 2200);
+        }
+
+        function flashHint(text) {
+          setHint(text);
+          window.setTimeout(() => setHint(null), 900);
+        }
+
+        useEffect(() => {
+          if (sheet) showHUD(false);
+        }, [sheet]);
+
+        useEffect(() => () => hudTimer.current && window.clearTimeout(hudTimer.current), []);
+
+        function locator() {
+          if (!activeBook) return null;
+          if (route.name === "readerPdf") return { t: "pdf", page: pdfLoc.page, seg: pdfLoc.seg };
+          if (route.name === "readerEpub") return { t: "epub", chapter: epubLoc.chapter };
+          if (route.name === "readerText") return { t: "text", page: textLoc.page };
+          return null;
+        }
+
+        function locatorLabel(loc) {
+          if (!loc) return "";
+          if (loc.t === "pdf") return `第 ${loc.page} 页 · 段 ${loc.seg}`;
+          if (loc.t === "epub") return `第 ${loc.chapter} 章`;
+          if (loc.t === "text") return `第 ${loc.page} 页`;
+          return "";
+        }
+
+        function isBookmarked() {
+          if (!activeBook) return false;
+          const loc = locator();
+          if (!loc) return false;
+          const key = JSON.stringify(loc);
+          return bookmarks.some((b) => b.bookId === activeBook.id && JSON.stringify(b.loc) === key);
+        }
+
+        function toggleBookmark() {
+          if (!activeBook) return;
+          const loc = locator();
+          if (!loc) return;
+          const key = JSON.stringify(loc);
+          const exists = bookmarks.some((b) => b.bookId === activeBook.id && JSON.stringify(b.loc) === key);
+          if (exists) {
+            setBookmarks((prev) => prev.filter((b) => !(b.bookId === activeBook.id && JSON.stringify(b.loc) === key)));
+            notify("已移除书签");
+            return;
+          }
+          setBookmarks((prev) => [{ id: uid("bm"), bookId: activeBook.id, loc, label: locatorLabel(loc) }, ...prev]);
+          notify("已添加书签");
+        }
+
+        function updateProgress(bookId, p) {
+          setLibrary((prev) => prev.map((b) => (b.id === bookId ? { ...b, progress: clamp(p, 0, 1) } : b)));
+        }
+
+        function openBook(bookId) {
+          const b = library.find((x) => x.id === bookId);
+          if (!b) return;
+          setActiveId(bookId);
+          hideHUD();
+          if (b.format === "PDF") setRoute({ name: "readerPdf", bookId });
+          else if (b.format === "EPUB") setRoute({ name: "readerEpub", bookId });
+          else setRoute({ name: "readerText", bookId });
+        }
+
+        function goBack() {
+          if (route.returnTo) {
+            setRoute(route.returnTo);
+            setSheet(null);
+            return;
+          }
+          setSheet(null);
+          setRoute({ name: "shelf" });
+          setActiveId(null);
+        }
+
+        function importMock(format) {
+          const id = uid("b");
+          const meta = format === "PDF" ? { pages: 188, segmentsTotal: 1200 } : format === "EPUB" ? { chapters: 14 } : format === "MD" ? { words: 8300 } : { words: 210000 };
+          setLibrary((prev) => [{ id, title: `新导入：${format} 文件`, author: "本地文件", format, progress: 0, meta }, ...prev]);
+          notify(`已导入 ${format}`);
+        }
+
+        function openSearch() {
+          if (!activeBook) return;
+          if (activeBook.format === "PDF") {
+            notify("PDF 搜索需文本层（后续）");
+            return;
+          }
+          setSearchQuery("");
+          setRoute({ name: "search", bookId: activeBook.id, returnTo: route });
+        }
+
+        function Screen() {
+          if (route.name === "transfer") return <TransferScreen />;
+          if (route.name === "search") return <SearchScreen />;
+          if (route.name === "bookmarks") return <BookmarksScreen />;
+          if (route.name === "annotations") return <AnnotationsScreen />;
+          if (route.name === "readerPdf") return <PdfReader />;
+          if (route.name === "readerEpub") return <EpubReader />;
+          if (route.name === "readerText") return <TextReader />;
+          return <Shelf />;
+        }
+
+        function Shelf() {
+          return (
+            <div style={{ height: "100%", width: "100%", background: "linear-gradient(180deg, var(--paper), var(--paper-2))", position: "relative" }}>
+              <div style={{ padding: "16px 16px 10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "grid", gap: 2 }}>
+                  <div style={{ fontFamily: "var(--serif)", fontSize: 18, fontWeight: 700, letterSpacing: "0.01em" }}>书架</div>
+                  <div style={{ fontSize: 12, fontWeight: 650, color: "var(--ink-2)", lineHeight: 1.35 }}>纯本地 · 注重阅读沉浸</div>
+                </div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <IconButton label="导入" onClick={() => setSheet("import")}>
+                    <Icon name="plus" />
+                  </IconButton>
+                  <IconButton label="传书" onClick={() => setRoute({ name: "transfer" })}>
+                    <Icon name="wifi" />
+                  </IconButton>
+                </div>
+              </div>
+
+              <div style={{ padding: "0 16px 18px 16px", display: "grid", gap: 12 }}>
+                <SoftCard>
+                  <div style={{ padding: 14, display: "grid", gap: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontSize: 12, fontWeight: 850, color: "var(--ink-3)" }}>提示</div>
+                      <Pill label="离线优先" tone="neutral" />
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 650, color: "var(--ink-2)", lineHeight: 1.55 }}>
+                      PDF 漫画默认「纵向切段」生成子页序列，只存坐标；阅读时缓存位图。
+                    </div>
+                  </div>
+                </SoftCard>
+
+                <div style={{ display: "grid", gap: 10 }}>
+                  {library.map((b) => (
+                    <button key={b.id} onClick={() => openBook(b.id)} style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", textAlign: "left" }}>
+                      <div style={{ padding: "12px 4px", borderBottom: "1px solid rgba(18,19,22,0.08)" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "start" }}>
+                          <div style={{ display: "grid", gap: 6 }}>
+                            <div style={{ fontFamily: "var(--serif)", fontSize: 16, fontWeight: 700, letterSpacing: "0.01em" }}>{b.title}</div>
+                            <div style={{ fontSize: 12, fontWeight: 650, color: "var(--ink-2)" }}>{b.author}</div>
+                          </div>
+                          <div style={{ display: "grid", justifyItems: "end", gap: 8 }}>
+                            <Pill label={b.format} tone={b.format === "PDF" ? "accent" : "neutral"} />
+                            {b.format === "PDF" ? <Pill label="子页" tone="neutral" /> : null}
+                          </div>
+                        </div>
+                        <div style={{ marginTop: 10, height: 8, borderRadius: 999, border: "1px solid rgba(18,19,22,0.10)", background: "rgba(18,19,22,0.04)", overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${Math.round(b.progress * 100)}%`, background: "rgba(18,19,22,0.58)", borderRadius: 999, transition: "width 220ms var(--ease-out)" }} />
+                        </div>
+                        <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--ink-3)" }}>{Math.round(b.progress * 100)}%</div>
+                          <div style={{ fontSize: 12, fontWeight: 650, color: "var(--ink-3)" }}>
+                            {b.format === "PDF" ? `${b.meta.pages} 页` : b.format === "EPUB" ? `${b.meta.chapters} 章` : `${Math.round((b.meta.words || 0) / 1000)}k 字`}
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <Sheet open={sheet === "import"} title="导入" subtitle="系统文件选择器（SAF）/ 传书（原型模拟）" onClose={() => setSheet(null)}>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {[
+                    { f: "PDF", tone: "accent" },
+                    { f: "EPUB", tone: "neutral" },
+                    { f: "MD", tone: "neutral" },
+                    { f: "TXT", tone: "neutral" },
+                  ].map((x) => (
+                    <button
+                      key={x.f}
+                      onClick={() => {
+                        setSheet(null);
+                        importMock(x.f);
+                      }}
+                      style={{
+                        height: 46,
+                        borderRadius: 16,
+                        border: "1px solid rgba(255,255,255,0.14)",
+                        background: "rgba(255,255,255,0.08)",
+                        color: "rgba(255,255,255,0.92)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: "0 14px",
+                        fontSize: 14,
+                        fontWeight: 850,
+                      }}
+                    >
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ opacity: 0.9 }}>导入 {x.f}</span>
+                        <span style={{ opacity: 0.7, fontWeight: 750, fontSize: 12 }}>本地</span>
+                      </span>
+                      <span style={{ fontSize: 14, opacity: 0.5 }}>›</span>
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => {
+                      setSheet(null);
+                      setRoute({ name: "transfer" });
+                    }}
+                    style={{ height: 46, borderRadius: 16, border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.92)", cursor: "pointer", fontSize: 14, fontWeight: 900 }}
+                  >
+                    去局域网传书
+                  </button>
+                </div>
+              </Sheet>
+
+              <Toast show={!!toast} text={toast || ""} />
+            </div>
+          );
+        }
+
+        function ReaderHeader({ title, subtitle }) {
+          return (
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 60, padding: "10px 10px 0 10px", pointerEvents: hud ? "auto" : "none", opacity: hud ? 1 : 0, transform: hud ? "translateY(0)" : "translateY(-10px)", transition: "opacity 180ms var(--ease-out), transform 220ms var(--ease-out)" }}>
+              <div style={{ borderRadius: 20, border: isNight ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(18,19,22,0.10)", background: isNight ? "rgba(12,12,14,0.76)" : "rgba(246,242,234,0.78)", backdropFilter: "blur(14px)", padding: 10, display: "grid", gridTemplateColumns: "40px 1fr auto", gap: 10, alignItems: "center" }}>
+                <IconButton label="返回" onClick={() => goBack()}>
+                  <Icon name="chevronLeft" color={isNight ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.86)"} />
+                </IconButton>
+                <div style={{ display: "grid", gap: 3 }}>
+                  <div style={{ fontFamily: "var(--serif)", fontSize: 14, fontWeight: 700, color: isNight ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.92)" }}>{title}</div>
+                  <div style={{ fontSize: 12, fontWeight: 650, color: isNight ? "rgba(255,255,255,0.58)" : "rgba(18,19,22,0.56)" }}>{subtitle}</div>
+                </div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <IconButton label="书签" onClick={() => toggleBookmark()}>
+                    <Icon name={isBookmarked() ? "bookmarkFill" : "bookmark"} color={isNight ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.86)"} />
+                  </IconButton>
+                  <IconButton label="菜单" onClick={() => setSheet("menu")}>
+                    <Icon name="dots" color={isNight ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.86)"} />
+                  </IconButton>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        function ReaderBottomBar() {
+          const show = hud && !sheet;
+          const p = activeBook?.progress || 0;
+          return (
+            <div style={{ position: "absolute", left: 10, right: 10, bottom: 8, zIndex: 60, pointerEvents: show ? "auto" : "none", opacity: show ? 1 : 0, transform: show ? "translateY(0)" : "translateY(10px)", transition: "opacity 180ms var(--ease-out), transform 220ms var(--ease-out)" }}>
+              <div style={{ borderRadius: 22, border: isNight ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(18,19,22,0.10)", background: isNight ? "rgba(12,12,14,0.76)" : "rgba(246,242,234,0.78)", backdropFilter: "blur(14px)", padding: "10px 12px", display: "flex", alignItems: "center", gap: 12 }}>
+                <button onClick={() => setSheet("progress")} style={{ flex: 1, border: "none", background: "transparent", padding: 0, cursor: "pointer", textAlign: "left", color: isNight ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.92)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                    <div style={{ fontSize: 12, fontWeight: 850, opacity: 0.7 }}>进度</div>
+                    <div style={{ fontSize: 12, fontWeight: 900 }}>{Math.round(p * 100)}%</div>
+                  </div>
+                  <div style={{ marginTop: 8, height: 8, borderRadius: 999, border: isNight ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(18,19,22,0.10)", background: isNight ? "rgba(255,255,255,0.06)" : "rgba(18,19,22,0.04)", overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${Math.round(p * 100)}%`, background: isNight ? "linear-gradient(90deg, rgba(255,255,255,0.72), rgba(255,255,255,0.26))" : "rgba(18,19,22,0.58)", borderRadius: 999 }} />
+                  </div>
+                </button>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <IconButton label="标注" onClick={() => setSheet("highlight")}>
+                    <Icon name="note" color={isNight ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.86)"} />
+                  </IconButton>
+                  <IconButton label="设置" onClick={() => setSheet("settings")}>
+                    <Icon name="settings" color={isNight ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.86)"} />
+                  </IconButton>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        function ReaderHint() {
+          return (
+            <div style={{ position: "absolute", left: 0, right: 0, bottom: 42, zIndex: 70, display: "grid", placeItems: "center", pointerEvents: "none" }}>
+              <div style={{ opacity: hint ? 1 : 0, transform: hint ? "translateY(0)" : "translateY(8px)", transition: "opacity 160ms var(--ease-out), transform 220ms var(--ease-out)", borderRadius: 999, padding: "8px 12px", border: "1px solid rgba(255,255,255,0.14)", background: "rgba(18,19,22,0.80)", color: "rgba(255,255,255,0.92)", fontSize: 12, fontWeight: 850, letterSpacing: "0.01em", boxShadow: "0 28px 90px rgba(0,0,0,0.34)" }}>
+                {hint || ""}
+              </div>
+            </div>
+          );
+        }
+
+        function ReaderRoot({ title, subtitle, children, onLeft, onRight }) {
+          const brightnessMask = clamp(1 - prefs.brightness, 0, 0.72);
+          return (
+            <div style={{ height: "100%", width: "100%", position: "relative", background: isNight ? "#0b0b0d" : "var(--paper)" }}>
+              <div style={{ position: "absolute", inset: 0, background: isNight ? "linear-gradient(180deg, #0b0b0d, #070709)" : "linear-gradient(180deg, var(--paper), var(--paper-2))" }} />
+              <div style={{ position: "absolute", inset: 0, background: "repeating-linear-gradient(0deg, rgba(0,0,0,0.05) 0 1px, transparent 1px 3px)", opacity: isNight ? 0.10 : 0.05, pointerEvents: "none" }} />
+              <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,1)", opacity: brightnessMask, pointerEvents: "none", zIndex: 20 }} />
+
+              <div style={{ position: "absolute", inset: 0, zIndex: 10 }}>
+                <div style={{ position: "absolute", inset: 0 }}>
+                  <div style={{ position: "absolute", inset: 0 }}>
+                    <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: "35%" }} onClick={onLeft} />
+                    <div
+                      style={{ position: "absolute", left: "35%", top: 0, bottom: 0, width: "30%" }}
+                      onClick={() => {
+                        if (hud) hideHUD();
+                        else showHUD(false);
+                      }}
+                    />
+                    <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: "35%" }} onClick={onRight} />
+                  </div>
+                </div>
+
+                <div style={{ position: "absolute", inset: 0, zIndex: 5 }}>{children}</div>
+
+                <ReaderHeader title={title} subtitle={subtitle} />
+                <ReaderBottomBar />
+                <ReaderHint />
+
+                <Sheet open={sheet === "menu"} title="阅读菜单" subtitle={activeBook ? `${activeBook.title} · ${locatorLabel(locator())}` : ""} onClose={() => setSheet(null)}>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {activeBook && activeBook.format !== "PDF" ? (
+                      <button onClick={() => { setSheet(null); openSearch(); }} style={{ height: 46, borderRadius: 16, border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.92)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 14px", fontSize: 14, fontWeight: 900 }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                          <Icon name="search" color="rgba(255,255,255,0.86)" />
+                          搜索
+                        </span>
+                        <span style={{ opacity: 0.5 }}>›</span>
+                      </button>
+                    ) : null}
+                    {[
+                      { key: "progress", label: "进度跳转" },
+                      { key: "bookmarks", label: "书签列表" },
+                      { key: "annotations", label: "标注与笔记" },
+                      { key: "highlight", label: "添加标注" },
+                      { key: "settings", label: "设置" },
+                    ].map((x) => (
+                      <button
+                        key={x.key}
+                        onClick={() => {
+                          setSheet(x.key);
+                        }}
+                        style={{ height: 46, borderRadius: 16, border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.92)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 14px", fontSize: 14, fontWeight: 900 }}
+                      >
+                        <span>{x.label}</span>
+                        <span style={{ opacity: 0.5 }}>›</span>
+                      </button>
+                    ))}
+                  </div>
+                </Sheet>
+
+                <ProgressSheet />
+                <SettingsSheet />
+                <HighlightSheet />
+              </div>
+
+              <Toast show={!!toast} text={toast || ""} />
+            </div>
+          );
+        }
+
+        function SettingsSheet() {
+          return (
+            <Sheet open={sheet === "settings"} title="阅读设置" subtitle="极简：只保留真正影响阅读的选项" onClose={() => setSheet(null)}>
+              <div style={{ display: "grid", gap: 14 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                  {[
+                    { key: "paper", label: "纸" },
+                    { key: "warm", label: "暖" },
+                    { key: "night", label: "夜" },
+                  ].map((x) => {
+                    const active = prefs.theme === x.key;
+                    return (
+                      <button key={x.key} onClick={() => setPrefs((p) => ({ ...p, theme: x.key }))} style={{ height: 38, borderRadius: 14, border: "1px solid rgba(255,255,255,0.14)", background: active ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.92)", cursor: "pointer", fontSize: 13, fontWeight: 900 }}>
+                        {x.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {[
+                  { label: "字号", key: "fontSize", min: 14, max: 24, step: 1, fmt: (v) => `${v}px` },
+                  { label: "行距", key: "lineHeight", min: 1.45, max: 2.2, step: 0.05, fmt: (v) => v.toFixed(2) },
+                  { label: "页边距", key: "margin", min: 14, max: 30, step: 1, fmt: (v) => `${v}px` },
+                  { label: "亮度", key: "brightness", min: 0.3, max: 1, step: 0.02, fmt: (v) => `${Math.round(v * 100)}%` },
+                ].map((row) => (
+                  <div key={row.key} style={{ display: "grid", gap: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontSize: 12, fontWeight: 850, color: "rgba(255,255,255,0.70)" }}>{row.label}</div>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: "rgba(255,255,255,0.92)" }}>{row.fmt(prefs[row.key])}</div>
+                    </div>
+                    <input type="range" min={row.min} max={row.max} step={row.step} value={prefs[row.key]} onChange={(e) => setPrefs((p) => ({ ...p, [row.key]: Number(e.target.value) }))} />
+                  </div>
+                ))}
+                <button onClick={() => setSheet(null)} style={{ height: 46, borderRadius: 16, border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.92)", cursor: "pointer", fontSize: 14, fontWeight: 900 }}>
+                  完成
+                </button>
+              </div>
+            </Sheet>
+          );
+        }
+
+        function HighlightSheet() {
+          const [note, setNote] = useState("");
+          useEffect(() => {
+            if (sheet === "highlight") setNote("");
+          }, [sheet]);
+          return (
+            <Sheet open={sheet === "highlight"} title="添加标注" subtitle={locatorLabel(locator())} onClose={() => setSheet(null)}>
+              <div style={{ display: "grid", gap: 12 }}>
+                <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="写一条笔记（可选）" rows={3} style={{ width: "100%", resize: "none", borderRadius: 18, padding: 12, border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.92)", outline: "none", fontSize: 13, fontWeight: 650, lineHeight: 1.4 }} />
+                <button
+                  onClick={() => {
+                    if (!activeBook) return;
+                    const loc = locator();
+                    if (!loc) return;
+                    setAnnotations((prev) => [{ id: uid("hl"), bookId: activeBook.id, loc, text: activeBook.format === "PDF" ? "（PDF 漫画）保存坐标/截图引用（后续）。" : "「夜里下雨时，城市像被抛光过的石头。」", note }, ...prev]);
+                    setSheet(null);
+                    notify("已保存标注");
+                  }}
+                  style={{ height: 46, borderRadius: 16, border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.92)", cursor: "pointer", fontSize: 14, fontWeight: 900 }}
+                >
+                  保存
+                </button>
+              </div>
+            </Sheet>
+          );
+        }
+
+        function ProgressSheet() {
+          const [value, setValue] = useState(1);
+          const max = !activeBook ? 1 : activeBook.format === "PDF" ? pdfLoc.total : activeBook.format === "EPUB" ? epubLoc.chapters : textLoc.total;
+          const label = !activeBook ? "进度" : activeBook.format === "PDF" ? "子页序号" : activeBook.format === "EPUB" ? "章节" : "页码";
+          useEffect(() => {
+            if (sheet !== "progress") return;
+            if (!activeBook) return;
+            if (activeBook.format === "PDF") setValue((pdfLoc.page - 1) * pdfLoc.per + pdfLoc.seg);
+            else if (activeBook.format === "EPUB") setValue(epubLoc.chapter);
+            else setValue(textLoc.page);
+          }, [sheet, activeBook?.id]);
+          return (
+            <Sheet open={sheet === "progress"} title="进度跳转" subtitle={locatorLabel(locator())} onClose={() => setSheet(null)}>
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontSize: 12, fontWeight: 850, color: "rgba(255,255,255,0.70)" }}>{label}</div>
+                  <div style={{ fontSize: 12, fontWeight: 900, color: "rgba(255,255,255,0.92)" }}>
+                    {value}/{max}
+                  </div>
+                </div>
+                <input type="range" min={1} max={max} step={1} value={value} onChange={(e) => setValue(Number(e.target.value))} />
+                <button
+                  onClick={() => {
+                    if (!activeBook) return;
+                    if (route.name === "readerPdf") {
+                      const per = pdfLoc.per || 6;
+                      const nextPage = Math.max(1, Math.ceil(value / per));
+                      const nextSeg = Math.max(1, value - (nextPage - 1) * per);
+                      setPdfLoc((p) => ({ ...p, page: nextPage, seg: nextSeg }));
+                      updateProgress(activeBook.id, clamp(value / (pdfLoc.total || 1240), 0, 1));
+                      flashHint(`第 ${nextPage} 页 · 段 ${nextSeg}`);
+                    } else if (route.name === "readerEpub") {
+                      const c = clamp(value, 1, epubLoc.chapters);
+                      setEpubLoc((p) => ({ ...p, chapter: c }));
+                      updateProgress(activeBook.id, clamp(c / epubLoc.chapters, 0, 1));
+                      flashHint(`第 ${c} 章`);
+                    } else if (route.name === "readerText") {
+                      const p = clamp(value, 1, textLoc.total);
+                      setTextLoc((prev) => ({ ...prev, page: p }));
+                      updateProgress(activeBook.id, clamp(p / textLoc.total, 0, 1));
+                      flashHint(`第 ${p} 页`);
+                    }
+                    setSheet(null);
+                    notify("已跳转");
+                  }}
+                  style={{ height: 46, borderRadius: 16, border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.92)", cursor: "pointer", fontSize: 14, fontWeight: 900 }}
+                >
+                  跳转
+                </button>
+              </div>
+            </Sheet>
+          );
+        }
+
+        function TextReader() {
+          const b = activeBook;
+          const ink = isNight ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.92)";
+          const paragraphs = useMemo(
+            () => [
+              "夜里下雨时，城市像被抛光过的石头：路灯把每一滴水都点亮，又在下一秒熄灭。",
+              "我在书页边缘做了一个标记，告诉自己别急着读完，先把呼吸放慢。",
+              "如果你把句子读得太快，它们会像玻璃一样互相碰撞；慢一点，它们才会像木头，带着纹理和温度。",
+              "原型用少量段落模拟：真实实现会从 txt/md 解析并分页或滚动。",
+            ],
+            [],
+          );
+          function next() {
+            hideHUD();
+            setTextLoc((p) => {
+              const page = Math.min(p.total, p.page + 1);
+              updateProgress(b.id, clamp(page / p.total, 0, 1));
+              flashHint(`第 ${page}/${p.total} 页`);
+              return { ...p, page };
+            });
+          }
+          function prev() {
+            hideHUD();
+            setTextLoc((p) => {
+              const page = Math.max(1, p.page - 1);
+              updateProgress(b.id, clamp(page / p.total, 0, 1));
+              flashHint(`第 ${page}/${p.total} 页`);
+              return { ...p, page };
+            });
+          }
+          return (
+            <ReaderRoot title={b.title} subtitle={`${b.format} · 第 ${textLoc.page}/${textLoc.total} 页`} onLeft={prev} onRight={next}>
+              <div style={{ position: "absolute", inset: 0, padding: `${prefs.margin}px`, paddingTop: `${prefs.margin + 20}px`, overflow: "hidden" }}>
+                <div style={{ fontFamily: "var(--serif)", fontSize: prefs.fontSize, lineHeight: prefs.lineHeight, color: ink, letterSpacing: "0.01em" }}>
+                  <div style={{ fontFamily: "var(--ui)", fontSize: 12, fontWeight: 750, color: isNight ? "rgba(255,255,255,0.52)" : "var(--ink-3)", marginBottom: 14 }}>{b.author}</div>
+                  <div style={{ display: "grid", gap: 14 }}>
+                    {paragraphs.map((t, i) => (
+                      <p key={i} style={{ margin: 0 }}>
+                        {t}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </ReaderRoot>
+          );
+        }
+
+        function EpubReader() {
+          const b = activeBook;
+          const ink = isNight ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.92)";
+          function next() {
+            hideHUD();
+            setEpubLoc((p) => {
+              const c = Math.min(p.chapters, p.chapter + 1);
+              updateProgress(b.id, clamp(c / p.chapters, 0, 1));
+              flashHint(`第 ${c}/${p.chapters} 章`);
+              return { ...p, chapter: c };
+            });
+          }
+          function prev() {
+            hideHUD();
+            setEpubLoc((p) => {
+              const c = Math.max(1, p.chapter - 1);
+              updateProgress(b.id, clamp(c / p.chapters, 0, 1));
+              flashHint(`第 ${c}/${p.chapters} 章`);
+              return { ...p, chapter: c };
+            });
+          }
+          return (
+            <ReaderRoot title={b.title} subtitle={`EPUB · 第 ${epubLoc.chapter}/${epubLoc.chapters} 章`} onLeft={prev} onRight={next}>
+              <div style={{ position: "absolute", inset: 0, padding: `${prefs.margin}px`, paddingTop: `${prefs.margin + 20}px`, overflow: "hidden" }}>
+                <div style={{ fontFamily: "var(--serif)", fontSize: prefs.fontSize, lineHeight: prefs.lineHeight, color: ink, letterSpacing: "0.01em" }}>
+                  <div style={{ fontFamily: "var(--ui)", fontSize: 12, fontWeight: 750, color: isNight ? "rgba(255,255,255,0.52)" : "var(--ink-3)", marginBottom: 14 }}>{b.author}</div>
+                  <div style={{ display: "grid", gap: 14 }}>
+                    <p style={{ margin: 0 }}>这一章来自 EPUB 内容流。目录、进度、标注、搜索均为本地能力。</p>
+                    <p style={{ margin: 0 }}>点一下中间呼出 HUD，再点一次隐藏，回到沉浸阅读。</p>
+                    <div style={{ borderLeft: isNight ? "2px solid rgba(255,255,255,0.16)" : "2px solid rgba(18,19,22,0.16)", paddingLeft: 12, fontStyle: "italic", color: isNight ? "rgba(255,255,255,0.62)" : "var(--ink-2)" }}>
+                      读到句子拐弯处，别急着翻页。让它在心里停一拍，再继续。
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </ReaderRoot>
+          );
+        }
+
+        function PdfReader() {
+          const b = activeBook;
+          const ink = isNight ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.92)";
+          const muted = isNight ? "rgba(255,255,255,0.56)" : "var(--ink-2)";
+          function next() {
+            hideHUD();
+            setPdfLoc((p) => {
+              const n = { ...p };
+              if (n.seg < n.per) n.seg += 1;
+              else {
+                n.page += 1;
+                n.seg = 1;
+                n.per = 5 + ((n.page * 3) % 3);
+              }
+              updateProgress(b.id, clamp(((n.page - 1) * p.per + n.seg) / (p.total || 1240), 0, 1));
+              flashHint(`第 ${n.page} 页 · ${n.seg}/${n.per}`);
+              return n;
+            });
+          }
+          function prev() {
+            hideHUD();
+            setPdfLoc((p) => {
+              const n = { ...p };
+              if (n.seg > 1) n.seg -= 1;
+              else {
+                n.page = Math.max(1, n.page - 1);
+                n.per = 5 + ((n.page * 3) % 3);
+                n.seg = n.per;
+              }
+              updateProgress(b.id, clamp(((n.page - 1) * p.per + n.seg) / (p.total || 1240), 0, 1));
+              flashHint(`第 ${n.page} 页 · ${n.seg}/${n.per}`);
+              return n;
+            });
+          }
+          return (
+            <ReaderRoot title={b.title} subtitle={`PDF 漫画 · 第 ${pdfLoc.page} 页`} onLeft={prev} onRight={next}>
+              <div style={{ position: "absolute", inset: 0, padding: 0, overflow: "hidden" }}>
+                <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
+                  <div style={{ width: "86%", height: "78%", borderRadius: 26, border: isNight ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(18,19,22,0.12)", background: isNight ? "rgba(255,255,255,0.02)" : "rgba(18,19,22,0.03)", display: "grid", placeItems: "center" }}>
+                    <div style={{ textAlign: "center", padding: 18, maxWidth: 280 }}>
+                      <div style={{ fontFamily: "var(--serif)", fontSize: 18, fontWeight: 700, color: ink }}>子页渲染区域</div>
+                      <div style={{ marginTop: 8, fontSize: 12, fontWeight: 650, color: muted, lineHeight: 1.5 }}>纵向切段后按子页翻页；只存坐标，位图缓存临时生成。</div>
+                      <div style={{ marginTop: 12, display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
+                        <Pill label={`段 ${pdfLoc.seg}/${pdfLoc.per}`} tone="neutral" />
+                        <Pill label={`${pdfLoc.total} 子页`} tone="neutral" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </ReaderRoot>
+          );
+        }
+
+        function SearchScreen() {
+          const b = activeBook;
+          const results = useMemo(() => {
+            const q = searchQuery.trim();
+            if (!q) return [];
+            const corpus = [
+              { loc: "当前位置", snippet: "夜里下雨时，城市像被抛光过的石头。" },
+              { loc: "第 5 章", snippet: "目录采用章节级加载，跳转后进度自动保存。" },
+              { loc: "第 11 章", snippet: "你可以把句子读慢一点，让它们在心里停一拍。" },
+            ];
+            return corpus.filter((x) => x.snippet.includes(q));
+          }, [searchQuery]);
+          return (
+            <div style={{ height: "100%", width: "100%", background: "linear-gradient(180deg, var(--paper), var(--paper-2))" }}>
+              <div style={{ padding: "16px 16px 10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <IconButton label="返回" onClick={() => goBack()}>
+                  <Icon name="chevronLeft" />
+                </IconButton>
+                <div style={{ fontFamily: "var(--serif)", fontSize: 16, fontWeight: 700 }}>搜索</div>
+                <div style={{ width: 38 }} />
+              </div>
+              <div style={{ padding: "0 16px 18px 16px", display: "grid", gap: 12 }}>
+                <SoftCard>
+                  <div style={{ padding: 12, display: "flex", gap: 10, alignItems: "center" }}>
+                    <div style={{ color: "var(--ink-3)" }}>
+                      <Icon name="search" />
+                    </div>
+                    <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="输入关键词" style={{ flex: 1, height: 40, borderRadius: 14, border: "1px solid rgba(18,19,22,0.10)", background: "rgba(255,255,255,0.70)", padding: "0 12px", fontSize: 14, fontWeight: 650, outline: "none", color: "var(--ink)" }} />
+                  </div>
+                </SoftCard>
+                <div style={{ fontSize: 12, fontWeight: 650, color: "var(--ink-3)" }}>本地索引：txt/md/epub</div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {results.map((r, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => {
+                        notify(`跳转：${r.loc}`);
+                        setRoute(route.returnTo || { name: "shelf" });
+                      }}
+                      style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", textAlign: "left" }}
+                    >
+                      <SoftCard>
+                        <div style={{ padding: 14, display: "grid", gap: 8 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <Pill label={r.loc} />
+                            <Pill label="命中" />
+                          </div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)", lineHeight: 1.55 }}>{r.snippet}</div>
+                        </div>
+                      </SoftCard>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <Toast show={!!toast} text={toast || ""} />
+            </div>
+          );
+        }
+
+        function BookmarksScreen() {
+          const list = useMemo(() => bookmarks.filter((x) => x.bookId === activeId), [bookmarks, activeId]);
+          return (
+            <div style={{ height: "100%", width: "100%", background: "linear-gradient(180deg, var(--paper), var(--paper-2))" }}>
+              <div style={{ padding: "16px 16px 10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <IconButton label="返回" onClick={() => goBack()}>
+                  <Icon name="chevronLeft" />
+                </IconButton>
+                <div style={{ fontFamily: "var(--serif)", fontSize: 16, fontWeight: 700 }}>书签</div>
+                <div style={{ width: 38 }} />
+              </div>
+              <div style={{ padding: "0 16px 18px 16px", display: "grid", gap: 10 }}>
+                {list.length === 0 ? (
+                  <SoftCard>
+                    <div style={{ padding: 16, display: "grid", gap: 8 }}>
+                      <div style={{ fontFamily: "var(--serif)", fontSize: 16, fontWeight: 700 }}>暂无书签</div>
+                      <div style={{ fontSize: 13, fontWeight: 650, color: "var(--ink-2)", lineHeight: 1.5 }}>阅读页点书签即可添加。</div>
+                    </div>
+                  </SoftCard>
+                ) : (
+                  list.map((x) => (
+                    <SoftCard key={x.id}>
+                      <div style={{ padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                        <div style={{ display: "grid", gap: 6 }}>
+                          <div style={{ fontSize: 13, fontWeight: 900 }}>{x.label}</div>
+                          <div style={{ fontSize: 12, fontWeight: 650, color: "var(--ink-3)" }}>点击跳转（原型略）</div>
+                        </div>
+                        <button onClick={() => { setBookmarks((prev) => prev.filter((b) => b.id !== x.id)); notify("已删除书签"); }} style={{ height: 34, padding: "0 12px", borderRadius: 999, border: "1px solid rgba(18,19,22,0.12)", background: "rgba(255,255,255,0.66)", cursor: "pointer", fontSize: 12, fontWeight: 900, color: "var(--ink-2)" }}>
+                          删除
+                        </button>
+                      </div>
+                    </SoftCard>
+                  ))
+                )}
+              </div>
+              <Toast show={!!toast} text={toast || ""} />
+            </div>
+          );
+        }
+
+        function AnnotationsScreen() {
+          const list = useMemo(() => annotations.filter((x) => x.bookId === activeId), [annotations, activeId]);
+          return (
+            <div style={{ height: "100%", width: "100%", background: "linear-gradient(180deg, var(--paper), var(--paper-2))" }}>
+              <div style={{ padding: "16px 16px 10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <IconButton label="返回" onClick={() => goBack()}>
+                  <Icon name="chevronLeft" />
+                </IconButton>
+                <div style={{ fontFamily: "var(--serif)", fontSize: 16, fontWeight: 700 }}>标注</div>
+                <IconButton label="新增" onClick={() => setSheet("highlight")}>
+                  <Icon name="plus" />
+                </IconButton>
+              </div>
+              <div style={{ padding: "0 16px 18px 16px", display: "grid", gap: 10 }}>
+                {list.length === 0 ? (
+                  <SoftCard>
+                    <div style={{ padding: 16, display: "grid", gap: 8 }}>
+                      <div style={{ fontFamily: "var(--serif)", fontSize: 16, fontWeight: 700 }}>暂无标注</div>
+                      <div style={{ fontSize: 13, fontWeight: 650, color: "var(--ink-2)", lineHeight: 1.5 }}>阅读页菜单里点「添加标注」。</div>
+                    </div>
+                  </SoftCard>
+                ) : (
+                  list.map((x) => (
+                    <SoftCard key={x.id}>
+                      <div style={{ padding: 14, display: "grid", gap: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <Pill label={locatorLabel(x.loc)} />
+                          <button onClick={() => { setAnnotations((prev) => prev.filter((a) => a.id !== x.id)); notify("已删除标注"); }} style={{ height: 34, padding: "0 12px", borderRadius: 999, border: "1px solid rgba(18,19,22,0.12)", background: "rgba(255,255,255,0.66)", cursor: "pointer", fontSize: 12, fontWeight: 900, color: "var(--ink-2)" }}>
+                            删除
+                          </button>
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 750, color: "var(--ink)", lineHeight: 1.55 }}>{x.text}</div>
+                        {x.note ? <div style={{ borderLeft: "2px solid rgba(18,19,22,0.14)", paddingLeft: 10, color: "var(--ink-2)", fontSize: 12, fontWeight: 650, lineHeight: 1.45 }}>{x.note}</div> : null}
+                      </div>
+                    </SoftCard>
+                  ))
+                )}
+              </div>
+              <Toast show={!!toast} text={toast || ""} />
+            </div>
+          );
+        }
+
+        function TransferScreen() {
+          const [paired, setPaired] = useState(false);
+          const [items, setItems] = useState(() => [
+            { id: "t1", name: "城与盐.epub", format: "EPUB", progress: 1 },
+            { id: "t2", name: "漫画卷01.pdf", format: "PDF", progress: 0.46 },
+          ]);
+          useEffect(() => {
+            if (!paired) return;
+            const t = window.setInterval(() => {
+              setItems((prev) => prev.map((x) => (x.progress >= 1 ? x : { ...x, progress: clamp(x.progress + 0.10 + Math.random() * 0.06, 0, 1) })));
+            }, 520);
+            return () => window.clearInterval(t);
+          }, [paired]);
+          function addMock() {
+            setItems((prev) => [{ id: uid("t"), name: "新上传：notes.md", format: "MD", progress: 0.02 }, ...prev]);
+          }
+          return (
+            <div style={{ height: "100%", width: "100%", background: "linear-gradient(180deg, var(--paper), var(--paper-2))" }}>
+              <div style={{ padding: "16px 16px 10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <IconButton label="返回" onClick={() => goBack()}>
+                  <Icon name="chevronLeft" />
+                </IconButton>
+                <div style={{ fontFamily: "var(--serif)", fontSize: 16, fontWeight: 700 }}>局域网传书</div>
+                <div style={{ width: 38 }} />
+              </div>
+              <div style={{ padding: "0 16px 18px 16px", display: "grid", gap: 12 }}>
+                <SoftCard>
+                  <div style={{ padding: 14, display: "grid", gap: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <div style={{ fontSize: 13, fontWeight: 900 }}>电脑端地址</div>
+                        <div style={{ fontSize: 12, fontWeight: 650, color: "var(--ink-2)" }}>http://192.168.1.12:18080（示例）</div>
+                      </div>
+                      <Pill label={paired ? "已连接" : "未连接"} tone={paired ? "neutral" : "accent"} />
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: 12, alignItems: "center" }}>
+                      <div style={{ height: 140, borderRadius: 22, border: "1px solid rgba(18,19,22,0.12)", background: "rgba(255,255,255,0.58)", display: "grid", placeItems: "center", position: "relative", overflow: "hidden" }}>
+                        <div style={{ position: "absolute", inset: 16, borderRadius: 18, border: "1px dashed rgba(18,19,22,0.16)" }} />
+                        <div style={{ fontSize: 12, fontWeight: 950, color: "var(--ink-3)" }}>QR</div>
+                      </div>
+                      <div style={{ display: "grid", gap: 10 }}>
+                        <div style={{ fontSize: 13, fontWeight: 650, color: "var(--ink-2)", lineHeight: 1.55 }}>电脑端网页支持拖拽上传。接收完成后自动入库。</div>
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          <button onClick={() => { setPaired(true); notify("已连接到电脑端"); }} style={{ height: 36, padding: "0 12px", borderRadius: 999, border: "1px solid rgba(18,19,22,0.12)", background: "rgba(255,255,255,0.70)", cursor: "pointer", fontSize: 12, fontWeight: 900, color: "var(--ink-2)" }}>
+                            模拟扫码连接
+                          </button>
+                          <button onClick={() => addMock()} style={{ height: 36, padding: "0 12px", borderRadius: 999, border: "1px solid rgba(18,19,22,0.12)", background: "rgba(255,255,255,0.70)", cursor: "pointer", fontSize: 12, fontWeight: 900, color: "var(--ink-2)" }}>
+                            模拟上传一本
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </SoftCard>
+
+                <SoftCard>
+                  <div style={{ padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontSize: 13, fontWeight: 900 }}>接收记录</div>
+                    <Pill label={`${items.length} 项`} />
+                  </div>
+                  <div style={{ padding: "0 14px 14px 14px", display: "grid", gap: 10 }}>
+                    {items.map((x) => (
+                      <div key={x.id} style={{ borderRadius: 18, border: "1px solid rgba(18,19,22,0.10)", background: "rgba(255,255,255,0.56)", padding: 12, display: "grid", gap: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ fontSize: 13, fontWeight: 900 }}>{x.name}</div>
+                          <Pill label={x.format} tone={x.format === "PDF" ? "accent" : "neutral"} />
+                        </div>
+                        <div style={{ height: 8, borderRadius: 999, border: "1px solid rgba(18,19,22,0.10)", background: "rgba(18,19,22,0.04)", overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${Math.round(x.progress * 100)}%`, background: "rgba(18,19,22,0.58)", borderRadius: 999, transition: "width 220ms var(--ease-out)" }} />
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--ink-3)" }}>{Math.round(x.progress * 100)}%</div>
+                          {x.progress >= 1 ? (
+                            <button onClick={() => { notify("已入库"); importMock(x.format); }} style={{ height: 32, padding: "0 12px", borderRadius: 999, border: "1px solid rgba(18,19,22,0.12)", background: "rgba(255,255,255,0.70)", cursor: "pointer", fontSize: 12, fontWeight: 900, color: "var(--ink-2)" }}>
+                              入库
+                            </button>
+                          ) : (
+                            <span style={{ fontSize: 12, fontWeight: 650, color: "var(--ink-3)" }}>传输中</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </SoftCard>
+              </div>
+              <Toast show={!!toast} text={toast || ""} />
+            </div>
+          );
+        }
+
+        useEffect(() => {
+          if (sheet === "bookmarks") {
+            setSheet(null);
+            setRoute({ name: "bookmarks", bookId: activeBook?.id, returnTo: route });
+          }
+          if (sheet === "annotations") {
+            setSheet(null);
+            setRoute({ name: "annotations", bookId: activeBook?.id, returnTo: route });
+          }
+        }, [sheet]);
+
+        useEffect(() => {
+          if (route.name === "search" || route.name === "bookmarks" || route.name === "annotations") {
+            if (route.bookId) setActiveId(route.bookId);
+          }
+        }, [route.name, route.bookId]);
+
+        return (
+          <div style={{ display: "grid", justifyItems: "center", gap: 14 }}>
+            <div style={{ display: "grid", justifyItems: "center", gap: 6 }}>
+              <div style={{ fontFamily: "var(--serif)", fontSize: 18, fontWeight: 700, color: "rgba(18,19,22,0.78)" }}>本地阅读器 · 原型 v3</div>
+              <div style={{ fontSize: 12, fontWeight: 650, color: "rgba(18,19,22,0.56)" }}>更克制 · 更沉浸 · 更像阅读器</div>
+            </div>
+            <AndroidFrame time={time} battery={78}>
+              <div style={{ height: "100%", width: "100%" }}>
+                <Screen />
+              </div>
+            </AndroidFrame>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
+
