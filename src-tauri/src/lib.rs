@@ -12,6 +12,8 @@ pub fn run() {
             db::init_db(&app.handle())?;
             Ok(())
         })
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![list_books, import_book, delete_book])
         .run(tauri::generate_context!())
