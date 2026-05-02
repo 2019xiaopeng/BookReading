@@ -91,17 +91,28 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
     fs::copy(&req.source_path, &library_path)
         .map_err(|e| format!("failed to copy epub into library: {e}"))?;
 
-    let cover_path: Option<PathBuf> = match (req.cover_bytes_base64.as_deref(), req.cover_ext.as_deref()) {
-        (Some(b64), Some(ext)) if !b64.is_empty() && !ext.is_empty() => {
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(b64)
-                .map_err(|e| format!("failed to decode cover base64: {e}"))?;
-            let path = covers_dir.join(format!("{book_id}.{ext}"));
-            fs::write(&path, bytes).map_err(|e| format!("failed to write cover: {e}"))?;
-            Some(path)
-        }
-        _ => None,
-    };
+    let cover_path: Option<PathBuf> =
+        match (req.cover_bytes_base64.as_deref(), req.cover_ext.as_deref()) {
+            (Some(b64), Some(ext)) if !b64.is_empty() && !ext.is_empty() => {
+                let ext = ext
+                    .trim()
+                    .trim_start_matches('.')
+                    .to_lowercase();
+                let allowed = ["png", "jpg", "jpeg", "webp"];
+                if !allowed.contains(&ext.as_str()) {
+                    None
+                } else {
+                    let b64 = b64.split(',').last().unwrap_or(b64);
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(b64)
+                        .map_err(|e| format!("failed to decode cover base64: {e}"))?;
+                    let path = covers_dir.join(format!("{book_id}.{ext}"));
+                    fs::write(&path, bytes).map_err(|e| format!("failed to write cover: {e}"))?;
+                    Some(path)
+                }
+            }
+            _ => None,
+        };
 
     let book = Book {
         id: book_id,

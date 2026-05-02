@@ -8,6 +8,26 @@ import ePub from "epubjs";
 import type { Book } from "../tauri/invoke";
 import { deleteBook, importBook, listBooks } from "../tauri/invoke";
 
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function mimeToExt(mime: string | null): string | null {
+  const m = (mime ?? "").toLowerCase();
+  if (m.includes("png")) return "png";
+  if (m.includes("jpeg")) return "jpeg";
+  if (m.includes("jpg")) return "jpg";
+  if (m.includes("webp")) return "webp";
+  return null;
+}
+
 function formatTitle(book: Book): string {
   return book.title?.trim() || "未命名";
 }
@@ -52,12 +72,25 @@ export default function LibraryPage() {
         (metadata?.author as string | undefined) ??
         null;
 
+      let cover_bytes_base64: string | null = null;
+      let cover_ext: string | null = null;
+      try {
+        const coverUrl = (await book.coverUrl?.()) ?? null;
+        if (coverUrl) {
+          const res = await fetch(coverUrl);
+          const buffer = await res.arrayBuffer();
+          cover_bytes_base64 = arrayBufferToBase64(buffer);
+          cover_ext = mimeToExt(res.headers.get("content-type")) ?? "png";
+        }
+      } catch {
+      }
+
       await importBook({
         source_path: selected,
         title,
         author,
-        cover_bytes_base64: null,
-        cover_ext: null,
+        cover_bytes_base64,
+        cover_ext,
       });
 
       await refresh();
@@ -150,4 +183,3 @@ export default function LibraryPage() {
     </div>
   );
 }
-
