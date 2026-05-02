@@ -1,0 +1,1797 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>安卓阅读器原型</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+    <style>
+      :root {
+        --paper: #f7f3ed;
+        --ink: #121316;
+        --muted: rgba(18, 19, 22, 0.68);
+        --hairline: rgba(18, 19, 22, 0.12);
+        --card: rgba(255, 255, 255, 0.72);
+        --card-strong: rgba(255, 255, 255, 0.92);
+        --accent: #c04a1a;
+        --accent-2: #0e6f5c;
+        --shadow: 0 12px 34px rgba(0, 0, 0, 0.14);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        width: 100%;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: radial-gradient(1200px 900px at 15% 15%, rgba(192, 74, 26, 0.14), transparent 55%),
+          radial-gradient(900px 700px at 82% 28%, rgba(14, 111, 92, 0.12), transparent 55%),
+          radial-gradient(900px 900px at 55% 92%, rgba(0, 0, 0, 0.06), transparent 52%),
+          var(--paper);
+        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      }
+
+      #root {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 44px 18px;
+      }
+
+      ::selection {
+        background: rgba(192, 74, 26, 0.22);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="text/babel">
+      const { useEffect, useMemo, useRef, useState } = React;
+
+      const androidFrameStyles = {
+        wrapper: {
+          display: "inline-block",
+          padding: 10,
+          background: "#1a1a1a",
+          borderRadius: 44,
+          boxShadow: "0 0 0 2px #2a2a2a, 0 20px 60px rgba(0,0,0,0.3)",
+          position: "relative",
+        },
+        screen: {
+          position: "relative",
+          borderRadius: 36,
+          overflow: "hidden",
+          background: "#fff",
+        },
+        statusBar: {
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 32,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "0 24px",
+          fontSize: 14,
+          fontWeight: 500,
+          fontFamily: "Roboto, system-ui, -apple-system, sans-serif",
+          zIndex: 20,
+          pointerEvents: "none",
+        },
+        punchHole: {
+          position: "absolute",
+          top: 10,
+          left: "50%",
+          transform: "translateX(-50%)",
+          width: 14,
+          height: 14,
+          background: "#000",
+          borderRadius: "50%",
+          zIndex: 30,
+        },
+        statusIcons: {
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+        },
+        batteryText: {
+          fontSize: 11,
+          fontWeight: 600,
+          marginLeft: 2,
+        },
+        content: {
+          position: "absolute",
+          top: 32,
+          left: 0,
+          right: 0,
+          bottom: 24,
+          overflow: "auto",
+        },
+        navBar: {
+          position: "absolute",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: 24,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 60,
+          zIndex: 10,
+        },
+        navButton: {
+          width: 36,
+          height: 4,
+          background: "rgba(0,0,0,0.3)",
+          borderRadius: 999,
+        },
+      };
+
+      function AndroidFrame({
+        children,
+        width = 412,
+        height = 892,
+        time = "9:41",
+        battery = 88,
+        darkMode = false,
+        navStyle = "gesture",
+      }) {
+        const textColor = darkMode ? "#fff" : "#1a1a1a";
+
+        return (
+          <div style={androidFrameStyles.wrapper}>
+            <div
+              style={{
+                ...androidFrameStyles.screen,
+                width,
+                height,
+                background: darkMode ? "#000" : "#fff",
+              }}
+            >
+              <div style={{ ...androidFrameStyles.statusBar, color: textColor }}>
+                <span>{time}</span>
+                <div style={androidFrameStyles.statusIcons}>
+                  <svg width="14" height="10" viewBox="0 0 14 10" fill="currentColor">
+                    <rect x="0" y="6" width="2" height="4" rx="0.5" />
+                    <rect x="4" y="4" width="2" height="6" rx="0.5" />
+                    <rect x="8" y="2" width="2" height="8" rx="0.5" />
+                    <rect x="12" y="0" width="2" height="10" rx="0.5" />
+                  </svg>
+                  <svg width="14" height="10" viewBox="0 0 14 10" fill="none">
+                    <path d="M7 9a1 1 0 100-2 1 1 0 000 2z" fill="currentColor" />
+                    <path d="M3 6a5 5 0 018 0" stroke="currentColor" strokeWidth="1.2" />
+                    <path d="M0.5 3.5a11 11 0 0113 0" stroke="currentColor" strokeWidth="1.2" opacity="0.6" />
+                  </svg>
+                  <div
+                    style={{
+                      width: 22,
+                      height: 10,
+                      border: "1.5px solid currentColor",
+                      borderRadius: 2,
+                      padding: 1,
+                      position: "relative",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${battery}%`,
+                        height: "100%",
+                        background: "currentColor",
+                        borderRadius: 1,
+                      }}
+                    />
+                  </div>
+                  <span style={androidFrameStyles.batteryText}>{battery}%</span>
+                </div>
+              </div>
+
+              <div style={androidFrameStyles.punchHole} />
+
+              <div style={androidFrameStyles.content}>{children}</div>
+
+              {navStyle === "gesture" && (
+                <div style={androidFrameStyles.navBar}>
+                  <div
+                    style={{
+                      ...androidFrameStyles.navButton,
+                      width: 100,
+                      height: 4,
+                      background: darkMode ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.4)",
+                    }}
+                  />
+                </div>
+              )}
+
+              {navStyle === "buttons" && (
+                <div style={androidFrameStyles.navBar}>
+                  <span style={{ color: textColor, fontSize: 20 }}>◁</span>
+                  <span style={{ color: textColor, fontSize: 16 }}>○</span>
+                  <span style={{ color: textColor, fontSize: 16 }}>□</span>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      function clamp(n, min, max) {
+        return Math.max(min, Math.min(max, n));
+      }
+
+      function useNowTime() {
+        const [time, setTime] = useState(() => {
+          const d = new Date();
+          const hh = String(d.getHours()).padStart(2, "0");
+          const mm = String(d.getMinutes()).padStart(2, "0");
+          return `${hh}:${mm}`;
+        });
+
+        useEffect(() => {
+          const t = window.setInterval(() => {
+            const d = new Date();
+            const hh = String(d.getHours()).padStart(2, "0");
+            const mm = String(d.getMinutes()).padStart(2, "0");
+            setTime(`${hh}:${mm}`);
+          }, 15_000);
+          return () => window.clearInterval(t);
+        }, []);
+
+        return time;
+      }
+
+      function fmtPercent(n) {
+        return `${Math.round(clamp(n, 0, 1) * 100)}%`;
+      }
+
+      function Pill({ label, tone = "neutral" }) {
+        const stylesByTone = {
+          neutral: { background: "rgba(18,19,22,0.06)", color: "rgba(18,19,22,0.75)" },
+          accent: { background: "rgba(192,74,26,0.12)", color: "rgba(192,74,26,0.95)" },
+          ok: { background: "rgba(14,111,92,0.12)", color: "rgba(14,111,92,0.95)" },
+        };
+        const s = stylesByTone[tone] || stylesByTone.neutral;
+        return (
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              height: 24,
+              padding: "0 10px",
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: 600,
+              letterSpacing: "0.01em",
+              ...s,
+            }}
+          >
+            {label}
+          </span>
+        );
+      }
+
+      function IconButton({ label, onClick, children }) {
+        return (
+          <button
+            onClick={onClick}
+            aria-label={label}
+            style={{
+              height: 36,
+              width: 36,
+              display: "grid",
+              placeItems: "center",
+              borderRadius: 12,
+              border: "1px solid rgba(18,19,22,0.10)",
+              background: "rgba(255,255,255,0.75)",
+              backdropFilter: "blur(10px)",
+              cursor: "pointer",
+              color: "rgba(18,19,22,0.86)",
+              boxShadow: "0 10px 26px rgba(0,0,0,0.08)",
+            }}
+          >
+            {children}
+          </button>
+        );
+      }
+
+      function PrimaryButton({ label, onClick }) {
+        return (
+          <button
+            onClick={onClick}
+            style={{
+              height: 44,
+              padding: "0 16px",
+              borderRadius: 14,
+              border: "1px solid rgba(192,74,26,0.25)",
+              background: "linear-gradient(180deg, rgba(192,74,26,0.92), rgba(192,74,26,0.78))",
+              color: "white",
+              fontSize: 14,
+              fontWeight: 700,
+              letterSpacing: "0.01em",
+              cursor: "pointer",
+              boxShadow: "0 16px 40px rgba(192,74,26,0.22)",
+            }}
+          >
+            {label}
+          </button>
+        );
+      }
+
+      function GhostButton({ label, onClick }) {
+        return (
+          <button
+            onClick={onClick}
+            style={{
+              height: 44,
+              padding: "0 14px",
+              borderRadius: 14,
+              border: "1px solid rgba(18,19,22,0.12)",
+              background: "rgba(255,255,255,0.76)",
+              color: "rgba(18,19,22,0.86)",
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: "pointer",
+              boxShadow: "0 10px 28px rgba(0,0,0,0.08)",
+            }}
+          >
+            {label}
+          </button>
+        );
+      }
+
+      function Sheet({ open, title, subtitle, onClose, children }) {
+        return (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              pointerEvents: open ? "auto" : "none",
+              zIndex: 80,
+            }}
+          >
+            <div
+              onClick={onClose}
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: open ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0)",
+                transition: "background 180ms ease",
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                transform: open ? "translateY(0)" : "translateY(22px)",
+                opacity: open ? 1 : 0,
+                transition: "transform 220ms ease, opacity 220ms ease",
+                padding: 14,
+              }}
+            >
+              <div
+                style={{
+                  background: "rgba(255,255,255,0.92)",
+                  border: "1px solid rgba(18,19,22,0.10)",
+                  borderRadius: 20,
+                  boxShadow: "0 24px 70px rgba(0,0,0,0.26)",
+                  overflow: "hidden",
+                }}
+              >
+                <div style={{ padding: "14px 16px 10px 16px", borderBottom: "1px solid rgba(18,19,22,0.08)" }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.01em" }}>{title}</div>
+                  {subtitle ? (
+                    <div style={{ marginTop: 4, fontSize: 12, color: "rgba(18,19,22,0.62)", lineHeight: 1.35 }}>{subtitle}</div>
+                  ) : null}
+                </div>
+                <div style={{ padding: 16 }}>{children}</div>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      function Segmented({ value, options, onChange }) {
+        return (
+          <div
+            style={{
+              display: "flex",
+              padding: 4,
+              borderRadius: 14,
+              border: "1px solid rgba(18,19,22,0.10)",
+              background: "rgba(18,19,22,0.04)",
+              gap: 6,
+            }}
+          >
+            {options.map((opt) => {
+              const active = opt.value === value;
+              return (
+                <button
+                  key={opt.value}
+                  onClick={() => onChange(opt.value)}
+                  style={{
+                    flex: 1,
+                    height: 34,
+                    borderRadius: 12,
+                    border: "1px solid rgba(18,19,22,0.06)",
+                    background: active ? "rgba(255,255,255,0.85)" : "transparent",
+                    cursor: "pointer",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: active ? "rgba(18,19,22,0.92)" : "rgba(18,19,22,0.58)",
+                    boxShadow: active ? "0 10px 22px rgba(0,0,0,0.08)" : "none",
+                  }}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        );
+      }
+
+      function SliderRow({ label, value, min, max, step, formatValue, onChange }) {
+        return (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "rgba(18,19,22,0.80)" }}>{label}</div>
+              <input
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={value}
+                onChange={(e) => onChange(Number(e.target.value))}
+                style={{ width: "100%" }}
+              />
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "rgba(18,19,22,0.68)" }}>
+              {formatValue ? formatValue(value) : value}
+            </div>
+          </div>
+        );
+      }
+
+      function BookCover({ tone = "burnt", title, subtitle }) {
+        const palette = {
+          burnt: {
+            bg: "linear-gradient(180deg, rgba(192,74,26,0.92), rgba(18,19,22,0.92))",
+            ink: "rgba(255,255,255,0.92)",
+            line: "rgba(255,255,255,0.24)",
+          },
+          moss: {
+            bg: "linear-gradient(180deg, rgba(14,111,92,0.92), rgba(18,19,22,0.90))",
+            ink: "rgba(255,255,255,0.92)",
+            line: "rgba(255,255,255,0.22)",
+          },
+          stone: {
+            bg: "linear-gradient(180deg, rgba(18,19,22,0.80), rgba(18,19,22,0.95))",
+            ink: "rgba(255,255,255,0.92)",
+            line: "rgba(255,255,255,0.18)",
+          },
+          paper: {
+            bg: "linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.65))",
+            ink: "rgba(18,19,22,0.88)",
+            line: "rgba(18,19,22,0.14)",
+          },
+        };
+        const p = palette[tone] || palette.burnt;
+        return (
+          <div
+            style={{
+              height: 112,
+              borderRadius: 18,
+              background: p.bg,
+              padding: 12,
+              border: "1px solid rgba(255,255,255,0.18)",
+              boxShadow: "0 16px 44px rgba(0,0,0,0.16)",
+              display: "grid",
+              alignContent: "space-between",
+              overflow: "hidden",
+              position: "relative",
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                inset: -60,
+                background:
+                  "radial-gradient(420px 240px at 20% 30%, rgba(255,255,255,0.14), transparent 56%), radial-gradient(460px 340px at 80% 70%, rgba(255,255,255,0.08), transparent 60%)",
+                transform: "rotate(-8deg)",
+              }}
+            />
+            <div style={{ position: "relative", display: "grid", gap: 8 }}>
+              <div style={{ height: 2, width: 34, borderRadius: 99, background: p.line }} />
+              <div style={{ fontFamily: '"Noto Serif SC", serif', fontWeight: 700, fontSize: 14, lineHeight: 1.25, color: p.ink }}>
+                {title}
+              </div>
+            </div>
+            <div style={{ position: "relative", fontSize: 12, color: p.ink, opacity: 0.76, fontWeight: 600 }}>{subtitle}</div>
+          </div>
+        );
+      }
+
+      function TopBar({ title, subtitle, left, right }) {
+        return (
+          <div
+            style={{
+              position: "sticky",
+              top: 0,
+              zIndex: 40,
+              padding: "14px 14px 10px 14px",
+              background: "linear-gradient(180deg, rgba(247,243,237,0.96), rgba(247,243,237,0.72), rgba(247,243,237,0))",
+              backdropFilter: "blur(10px)",
+            }}
+          >
+            <div style={{ display: "grid", gridTemplateColumns: "40px 1fr 40px", gap: 10, alignItems: "center" }}>
+              <div>{left}</div>
+              <div style={{ display: "grid", gap: 2 }}>
+                <div style={{ fontFamily: '"Noto Serif SC", serif', fontWeight: 700, fontSize: 15, letterSpacing: "0.01em" }}>
+                  {title}
+                </div>
+                {subtitle ? <div style={{ fontSize: 12, color: "rgba(18,19,22,0.62)", fontWeight: 600 }}>{subtitle}</div> : null}
+              </div>
+              <div style={{ justifySelf: "end" }}>{right}</div>
+            </div>
+          </div>
+        );
+      }
+
+      function BottomToast({ show, text }) {
+        return (
+          <div
+            style={{
+              position: "absolute",
+              left: 14,
+              right: 14,
+              bottom: 18,
+              transform: show ? "translateY(0)" : "translateY(14px)",
+              opacity: show ? 1 : 0,
+              transition: "transform 200ms ease, opacity 200ms ease",
+              pointerEvents: "none",
+              zIndex: 90,
+            }}
+          >
+            <div
+              style={{
+                background: "rgba(18,19,22,0.86)",
+                color: "rgba(255,255,255,0.92)",
+                borderRadius: 16,
+                padding: "12px 14px",
+                fontSize: 12,
+                fontWeight: 650,
+                letterSpacing: "0.01em",
+                boxShadow: "0 18px 50px rgba(0,0,0,0.28)",
+              }}
+            >
+              {text}
+            </div>
+          </div>
+        );
+      }
+
+      function ProgressPill({ progress }) {
+        return (
+          <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "rgba(18,19,22,0.80)" }}>预处理</div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "rgba(18,19,22,0.56)" }}>{Math.round(progress * 100)}%</div>
+            </div>
+            <div style={{ height: 10, borderRadius: 999, border: "1px solid rgba(18,19,22,0.10)", background: "rgba(255,255,255,0.65)", overflow: "hidden" }}>
+              <div
+                style={{
+                  height: "100%",
+                  width: `${Math.round(progress * 100)}%`,
+                  background: "linear-gradient(90deg, rgba(192,74,26,0.90), rgba(14,111,92,0.90))",
+                  borderRadius: 999,
+                  transition: "width 240ms ease",
+                }}
+              />
+            </div>
+          </div>
+        );
+      }
+
+      function ReadingCanvas({ mode, theme, onTapLeft, onTapRight, children }) {
+        const bg =
+          theme === "paper"
+            ? "linear-gradient(180deg, rgba(255,255,255,0.9), rgba(255,255,255,0.68))"
+            : theme === "night"
+              ? "linear-gradient(180deg, rgba(15,16,18,0.98), rgba(15,16,18,0.92))"
+              : "linear-gradient(180deg, rgba(249,246,241,0.96), rgba(249,246,241,0.78))";
+        const ink = theme === "night" ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.92)";
+
+        return (
+          <div
+            style={{
+              position: "relative",
+              borderRadius: 18,
+              background: bg,
+              border: "1px solid rgba(18,19,22,0.10)",
+              boxShadow: "0 18px 55px rgba(0,0,0,0.14)",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                padding: mode === "pdf" ? 0 : 18,
+                color: ink,
+                minHeight: 540,
+              }}
+            >
+              {children}
+            </div>
+            <button
+              onClick={onTapLeft}
+              style={{ position: "absolute", inset: 0, width: "36%", border: "none", background: "transparent", cursor: "pointer" }}
+            />
+            <button
+              onClick={onTapRight}
+              style={{
+                position: "absolute",
+                inset: 0,
+                left: "64%",
+                width: "36%",
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+              }}
+            />
+          </div>
+        );
+      }
+
+      function App() {
+        const time = useNowTime();
+
+        const [route, setRoute] = useState({ name: "shelf" });
+        const [toast, setToast] = useState(null);
+        const [sheet, setSheet] = useState(null);
+        const [filter, setFilter] = useState("all");
+
+        const [readingPrefs, setReadingPrefs] = useState({
+          theme: "paper",
+          fontSize: 17,
+          lineHeight: 1.7,
+          margin: 18,
+        });
+
+        const [pdfSplitPrefs, setPdfSplitPrefs] = useState({
+          strength: "standard",
+          minSegHeight: 320,
+          overlapPct: 2,
+        });
+
+        const [library, setLibrary] = useState(() => {
+          return [
+            {
+              id: "b_epub_1",
+              title: "雾与盐：一本城市散文集",
+              author: "陈轻舟",
+              format: "EPUB",
+              coverTone: "burnt",
+              progress: 0.28,
+              meta: { chapters: 18 },
+            },
+            {
+              id: "b_pdf_1",
+              title: "黑白线条：短篇漫画合辑",
+              author: "Studio M",
+              format: "PDF",
+              coverTone: "stone",
+              progress: 0.0,
+              meta: { pages: 212, segmented: false, segmentsTotal: 0 },
+            },
+            {
+              id: "b_md_1",
+              title: "写作课笔记（Markdown）",
+              author: "你",
+              format: "MD",
+              coverTone: "paper",
+              progress: 0.62,
+              meta: { words: 13842 },
+            },
+            {
+              id: "b_txt_1",
+              title: "北方长夜（TXT）",
+              author: "无名氏",
+              format: "TXT",
+              coverTone: "moss",
+              progress: 0.14,
+              meta: { words: 420_000 },
+            },
+          ];
+        });
+
+        const [activeBookId, setActiveBookId] = useState(null);
+        const activeBook = useMemo(() => library.find((b) => b.id === activeBookId) || null, [library, activeBookId]);
+
+        const [pdfJob, setPdfJob] = useState({ running: false, progress: 0, bookId: null });
+        const [pdfLoc, setPdfLoc] = useState({ page: 1, segment: 1, segmentsInPage: 5, totalSegments: 0 });
+
+        const [textLoc, setTextLoc] = useState({ page: 3, totalPages: 36 });
+        const [epubLoc, setEpubLoc] = useState({ chapter: 3, chapters: 18, percent: 0.28 });
+        const [tocOpen, setTocOpen] = useState(false);
+
+        const currentTheme = readingPrefs.theme;
+        const isDark = currentTheme === "night";
+
+        function showToast(text) {
+          setToast(text);
+          window.setTimeout(() => setToast(null), 1800);
+        }
+
+        function openBook(bookId) {
+          const b = library.find((x) => x.id === bookId);
+          if (!b) return;
+          setActiveBookId(bookId);
+          if (b.format === "PDF") {
+            if (!b.meta.segmented) {
+              startPdfPreprocess(bookId);
+              setRoute({ name: "pdfProcessing", bookId });
+              return;
+            }
+            preparePdfReading(bookId);
+            setRoute({ name: "pdfReader", bookId });
+            return;
+          }
+          if (b.format === "EPUB") {
+            setRoute({ name: "epubReader", bookId });
+            return;
+          }
+          setRoute({ name: "textReader", bookId });
+        }
+
+        function startPdfPreprocess(bookId) {
+          setPdfJob({ running: true, progress: 0.02, bookId });
+        }
+
+        function preparePdfReading(bookId) {
+          const b = library.find((x) => x.id === bookId);
+          const totalSegments = b?.meta?.segmentsTotal || 0;
+          setPdfLoc({
+            page: 1,
+            segment: 1,
+            segmentsInPage: 6,
+            totalSegments: totalSegments || 1240,
+          });
+        }
+
+        useEffect(() => {
+          if (!pdfJob.running) return;
+          const id = window.setInterval(() => {
+            setPdfJob((j) => {
+              const next = clamp(j.progress + 0.03 + Math.random() * 0.03, 0, 1);
+              return { ...j, progress: next };
+            });
+          }, 420);
+          return () => window.clearInterval(id);
+        }, [pdfJob.running]);
+
+        useEffect(() => {
+          if (!pdfJob.running) return;
+          if (pdfJob.progress < 1) return;
+
+          const bid = pdfJob.bookId;
+          setPdfJob({ running: false, progress: 1, bookId: bid });
+          setLibrary((prev) =>
+            prev.map((b) => {
+              if (b.id !== bid) return b;
+              return {
+                ...b,
+                meta: { ...b.meta, segmented: true, segmentsTotal: 1240 },
+              };
+            }),
+          );
+          showToast("拆分完成：已生成子页序列");
+          preparePdfReading(bid);
+          window.setTimeout(() => {
+            setRoute({ name: "pdfReader", bookId: bid });
+          }, 450);
+        }, [pdfJob.progress, pdfJob.running, pdfJob.bookId]);
+
+        const filteredLibrary = useMemo(() => {
+          if (filter === "all") return library;
+          return library.filter((b) => b.format.toLowerCase() === filter);
+        }, [library, filter]);
+
+        function updateProgress(bookId, progress) {
+          setLibrary((prev) =>
+            prev.map((b) => {
+              if (b.id !== bookId) return b;
+              return { ...b, progress };
+            }),
+          );
+        }
+
+        function goBack() {
+          if (route.name === "epubReader" && tocOpen) {
+            setTocOpen(false);
+            return;
+          }
+          setSheet(null);
+          setTocOpen(false);
+          setRoute({ name: "shelf" });
+          setActiveBookId(null);
+        }
+
+        function openSettings() {
+          setSheet("settings");
+        }
+
+        function openImport() {
+          setRoute({ name: "import" });
+        }
+
+        function importMock(kind) {
+          const now = Date.now();
+          if (kind === "pdf") {
+            const id = `b_pdf_${now}`;
+            setLibrary((prev) => [
+              {
+                id,
+                title: "新导入：漫画卷 01",
+                author: "Unknown",
+                format: "PDF",
+                coverTone: "stone",
+                progress: 0,
+                meta: { pages: 188, segmented: false, segmentsTotal: 0 },
+              },
+              ...prev,
+            ]);
+            showToast("已导入 PDF：开始后台拆分");
+            openBook(id);
+            return;
+          }
+
+          const format = kind.toUpperCase();
+          const id = `b_${kind}_${now}`;
+          setLibrary((prev) => [
+            {
+              id,
+              title: `新导入：${format} 文档`,
+              author: "本地文件",
+              format,
+              coverTone: "paper",
+              progress: 0,
+              meta: {},
+            },
+            ...prev,
+          ]);
+          showToast(`已导入 ${format}`);
+          openBook(id);
+        }
+
+        function ReadingSettingsSheet() {
+          const format = activeBook?.format || "";
+          const isPdf = format === "PDF";
+
+          return (
+            <Sheet
+              open={sheet === "settings"}
+              title="阅读设置"
+              subtitle={isPdf ? "PDF 漫画：子页阅读，切段参数会影响预处理结果" : "字体与主题会即时生效"}
+              onClose={() => setSheet(null)}
+            >
+              <div style={{ display: "grid", gap: 16 }}>
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 900, color: "rgba(18,19,22,0.78)" }}>主题</div>
+                  <Segmented
+                    value={readingPrefs.theme}
+                    options={[
+                      { value: "paper", label: "纸" },
+                      { value: "warm", label: "暖" },
+                      { value: "night", label: "夜" },
+                    ]}
+                    onChange={(v) => setReadingPrefs((p) => ({ ...p, theme: v }))}
+                  />
+                </div>
+
+                <SliderRow
+                  label="字号"
+                  value={readingPrefs.fontSize}
+                  min={14}
+                  max={22}
+                  step={1}
+                  formatValue={(v) => `${v}px`}
+                  onChange={(v) => setReadingPrefs((p) => ({ ...p, fontSize: v }))}
+                />
+
+                <SliderRow
+                  label="行距"
+                  value={readingPrefs.lineHeight}
+                  min={1.4}
+                  max={2.1}
+                  step={0.05}
+                  formatValue={(v) => v.toFixed(2)}
+                  onChange={(v) => setReadingPrefs((p) => ({ ...p, lineHeight: v }))}
+                />
+
+                <SliderRow
+                  label="页边距"
+                  value={readingPrefs.margin}
+                  min={10}
+                  max={28}
+                  step={1}
+                  formatValue={(v) => `${v}px`}
+                  onChange={(v) => setReadingPrefs((p) => ({ ...p, margin: v }))}
+                />
+
+                {isPdf ? (
+                  <div style={{ display: "grid", gap: 14, paddingTop: 8, borderTop: "1px solid rgba(18,19,22,0.10)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: "rgba(18,19,22,0.78)" }}>切段参数</div>
+                      <Pill label="导入后预处理" tone="accent" />
+                    </div>
+                    <Segmented
+                      value={pdfSplitPrefs.strength}
+                      options={[
+                        { value: "conservative", label: "保守" },
+                        { value: "standard", label: "标准" },
+                        { value: "aggressive", label: "激进" },
+                      ]}
+                      onChange={(v) => setPdfSplitPrefs((p) => ({ ...p, strength: v }))}
+                    />
+                    <SliderRow
+                      label="最小段高"
+                      value={pdfSplitPrefs.minSegHeight}
+                      min={200}
+                      max={520}
+                      step={10}
+                      formatValue={(v) => `${v}px`}
+                      onChange={(v) => setPdfSplitPrefs((p) => ({ ...p, minSegHeight: v }))}
+                    />
+                    <SliderRow
+                      label="段间重叠"
+                      value={pdfSplitPrefs.overlapPct}
+                      min={0}
+                      max={6}
+                      step={0.5}
+                      formatValue={(v) => `${v}%`}
+                      onChange={(v) => setPdfSplitPrefs((p) => ({ ...p, overlapPct: v }))}
+                    />
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <GhostButton
+                        label="重算本书"
+                        onClick={() => {
+                          if (!activeBook) return;
+                          showToast("已排队：重算拆分结果");
+                          setSheet(null);
+                          setLibrary((prev) =>
+                            prev.map((b) => {
+                              if (b.id !== activeBook.id) return b;
+                              return { ...b, meta: { ...b.meta, segmented: false, segmentsTotal: 0 } };
+                            }),
+                          );
+                          startPdfPreprocess(activeBook.id);
+                          setRoute({ name: "pdfProcessing", bookId: activeBook.id });
+                        }}
+                      />
+                      <PrimaryButton label="完成" onClick={() => setSheet(null)} />
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <PrimaryButton label="完成" onClick={() => setSheet(null)} />
+                  </div>
+                )}
+              </div>
+            </Sheet>
+          );
+        }
+
+        function TocDrawer() {
+          if (!activeBook) return null;
+          if (route.name !== "epubReader") return null;
+
+          const chapters = Array.from({ length: epubLoc.chapters }, (_, i) => ({
+            idx: i + 1,
+            title:
+              i === 0
+                ? "序：一座城市的气味"
+                : i === 4
+                  ? "第五章：拐角与雨"
+                  : i === 10
+                    ? "第十一章：夜航"
+                    : `第 ${i + 1} 章`,
+          }));
+
+          return (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 70,
+                pointerEvents: tocOpen ? "auto" : "none",
+              }}
+            >
+              <div
+                onClick={() => setTocOpen(false)}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  background: tocOpen ? "rgba(0,0,0,0.35)" : "transparent",
+                  transition: "background 160ms ease",
+                }}
+              />
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: 0,
+                  width: 286,
+                  transform: tocOpen ? "translateX(0)" : "translateX(-14px)",
+                  opacity: tocOpen ? 1 : 0,
+                  transition: "transform 220ms ease, opacity 220ms ease",
+                  padding: 12,
+                }}
+              >
+                <div
+                  style={{
+                    height: "100%",
+                    background: "rgba(255,255,255,0.92)",
+                    borderRadius: 18,
+                    border: "1px solid rgba(18,19,22,0.12)",
+                    boxShadow: "0 28px 90px rgba(0,0,0,0.26)",
+                    overflow: "hidden",
+                    display: "grid",
+                    gridTemplateRows: "auto 1fr",
+                  }}
+                >
+                  <div style={{ padding: "14px 16px 12px 16px", borderBottom: "1px solid rgba(18,19,22,0.10)" }}>
+                    <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.01em" }}>目录</div>
+                    <div style={{ marginTop: 4, fontSize: 12, color: "rgba(18,19,22,0.62)", fontWeight: 600 }}>
+                      {activeBook.title}
+                    </div>
+                  </div>
+                  <div style={{ padding: 10, overflow: "auto" }}>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {chapters.map((c) => {
+                        const active = c.idx === epubLoc.chapter;
+                        return (
+                          <button
+                            key={c.idx}
+                            onClick={() => {
+                              setEpubLoc((p) => ({ ...p, chapter: c.idx, percent: clamp(c.idx / p.chapters, 0, 1) }));
+                              updateProgress(activeBook.id, clamp(c.idx / epubLoc.chapters, 0, 1));
+                              setTocOpen(false);
+                              showToast(`跳转：${c.title}`);
+                            }}
+                            style={{
+                              width: "100%",
+                              textAlign: "left",
+                              padding: "10px 12px",
+                              borderRadius: 14,
+                              border: "1px solid rgba(18,19,22,0.10)",
+                              background: active ? "rgba(192,74,26,0.10)" : "rgba(255,255,255,0.70)",
+                              cursor: "pointer",
+                            }}
+                          >
+                            <div style={{ fontSize: 13, fontWeight: 850, color: "rgba(18,19,22,0.86)" }}>{c.title}</div>
+                            <div style={{ marginTop: 4, fontSize: 11, color: "rgba(18,19,22,0.58)", fontWeight: 650 }}>
+                              {active ? "正在阅读" : "点击跳转"}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        function ShelfScreen() {
+          return (
+            <div style={{ minHeight: "100%", background: "var(--paper)" }}>
+              <TopBar
+                title="书架"
+                subtitle="本地文件 · md / epub / txt / pdf"
+                left={
+                  <IconButton
+                    label="导入"
+                    onClick={() => {
+                      openImport();
+                    }}
+                  >
+                    ⊕
+                  </IconButton>
+                }
+                right={
+                  <IconButton
+                    label="筛选"
+                    onClick={() => {
+                      showToast("长按可管理书籍（原型略）");
+                    }}
+                  >
+                    ⌁
+                  </IconButton>
+                }
+              />
+
+              <div style={{ padding: "0 14px 14px 14px", display: "grid", gap: 12 }}>
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.72)",
+                    border: "1px solid rgba(18,19,22,0.10)",
+                    borderRadius: 18,
+                    padding: 12,
+                    boxShadow: "0 16px 52px rgba(0,0,0,0.10)",
+                    display: "grid",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 850, color: "rgba(18,19,22,0.68)" }}>格式</div>
+                    <Segmented
+                      value={filter}
+                      options={[
+                        { value: "all", label: "全部" },
+                        { value: "epub", label: "EPUB" },
+                        { value: "pdf", label: "PDF" },
+                      ]}
+                      onChange={(v) => setFilter(v)}
+                    />
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto",
+                      gap: 10,
+                      alignItems: "center",
+                      paddingTop: 2,
+                    }}
+                  >
+                    <div style={{ fontSize: 12, color: "rgba(18,19,22,0.60)", lineHeight: 1.35, fontWeight: 650 }}>
+                      PDF 漫画默认「导入后预处理」，只存切段坐标，阅读时缓存位图。
+                    </div>
+                    <Pill label="已开启" tone="ok" />
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gap: 12 }}>
+                  {filteredLibrary.map((b) => {
+                    const highlight = b.format === "PDF" && !b.meta.segmented;
+                    return (
+                      <button
+                        key={b.id}
+                        onClick={() => openBook(b.id)}
+                        style={{
+                          border: "none",
+                          padding: 0,
+                          background: "transparent",
+                          textAlign: "left",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "112px 1fr",
+                            gap: 12,
+                            alignItems: "center",
+                          }}
+                        >
+                          <BookCover title={b.title} subtitle={b.author} tone={b.coverTone} />
+                          <div style={{ display: "grid", gap: 10 }}>
+                            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                              <div style={{ fontSize: 14, fontWeight: 850, lineHeight: 1.25 }}>{b.title}</div>
+                              <Pill label={b.format} tone={b.format === "PDF" ? "accent" : "neutral"} />
+                              {b.format === "PDF" ? (
+                                b.meta.segmented ? <Pill label="子页就绪" tone="ok" /> : <Pill label="待拆分" tone="accent" />
+                              ) : null}
+                            </div>
+                            <div style={{ fontSize: 12, color: "rgba(18,19,22,0.62)", fontWeight: 650 }}>{b.author}</div>
+                            <div style={{ display: "grid", gap: 8 }}>
+                              <div
+                                style={{
+                                  height: 10,
+                                  borderRadius: 999,
+                                  border: "1px solid rgba(18,19,22,0.10)",
+                                  background: "rgba(255,255,255,0.68)",
+                                  overflow: "hidden",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    width: `${Math.round(b.progress * 100)}%`,
+                                    height: "100%",
+                                    background: highlight
+                                      ? "linear-gradient(90deg, rgba(192,74,26,0.85), rgba(192,74,26,0.45))"
+                                      : "linear-gradient(90deg, rgba(18,19,22,0.75), rgba(18,19,22,0.25))",
+                                    borderRadius: 999,
+                                    transition: "width 180ms ease",
+                                  }}
+                                />
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                <div style={{ fontSize: 12, color: "rgba(18,19,22,0.55)", fontWeight: 700 }}>{fmtPercent(b.progress)}</div>
+                                <div style={{ fontSize: 12, color: "rgba(18,19,22,0.46)", fontWeight: 650 }}>
+                                  {b.format === "PDF"
+                                    ? `${b.meta.pages} 页`
+                                    : b.format === "EPUB"
+                                      ? `${b.meta.chapters} 章`
+                                      : b.meta.words
+                                        ? `${Math.round(b.meta.words / 1000)}k 字`
+                                        : "本地文件"}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        function ImportScreen() {
+          return (
+            <div style={{ minHeight: "100%", background: "var(--paper)" }}>
+              <TopBar
+                title="导入"
+                subtitle="通过系统文件选择器或分享打开（原型模拟）"
+                left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
+                right={<div />}
+              />
+
+              <div style={{ padding: 14, display: "grid", gap: 14 }}>
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.78)",
+                    border: "1px solid rgba(18,19,22,0.10)",
+                    borderRadius: 18,
+                    padding: 14,
+                    boxShadow: "0 16px 50px rgba(0,0,0,0.10)",
+                    display: "grid",
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <div style={{ fontSize: 14, fontWeight: 900 }}>快速导入</div>
+                      <div style={{ fontSize: 12, color: "rgba(18,19,22,0.62)", fontWeight: 650, lineHeight: 1.35 }}>
+                        PDF 会触发后台预处理（去白边 + 纵向切段），只保存坐标。
+                      </div>
+                    </div>
+                    <Pill label="SAF Uri" tone="neutral" />
+                  </div>
+
+                  <div style={{ display: "grid", gap: 10 }}>
+                    <PrimaryButton label="导入 PDF 漫画" onClick={() => importMock("pdf")} />
+                    <GhostButton label="导入 EPUB" onClick={() => importMock("epub")} />
+                    <GhostButton label="导入 Markdown" onClick={() => importMock("md")} />
+                    <GhostButton label="导入 TXT" onClick={() => importMock("txt")} />
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.70)",
+                    border: "1px solid rgba(18,19,22,0.10)",
+                    borderRadius: 18,
+                    padding: 14,
+                    display: "grid",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 850 }}>支持格式</div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <Pill label="md" tone="neutral" />
+                    <Pill label="epub" tone="neutral" />
+                    <Pill label="txt" tone="neutral" />
+                    <Pill label="pdf（漫画拆分）" tone="accent" />
+                  </div>
+                  <div style={{ fontSize: 12, color: "rgba(18,19,22,0.60)", fontWeight: 650, lineHeight: 1.45 }}>
+                    目标：一个阅读外壳 + 多格式内容引擎。PDF 漫画按子页翻页，缓存仅在阅读时生成。
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        function PdfProcessingScreen() {
+          const b = activeBook;
+          const progress = pdfJob.bookId === b?.id ? pdfJob.progress : 0;
+          return (
+            <div style={{ minHeight: "100%", background: "var(--paper)" }}>
+              <TopBar
+                title="漫画预处理"
+                subtitle="去白边 · 纵向切段 · 坐标索引"
+                left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
+                right={
+                  <IconButton
+                    label="设置"
+                    onClick={() => {
+                      setSheet("settings");
+                    }}
+                  >
+                    ⚙
+                  </IconButton>
+                }
+              />
+
+              <div style={{ padding: 14, display: "grid", gap: 14 }}>
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.78)",
+                    border: "1px solid rgba(18,19,22,0.10)",
+                    borderRadius: 18,
+                    padding: 16,
+                    boxShadow: "0 18px 55px rgba(0,0,0,0.12)",
+                    display: "grid",
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <div style={{ fontSize: 14, fontWeight: 950 }}>{b?.title || "PDF 漫画"}</div>
+                    <div style={{ fontSize: 12, color: "rgba(18,19,22,0.62)", fontWeight: 650 }}>
+                      参数：{pdfSplitPrefs.strength === "conservative" ? "保守" : pdfSplitPrefs.strength === "aggressive" ? "激进" : "标准"} · 最小段高 {pdfSplitPrefs.minSegHeight}px · 重叠 {pdfSplitPrefs.overlapPct}%
+                    </div>
+                  </div>
+                  <ProgressPill progress={progress} />
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 10,
+                      padding: 12,
+                      borderRadius: 16,
+                      border: "1px solid rgba(18,19,22,0.10)",
+                      background: "rgba(18,19,22,0.03)",
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 900, color: "rgba(18,19,22,0.78)" }}>正在生成的索引</div>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {[
+                        { k: "contentRect", v: "去白边后的内容区域" },
+                        { k: "splitLines", v: "空白带候选切线" },
+                        { k: "segments", v: "子页坐标（归一化 RectN）" },
+                        { k: "cache", v: "阅读期位图缓存策略" },
+                      ].map((x) => (
+                        <div key={x.k} style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                          <span style={{ width: 86, fontSize: 11, fontWeight: 900, color: "rgba(18,19,22,0.62)" }}>{x.k}</span>
+                          <span style={{ fontSize: 12, fontWeight: 650, color: "rgba(18,19,22,0.72)" }}>{x.v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.70)",
+                    border: "1px solid rgba(18,19,22,0.10)",
+                    borderRadius: 18,
+                    padding: 14,
+                    display: "grid",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 900 }}>阅读体验</div>
+                  <div style={{ fontSize: 12, color: "rgba(18,19,22,0.62)", fontWeight: 650, lineHeight: 1.45 }}>
+                    预处理完成后：每次翻页会在子页序列中移动；渲染时按坐标裁切页内容，位图缓存只在本机临时生成。
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <GhostButton
+                      label="暂停"
+                      onClick={() => {
+                        showToast("已暂停（原型）");
+                      }}
+                    />
+                    <GhostButton
+                      label="后台运行"
+                      onClick={() => {
+                        showToast("继续后台预处理");
+                        goBack();
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        function ReaderHeader({ left, center, right }) {
+          return (
+            <div
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 50,
+                padding: 12,
+                background: isDark ? "rgba(0,0,0,0.55)" : "rgba(247,243,237,0.70)",
+                backdropFilter: "blur(12px)",
+                borderBottom: isDark ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(18,19,22,0.10)",
+              }}
+            >
+              <div style={{ display: "grid", gridTemplateColumns: "40px 1fr 40px", gap: 10, alignItems: "center" }}>
+                <div>{left}</div>
+                <div style={{ justifySelf: "center" }}>{center}</div>
+                <div style={{ justifySelf: "end" }}>{right}</div>
+              </div>
+            </div>
+          );
+        }
+
+        function PdfReaderScreen() {
+          const b = activeBook;
+          const ink = isDark ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.92)";
+          const muted = isDark ? "rgba(255,255,255,0.56)" : "rgba(18,19,22,0.56)";
+
+          const pageSegments = pdfLoc.segmentsInPage;
+          const globalIndex = (pdfLoc.page - 1) * pageSegments + pdfLoc.segment;
+
+          function nextSegment() {
+            setPdfLoc((p) => {
+              const next = { ...p };
+              if (p.segment < p.segmentsInPage) {
+                next.segment += 1;
+              } else {
+                next.page += 1;
+                next.segment = 1;
+                next.segmentsInPage = 4 + ((next.page * 3) % 4);
+              }
+              return next;
+            });
+            if (b) updateProgress(b.id, clamp((globalIndex + 1) / (pdfLoc.totalSegments || 1240), 0, 1));
+          }
+
+          function prevSegment() {
+            setPdfLoc((p) => {
+              const next = { ...p };
+              if (p.segment > 1) {
+                next.segment -= 1;
+              } else {
+                next.page = Math.max(1, p.page - 1);
+                next.segmentsInPage = 4 + ((next.page * 3) % 4);
+                next.segment = next.segmentsInPage;
+              }
+              return next;
+            });
+            if (b) updateProgress(b.id, clamp((globalIndex - 1) / (pdfLoc.totalSegments || 1240), 0, 1));
+          }
+
+          return (
+            <div style={{ minHeight: "100%", background: isDark ? "#0d0e10" : "var(--paper)" }}>
+              <ReaderHeader
+                left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
+                center={
+                  <div style={{ display: "grid", justifyItems: "center", gap: 3 }}>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: ink }}>漫画 · 子页阅读</div>
+                    <div style={{ fontSize: 11, fontWeight: 650, color: muted }}>
+                      第 {pdfLoc.page} 页 · {pdfLoc.segment}/{pdfLoc.segmentsInPage}
+                    </div>
+                  </div>
+                }
+                right={<IconButton label="设置" onClick={() => openSettings()}>⚙</IconButton>}
+              />
+
+              <div style={{ padding: 14, display: "grid", gap: 12 }}>
+                <ReadingCanvas mode="pdf" theme={currentTheme} onTapLeft={prevSegment} onTapRight={nextSegment}>
+                  <div
+                    style={{
+                      height: 540,
+                      display: "grid",
+                      gridTemplateRows: "auto 1fr auto",
+                      background:
+                        currentTheme === "night"
+                          ? "linear-gradient(180deg, rgba(17,18,20,1), rgba(10,10,12,1))"
+                          : "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(246,242,235,0.96))",
+                      position: "relative",
+                    }}
+                  >
+                    <div style={{ padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                        <Pill label="RectN" tone="neutral" />
+                        <div style={{ fontSize: 12, fontWeight: 800, color: ink }}>裁切坐标已缓存</div>
+                      </div>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>缓存：前后 2 子页</div>
+                    </div>
+                    <div style={{ padding: 14 }}>
+                      <div
+                        style={{
+                          height: "100%",
+                          borderRadius: 16,
+                          border: currentTheme === "night" ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(18,19,22,0.12)",
+                          overflow: "hidden",
+                          position: "relative",
+                          background:
+                            currentTheme === "night"
+                              ? "radial-gradient(520px 300px at 60% 20%, rgba(192,74,26,0.12), transparent 60%), radial-gradient(420px 300px at 25% 70%, rgba(14,111,92,0.10), transparent 60%), rgba(255,255,255,0.03)"
+                              : "radial-gradient(520px 300px at 60% 20%, rgba(192,74,26,0.10), transparent 60%), radial-gradient(420px 300px at 25% 70%, rgba(14,111,92,0.08), transparent 60%), rgba(18,19,22,0.03)",
+                          display: "grid",
+                          placeItems: "center",
+                        }}
+                      >
+                        <div style={{ textAlign: "center", padding: 18, maxWidth: 260 }}>
+                          <div style={{ fontSize: 15, fontWeight: 950, color: ink, letterSpacing: "0.01em" }}>这里展示的是子页渲染结果</div>
+                          <div style={{ marginTop: 8, fontSize: 12, color: muted, fontWeight: 650, lineHeight: 1.45 }}>
+                            渲染策略：按屏幕尺寸选择局部高清渲染，避免整页大位图占用内存。
+                          </div>
+                          <div style={{ marginTop: 12, display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
+                            <Pill label={`G#${globalIndex}`} tone="accent" />
+                            <Pill label={`${pdfLoc.totalSegments || 1240} 子页`} tone="neutral" />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>左侧点击：上一子页</div>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>右侧点击：下一子页</div>
+                    </div>
+                  </div>
+                </ReadingCanvas>
+
+                <div
+                  style={{
+                    background: isDark ? "rgba(255,255,255,0.04)" : "rgba(255,255,255,0.75)",
+                    border: isDark ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(18,19,22,0.10)",
+                    borderRadius: 18,
+                    padding: 14,
+                    display: "grid",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ display: "grid", gap: 2 }}>
+                      <div style={{ fontSize: 13, fontWeight: 900, color: ink }}>{b?.title}</div>
+                      <div style={{ fontSize: 12, fontWeight: 650, color: muted }}>只存切段坐标 · 位图缓存临时生成</div>
+                    </div>
+                    <Pill label={fmtPercent(b?.progress || 0)} tone="neutral" />
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <GhostButton label="上一段" onClick={prevSegment} />
+                    <PrimaryButton label="下一段" onClick={nextSegment} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        function TextReaderScreen() {
+          const b = activeBook;
+          const ink = isDark ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.92)";
+          const muted = isDark ? "rgba(255,255,255,0.54)" : "rgba(18,19,22,0.58)";
+
+          function nextPage() {
+            setTextLoc((p) => ({ ...p, page: Math.min(p.totalPages, p.page + 1) }));
+            if (b) updateProgress(b.id, clamp((textLoc.page + 1) / textLoc.totalPages, 0, 1));
+          }
+
+          function prevPage() {
+            setTextLoc((p) => ({ ...p, page: Math.max(1, p.page - 1) }));
+            if (b) updateProgress(b.id, clamp((textLoc.page - 1) / textLoc.totalPages, 0, 1));
+          }
+
+          const paragraphs = useMemo(
+            () => [
+              "夜里下雨时，城市像被抛光过的石头：路灯把每一滴水都点亮，又在下一秒熄灭。",
+              "我在书页边缘做了一个标记，告诉自己别急着读完，先把呼吸放慢。",
+              "如果你把句子读得太快，它们会像玻璃一样互相碰撞；慢一点，它们才会像木头，带着纹理和温度。",
+              "这是一份原型文本：真实产品会从 md/txt 解析而来，这里只展示排版与翻页手感。",
+              "下一页：你会看到设置如何影响字号、行距与边距。",
+            ],
+            [],
+          );
+
+          return (
+            <div style={{ minHeight: "100%", background: isDark ? "#0d0e10" : "var(--paper)" }}>
+              <ReaderHeader
+                left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
+                center={
+                  <div style={{ display: "grid", justifyItems: "center", gap: 3 }}>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: ink }}>{b?.format === "MD" ? "Markdown" : "纯文本"} 阅读</div>
+                    <div style={{ fontSize: 11, fontWeight: 650, color: muted }}>
+                      第 {textLoc.page}/{textLoc.totalPages} 页
+                    </div>
+                  </div>
+                }
+                right={<IconButton label="设置" onClick={() => openSettings()}>⚙</IconButton>}
+              />
+
+              <div style={{ padding: 14, display: "grid", gap: 12 }}>
+                <ReadingCanvas mode="text" theme={currentTheme} onTapLeft={prevPage} onTapRight={nextPage}>
+                  <div
+                    style={{
+                      padding: readingPrefs.margin,
+                      fontSize: readingPrefs.fontSize,
+                      lineHeight: readingPrefs.lineHeight,
+                      fontFamily: '"Noto Serif SC", serif',
+                      letterSpacing: "0.01em",
+                    }}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 900, color: muted, fontFamily: "Inter, system-ui", marginBottom: 12 }}>
+                      {b?.title}
+                    </div>
+                    <div style={{ display: "grid", gap: 14 }}>
+                      {paragraphs.map((t, idx) => (
+                        <p key={idx} style={{ margin: 0, color: ink }}>
+                          {t}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                </ReadingCanvas>
+
+                <div style={{ display: "flex", gap: 10 }}>
+                  <GhostButton label="上一页" onClick={prevPage} />
+                  <PrimaryButton label="下一页" onClick={nextPage} />
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        function EpubReaderScreen() {
+          const b = activeBook;
+          const ink = isDark ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.92)";
+          const muted = isDark ? "rgba(255,255,255,0.54)" : "rgba(18,19,22,0.58)";
+
+          function nextChapter() {
+            setEpubLoc((p) => {
+              const next = { ...p, chapter: Math.min(p.chapters, p.chapter + 1) };
+              next.percent = clamp(next.chapter / next.chapters, 0, 1);
+              return next;
+            });
+            if (b) updateProgress(b.id, clamp((epubLoc.chapter + 1) / epubLoc.chapters, 0, 1));
+          }
+
+          function prevChapter() {
+            setEpubLoc((p) => {
+              const next = { ...p, chapter: Math.max(1, p.chapter - 1) };
+              next.percent = clamp(next.chapter / next.chapters, 0, 1);
+              return next;
+            });
+            if (b) updateProgress(b.id, clamp((epubLoc.chapter - 1) / epubLoc.chapters, 0, 1));
+          }
+
+          return (
+            <div style={{ minHeight: "100%", background: isDark ? "#0d0e10" : "var(--paper)" }}>
+              <ReaderHeader
+                left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
+                center={
+                  <div style={{ display: "grid", justifyItems: "center", gap: 3 }}>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: ink }}>EPUB</div>
+                    <div style={{ fontSize: 11, fontWeight: 650, color: muted }}>
+                      {epubLoc.chapter}/{epubLoc.chapters} 章 · {fmtPercent(epubLoc.percent)}
+                    </div>
+                  </div>
+                }
+                right={
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <IconButton label="目录" onClick={() => setTocOpen(true)}>
+                      ☰
+                    </IconButton>
+                    <IconButton label="设置" onClick={() => openSettings()}>
+                      ⚙
+                    </IconButton>
+                  </div>
+                }
+              />
+
+              <div style={{ padding: 14, display: "grid", gap: 12 }}>
+                <ReadingCanvas mode="text" theme={currentTheme} onTapLeft={prevChapter} onTapRight={nextChapter}>
+                  <div
+                    style={{
+                      padding: readingPrefs.margin,
+                      fontSize: readingPrefs.fontSize,
+                      lineHeight: readingPrefs.lineHeight,
+                      fontFamily: '"Noto Serif SC", serif',
+                      letterSpacing: "0.01em",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                      <div style={{ fontFamily: "Inter, system-ui", fontSize: 12, fontWeight: 900, color: muted }}>{b?.title}</div>
+                      <Pill label={`第 ${epubLoc.chapter} 章`} tone="neutral" />
+                    </div>
+                    <div style={{ display: "grid", gap: 14 }}>
+                      <p style={{ margin: 0, color: ink }}>
+                        这一章的文字来自 EPUB 内容流。原型里用一段结构化文本模拟：标题、段落、引用与脚注提示。
+                      </p>
+                      <p style={{ margin: 0, color: ink }}>
+                        目录采用独立侧边抽屉，章节级加载；定位与进度会写入本地数据库（真实实现里用统一 Locator）。
+                      </p>
+                      <div
+                        style={{
+                          borderLeft: isDark ? "2px solid rgba(255,255,255,0.18)" : "2px solid rgba(18,19,22,0.18)",
+                          paddingLeft: 12,
+                          color: muted,
+                          fontStyle: "italic",
+                          lineHeight: readingPrefs.lineHeight,
+                        }}
+                      >
+                        读到句子拐弯处，别急着翻页。让它在心里停一拍，再继续。
+                      </div>
+                      <p style={{ margin: 0, color: ink }}>
+                        下一步：加入搜索（纯文本/epub 优先）与标注（range locator），再把 md 解析成块级元素做更稳定的排版。
+                      </p>
+                    </div>
+                  </div>
+                </ReadingCanvas>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <GhostButton label="上一章" onClick={prevChapter} />
+                  <PrimaryButton label="下一章" onClick={nextChapter} />
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        function ScreenRouter() {
+          if (route.name === "import") return <ImportScreen />;
+          if (route.name === "pdfProcessing") return <PdfProcessingScreen />;
+          if (route.name === "pdfReader") return <PdfReaderScreen />;
+          if (route.name === "epubReader") return <EpubReaderScreen />;
+          if (route.name === "textReader") return <TextReaderScreen />;
+          return <ShelfScreen />;
+        }
+
+        useEffect(() => {
+          if (route.name === "pdfProcessing") {
+            const bid = route.bookId;
+            if (!bid) return;
+            setActiveBookId(bid);
+          }
+          if (route.name === "pdfReader") {
+            const bid = route.bookId;
+            if (!bid) return;
+            setActiveBookId(bid);
+          }
+          if (route.name === "epubReader" || route.name === "textReader") {
+            const bid = route.bookId;
+            if (!bid) return;
+            setActiveBookId(bid);
+          }
+        }, [route.name, route.bookId]);
+
+        return (
+          <div style={{ display: "grid", justifyItems: "center", gap: 18 }}>
+            <div style={{ display: "grid", justifyItems: "center", gap: 10 }}>
+              <div style={{ fontFamily: '"Noto Serif SC", serif', fontSize: 16, fontWeight: 700, color: "rgba(18,19,22,0.78)" }}>
+                安卓阅读器 · 原型
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 650, color: "rgba(18,19,22,0.58)", textAlign: "center", lineHeight: 1.35 }}>
+                点击书籍进入阅读；PDF 漫画会先预处理并生成子页序列
+              </div>
+            </div>
+
+            <AndroidFrame time={time} battery={88} darkMode={false}>
+              <div style={{ minHeight: "100%", position: "relative", background: isDark ? "#0d0e10" : "var(--paper)" }}>
+                <ScreenRouter />
+                <TocDrawer />
+                <ReadingSettingsSheet />
+                <BottomToast show={!!toast} text={toast || ""} />
+              </div>
+            </AndroidFrame>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
+
