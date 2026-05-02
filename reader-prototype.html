@@ -53,6 +53,50 @@
       ::selection {
         background: rgba(192, 74, 26, 0.22);
       }
+
+      @keyframes turnInNext {
+        from {
+          transform: translateX(18px);
+          opacity: 0;
+        }
+        to {
+          transform: translateX(0);
+          opacity: 1;
+        }
+      }
+
+      @keyframes turnOutNext {
+        from {
+          transform: translateX(0);
+          opacity: 1;
+        }
+        to {
+          transform: translateX(-18px);
+          opacity: 0;
+        }
+      }
+
+      @keyframes turnInPrev {
+        from {
+          transform: translateX(-18px);
+          opacity: 0;
+        }
+        to {
+          transform: translateX(0);
+          opacity: 1;
+        }
+      }
+
+      @keyframes turnOutPrev {
+        from {
+          transform: translateX(0);
+          opacity: 1;
+        }
+        to {
+          transform: translateX(18px);
+          opacity: 0;
+        }
+      }
     </style>
   </head>
   <body>
@@ -622,6 +666,66 @@
         );
       }
 
+      function TurnSwitch({ activeKey, dir, durationMs = 260, children }) {
+        const [stack, setStack] = useState(() => [{ key: activeKey, phase: "current", node: children }]);
+
+        useEffect(() => {
+          setStack((prev) => {
+            const current = prev.find((x) => x.phase === "current") || prev[prev.length - 1];
+            if (current && current.key === activeKey) {
+              return prev.map((x) => (x.phase === "current" ? { ...x, node: children } : x));
+            }
+            const next = { key: activeKey, phase: "enter", node: children };
+            const out = current ? [{ ...current, phase: "exit" }] : [];
+            return [...out, next];
+          });
+        }, [activeKey]);
+
+        useEffect(() => {
+          if (stack.length <= 1) return;
+          const t = window.setTimeout(() => {
+            setStack((prev) => {
+              const last = prev[prev.length - 1];
+              return last ? [{ ...last, phase: "current" }] : prev;
+            });
+          }, durationMs + 30);
+          return () => window.clearTimeout(t);
+        }, [stack.length, durationMs]);
+
+        return (
+          <div style={{ position: "relative", height: "100%", width: "100%", overflow: "hidden" }}>
+            {stack.map((item, idx) => {
+              const isEnter = item.phase === "enter";
+              const isExit = item.phase === "exit";
+              const anim =
+                item.phase === "current"
+                  ? "none"
+                  : dir === "prev"
+                    ? isEnter
+                      ? `turnInPrev ${durationMs}ms cubic-bezier(0.2, 0.9, 0.2, 1) both`
+                      : `turnOutPrev ${durationMs}ms cubic-bezier(0.2, 0.9, 0.2, 1) both`
+                    : isEnter
+                      ? `turnInNext ${durationMs}ms cubic-bezier(0.2, 0.9, 0.2, 1) both`
+                      : `turnOutNext ${durationMs}ms cubic-bezier(0.2, 0.9, 0.2, 1) both`;
+
+              return (
+                <div
+                  key={`${item.key}-${item.phase}-${idx}`}
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    animation: anim,
+                    willChange: item.phase === "current" ? "auto" : "transform, opacity",
+                  }}
+                >
+                  {item.node}
+                </div>
+              );
+            })}
+          </div>
+        );
+      }
+
       function ProgressPill({ progress }) {
         return (
           <div style={{ display: "grid", gap: 8 }}>
@@ -663,6 +767,7 @@
               background: bg,
               border: fullBleed ? "none" : "1px solid rgba(18,19,22,0.10)",
               boxShadow: fullBleed ? "none" : "0 18px 55px rgba(0,0,0,0.14)",
+              transition: "background 220ms ease, border-color 220ms ease",
               overflow: "hidden",
             }}
           >
@@ -726,6 +831,7 @@
         const hudTimerRef = useRef(null);
         const [pageHint, setPageHint] = useState(null);
         const pageHintTimerRef = useRef(null);
+        const [turnDir, setTurnDir] = useState("next");
 
         const [readingPrefs, setReadingPrefs] = useState({
           theme: "paper",
@@ -830,6 +936,25 @@
           if (autoHide) {
             hudTimerRef.current = window.setTimeout(() => setHudVisible(false), 2600);
           }
+        }
+
+        function toggleTheme() {
+          setReadingPrefs((p) => {
+            const nextTheme = p.theme === "night" ? "paper" : "night";
+            flashHint(nextTheme === "night" ? "夜间" : "浅色");
+            return { ...p, theme: nextTheme };
+          });
+        }
+
+        function cycleFontSize() {
+          const sizes = [15, 17, 19, 21];
+          setReadingPrefs((p) => {
+            const cur = p.fontSize;
+            const idx = Math.max(0, sizes.indexOf(cur));
+            const next = sizes[(idx + 1) % sizes.length];
+            flashHint(`字号 ${next}px`);
+            return { ...p, fontSize: next };
+          });
         }
 
         function getActiveLocator() {
@@ -2068,6 +2193,7 @@
           const globalIndex = (pdfLoc.page - 1) * pageSegments + pdfLoc.segment;
 
           function nextSegment() {
+            setTurnDir("next");
             flashHint(`G#${globalIndex + 1}`);
             setPdfLoc((p) => {
               const next = { ...p };
@@ -2084,6 +2210,7 @@
           }
 
           function prevSegment() {
+            setTurnDir("prev");
             flashHint(`G#${Math.max(1, globalIndex - 1)}`);
             setPdfLoc((p) => {
               const next = { ...p };
@@ -2115,6 +2242,7 @@
                   right={
                     <div style={{ display: "flex", gap: 10 }}>
                       <IconButton label="书签" onClick={() => toggleBookmark()}>{isCurrentBookmarked() ? "★" : "☆"}</IconButton>
+                      <IconButton label="深浅色" onClick={() => toggleTheme()}>{isDark ? "☀" : "☾"}</IconButton>
                       <IconButton label="菜单" onClick={() => openReaderMenu()}>⋯</IconButton>
                     </div>
                   }
@@ -2133,67 +2261,70 @@
                   }}
                   onTapRight={nextSegment}
                 >
-                  <div
-                    style={{
-                      height: "100%",
-                      display: "grid",
-                      gridTemplateRows: hudVisible ? "auto 1fr auto" : "1fr",
-                      background:
-                        currentTheme === "night"
-                          ? "linear-gradient(180deg, rgba(17,18,20,1), rgba(10,10,12,1))"
-                          : "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(246,242,235,0.96))",
-                      position: "relative",
-                    }}
-                  >
-                    {hudVisible ? (
-                      <div style={{ padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                          <Pill label="RectN" tone="neutral" />
-                          <div style={{ fontSize: 12, fontWeight: 800, color: ink }}>裁切坐标已缓存</div>
-                        </div>
-                        <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>缓存：前后 2 子页</div>
-                      </div>
-                    ) : null}
-                    <div style={{ padding: hudVisible ? 14 : 0 }}>
-                      <div
-                        style={{
-                          height: "100%",
-                          borderRadius: hudVisible ? 16 : 0,
-                          border:
-                            hudVisible
-                              ? currentTheme === "night"
-                                ? "1px solid rgba(255,255,255,0.10)"
-                                : "1px solid rgba(18,19,22,0.12)"
-                              : "none",
-                          overflow: "hidden",
-                          position: "relative",
-                          background:
-                            currentTheme === "night"
-                              ? "radial-gradient(520px 300px at 60% 20%, rgba(192,74,26,0.12), transparent 60%), radial-gradient(420px 300px at 25% 70%, rgba(14,111,92,0.10), transparent 60%), rgba(255,255,255,0.03)"
-                              : "radial-gradient(520px 300px at 60% 20%, rgba(192,74,26,0.10), transparent 60%), radial-gradient(420px 300px at 25% 70%, rgba(14,111,92,0.08), transparent 60%), rgba(18,19,22,0.03)",
-                          display: "grid",
-                          placeItems: "center",
-                        }}
-                      >
-                        <div style={{ textAlign: "center", padding: 18, maxWidth: 260 }}>
-                          <div style={{ fontSize: 15, fontWeight: 950, color: ink, letterSpacing: "0.01em" }}>这里展示的是子页渲染结果</div>
-                          <div style={{ marginTop: 8, fontSize: 12, color: muted, fontWeight: 650, lineHeight: 1.45 }}>
-                            渲染策略：按屏幕尺寸选择局部高清渲染，避免整页大位图占用内存。
+                  <TurnSwitch activeKey={globalIndex} dir={turnDir}>
+                    <div
+                      style={{
+                        height: "100%",
+                        display: "grid",
+                        gridTemplateRows: hudVisible ? "auto 1fr auto" : "1fr",
+                        background:
+                          currentTheme === "night"
+                            ? "linear-gradient(180deg, rgba(17,18,20,1), rgba(10,10,12,1))"
+                            : "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(246,242,235,0.96))",
+                        transition: "background 220ms ease",
+                        position: "relative",
+                      }}
+                    >
+                      {hudVisible ? (
+                        <div style={{ padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                            <Pill label="RectN" tone="neutral" />
+                            <div style={{ fontSize: 12, fontWeight: 800, color: ink }}>裁切坐标已缓存</div>
                           </div>
-                          <div style={{ marginTop: 12, display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
-                            <Pill label={`G#${globalIndex}`} tone="accent" />
-                            <Pill label={`${pdfLoc.totalSegments || 1240} 子页`} tone="neutral" />
+                          <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>缓存：前后 2 子页</div>
+                        </div>
+                      ) : null}
+                      <div style={{ padding: hudVisible ? 14 : 0 }}>
+                        <div
+                          style={{
+                            height: "100%",
+                            borderRadius: hudVisible ? 16 : 0,
+                            border:
+                              hudVisible
+                                ? currentTheme === "night"
+                                  ? "1px solid rgba(255,255,255,0.10)"
+                                  : "1px solid rgba(18,19,22,0.12)"
+                                : "none",
+                            overflow: "hidden",
+                            position: "relative",
+                            background:
+                              currentTheme === "night"
+                                ? "radial-gradient(520px 300px at 60% 20%, rgba(192,74,26,0.12), transparent 60%), radial-gradient(420px 300px at 25% 70%, rgba(14,111,92,0.10), transparent 60%), rgba(255,255,255,0.03)"
+                                : "radial-gradient(520px 300px at 60% 20%, rgba(192,74,26,0.10), transparent 60%), radial-gradient(420px 300px at 25% 70%, rgba(14,111,92,0.08), transparent 60%), rgba(18,19,22,0.03)",
+                            display: "grid",
+                            placeItems: "center",
+                          }}
+                        >
+                          <div style={{ textAlign: "center", padding: 18, maxWidth: 260 }}>
+                            <div style={{ fontSize: 15, fontWeight: 950, color: ink, letterSpacing: "0.01em" }}>这里展示的是子页渲染结果</div>
+                            <div style={{ marginTop: 8, fontSize: 12, color: muted, fontWeight: 650, lineHeight: 1.45 }}>
+                              渲染策略：按屏幕尺寸选择局部高清渲染，避免整页大位图占用内存。
+                            </div>
+                            <div style={{ marginTop: 12, display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
+                              <Pill label={`G#${globalIndex}`} tone="accent" />
+                              <Pill label={`${pdfLoc.totalSegments || 1240} 子页`} tone="neutral" />
+                            </div>
                           </div>
                         </div>
                       </div>
+                      {hudVisible ? (
+                        <div style={{ padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>左侧点击：上一子页</div>
+                          <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>右侧点击：下一子页</div>
+                        </div>
+                      ) : null}
                     </div>
-                    {hudVisible ? (
-                      <div style={{ padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>左侧点击：上一子页</div>
-                        <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>右侧点击：下一子页</div>
-                      </div>
-                    ) : null}
-                  </div>
+                  </TurnSwitch>
                 </ReadingCanvas>
 
               </div>
@@ -2207,12 +2338,14 @@
           const muted = isDark ? "rgba(255,255,255,0.54)" : "rgba(18,19,22,0.58)";
 
           function nextPage() {
+            setTurnDir("next");
             flashHint(`第 ${Math.min(textLoc.totalPages, textLoc.page + 1)}/${textLoc.totalPages} 页`);
             setTextLoc((p) => ({ ...p, page: Math.min(p.totalPages, p.page + 1) }));
             if (b) updateProgress(b.id, clamp((textLoc.page + 1) / textLoc.totalPages, 0, 1));
           }
 
           function prevPage() {
+            setTurnDir("prev");
             flashHint(`第 ${Math.max(1, textLoc.page - 1)}/${textLoc.totalPages} 页`);
             setTextLoc((p) => ({ ...p, page: Math.max(1, p.page - 1) }));
             if (b) updateProgress(b.id, clamp((textLoc.page - 1) / textLoc.totalPages, 0, 1));
@@ -2245,6 +2378,8 @@
                   right={
                     <div style={{ display: "flex", gap: 10 }}>
                       <IconButton label="书签" onClick={() => toggleBookmark()}>{isCurrentBookmarked() ? "★" : "☆"}</IconButton>
+                      <IconButton label="字号" onClick={() => cycleFontSize()}>Aa</IconButton>
+                      <IconButton label="深浅色" onClick={() => toggleTheme()}>{isDark ? "☀" : "☾"}</IconButton>
                       <IconButton label="菜单" onClick={() => openReaderMenu()}>⋯</IconButton>
                     </div>
                   }
@@ -2263,26 +2398,29 @@
                   }}
                   onTapRight={nextPage}
                 >
-                  <div
-                    style={{
-                      padding: readingPrefs.margin,
-                      fontSize: readingPrefs.fontSize,
-                      lineHeight: readingPrefs.lineHeight,
-                      fontFamily: '"Noto Serif SC", serif',
-                      letterSpacing: "0.01em",
-                    }}
-                  >
-                    <div style={{ fontSize: 13, fontWeight: 900, color: muted, fontFamily: "Inter, system-ui", marginBottom: 12 }}>
-                      {b?.title}
+                  <TurnSwitch activeKey={textLoc.page} dir={turnDir}>
+                    <div
+                      style={{
+                        padding: readingPrefs.margin,
+                        fontSize: readingPrefs.fontSize,
+                        lineHeight: readingPrefs.lineHeight,
+                        fontFamily: '"Noto Serif SC", serif',
+                        letterSpacing: "0.01em",
+                        transition: "font-size 220ms ease, line-height 220ms ease, padding 220ms ease, color 220ms ease",
+                      }}
+                    >
+                      <div style={{ fontSize: 13, fontWeight: 900, color: muted, fontFamily: "Inter, system-ui", marginBottom: 12 }}>
+                        {b?.title}
+                      </div>
+                      <div style={{ display: "grid", gap: 14 }}>
+                        {paragraphs.map((t, idx) => (
+                          <p key={idx} style={{ margin: 0, color: ink }}>
+                            {t}
+                          </p>
+                        ))}
+                      </div>
                     </div>
-                    <div style={{ display: "grid", gap: 14 }}>
-                      {paragraphs.map((t, idx) => (
-                        <p key={idx} style={{ margin: 0, color: ink }}>
-                          {t}
-                        </p>
-                      ))}
-                    </div>
-                  </div>
+                  </TurnSwitch>
                 </ReadingCanvas>
 
               </div>
@@ -2296,6 +2434,7 @@
           const muted = isDark ? "rgba(255,255,255,0.54)" : "rgba(18,19,22,0.58)";
 
           function nextChapter() {
+            setTurnDir("next");
             flashHint(`第 ${Math.min(epubLoc.chapters, epubLoc.chapter + 1)}/${epubLoc.chapters} 章`);
             setEpubLoc((p) => {
               const next = { ...p, chapter: Math.min(p.chapters, p.chapter + 1) };
@@ -2306,6 +2445,7 @@
           }
 
           function prevChapter() {
+            setTurnDir("prev");
             flashHint(`第 ${Math.max(1, epubLoc.chapter - 1)}/${epubLoc.chapters} 章`);
             setEpubLoc((p) => {
               const next = { ...p, chapter: Math.max(1, p.chapter - 1) };
@@ -2331,6 +2471,8 @@
                   right={
                     <div style={{ display: "flex", gap: 10 }}>
                       <IconButton label="书签" onClick={() => toggleBookmark()}>{isCurrentBookmarked() ? "★" : "☆"}</IconButton>
+                      <IconButton label="字号" onClick={() => cycleFontSize()}>Aa</IconButton>
+                      <IconButton label="深浅色" onClick={() => toggleTheme()}>{isDark ? "☀" : "☾"}</IconButton>
                       <IconButton label="菜单" onClick={() => openReaderMenu()}>⋯</IconButton>
                     </div>
                   }
@@ -2349,42 +2491,45 @@
                   }}
                   onTapRight={nextChapter}
                 >
-                  <div
-                    style={{
-                      padding: readingPrefs.margin,
-                      fontSize: readingPrefs.fontSize,
-                      lineHeight: readingPrefs.lineHeight,
-                      fontFamily: '"Noto Serif SC", serif',
-                      letterSpacing: "0.01em",
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                      <div style={{ fontFamily: "Inter, system-ui", fontSize: 12, fontWeight: 900, color: muted }}>{b?.title}</div>
-                      <Pill label={`第 ${epubLoc.chapter} 章`} tone="neutral" />
-                    </div>
-                    <div style={{ display: "grid", gap: 14 }}>
-                      <p style={{ margin: 0, color: ink }}>
-                        这一章的文字来自 EPUB 内容流。原型里用一段结构化文本模拟：标题、段落、引用与脚注提示。
-                      </p>
-                      <p style={{ margin: 0, color: ink }}>
-                        目录采用独立侧边抽屉，章节级加载；定位与进度会写入本地数据库（真实实现里用统一 Locator）。
-                      </p>
-                      <div
-                        style={{
-                          borderLeft: isDark ? "2px solid rgba(255,255,255,0.18)" : "2px solid rgba(18,19,22,0.18)",
-                          paddingLeft: 12,
-                          color: muted,
-                          fontStyle: "italic",
-                          lineHeight: readingPrefs.lineHeight,
-                        }}
-                      >
-                        读到句子拐弯处，别急着翻页。让它在心里停一拍，再继续。
+                  <TurnSwitch activeKey={epubLoc.chapter} dir={turnDir}>
+                    <div
+                      style={{
+                        padding: readingPrefs.margin,
+                        fontSize: readingPrefs.fontSize,
+                        lineHeight: readingPrefs.lineHeight,
+                        fontFamily: '"Noto Serif SC", serif',
+                        letterSpacing: "0.01em",
+                        transition: "font-size 220ms ease, line-height 220ms ease, padding 220ms ease, color 220ms ease",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                        <div style={{ fontFamily: "Inter, system-ui", fontSize: 12, fontWeight: 900, color: muted }}>{b?.title}</div>
+                        <Pill label={`第 ${epubLoc.chapter} 章`} tone="neutral" />
                       </div>
-                      <p style={{ margin: 0, color: ink }}>
-                        下一步：加入搜索（纯文本/epub 优先）与标注（range locator），再把 md 解析成块级元素做更稳定的排版。
-                      </p>
+                      <div style={{ display: "grid", gap: 14 }}>
+                        <p style={{ margin: 0, color: ink }}>
+                          这一章的文字来自 EPUB 内容流。原型里用一段结构化文本模拟：标题、段落、引用与脚注提示。
+                        </p>
+                        <p style={{ margin: 0, color: ink }}>
+                          目录采用独立侧边抽屉，章节级加载；定位与进度会写入本地数据库（真实实现里用统一 Locator）。
+                        </p>
+                        <div
+                          style={{
+                            borderLeft: isDark ? "2px solid rgba(255,255,255,0.18)" : "2px solid rgba(18,19,22,0.18)",
+                            paddingLeft: 12,
+                            color: muted,
+                            fontStyle: "italic",
+                            lineHeight: readingPrefs.lineHeight,
+                          }}
+                        >
+                          读到句子拐弯处，别急着翻页。让它在心里停一拍，再继续。
+                        </div>
+                        <p style={{ margin: 0, color: ink }}>
+                          下一步：加入搜索（纯文本/epub 优先）与标注（range locator），再把 md 解析成块级元素做更稳定的排版。
+                        </p>
+                      </div>
                     </div>
-                  </div>
+                  </TurnSwitch>
                 </ReadingCanvas>
               </div>
             </div>
