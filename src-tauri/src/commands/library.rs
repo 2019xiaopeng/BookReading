@@ -16,8 +16,8 @@ fn now_ts() -> i64 {
 
 fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO books (id, title, author, cover_path, library_path, added_at, last_opened_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO books (id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             book.id,
             book.title,
@@ -25,7 +25,8 @@ fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite::Error> {
             book.cover_path,
             book.library_path,
             book.added_at,
-            book.last_opened_at
+            book.last_opened_at,
+            book.is_favorite
         ],
     )?;
     Ok(())
@@ -33,7 +34,7 @@ fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite::Error> {
 
 fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at
+        "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite
          FROM books
          ORDER BY COALESCE(last_opened_at, added_at) DESC",
     )?;
@@ -48,6 +49,7 @@ fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
                 library_path: row.get(4)?,
                 added_at: row.get(5)?,
                 last_opened_at: row.get(6)?,
+                is_favorite: row.get(7)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -109,6 +111,7 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         library_path: library_path.to_string_lossy().to_string(),
         added_at: now_ts(),
         last_opened_at: None,
+        is_favorite: false,
     };
 
     let conn = db::open_db(&app)?;
@@ -150,6 +153,7 @@ mod tests {
             library_path: "/tmp/b1.epub".to_string(),
             added_at: 1,
             last_opened_at: None,
+            is_favorite: false,
         };
 
         insert_book(&conn, &book).unwrap();
@@ -171,6 +175,7 @@ mod tests {
             library_path: "/tmp/b2.epub".to_string(),
             added_at: 1,
             last_opened_at: None,
+            is_favorite: false,
         };
 
         insert_book(&conn, &book).unwrap();
@@ -179,4 +184,3 @@ mod tests {
         assert!(books.is_empty());
     }
 }
-

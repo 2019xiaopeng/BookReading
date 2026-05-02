@@ -9,6 +9,9 @@ use commands::annotations::{
 };
 use commands::reading::{get_settings, set_setting};
 use commands::reading::{get_reading_state, upsert_reading_state};
+use commands::favorites::{
+    add_favorite_quote, delete_favorite_quote, list_favorite_books, list_favorite_quotes, set_book_favorite,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -30,6 +33,11 @@ pub fn run() {
             list_highlights,
             add_highlight,
             delete_highlight,
+            set_book_favorite,
+            list_favorite_books,
+            add_favorite_quote,
+            delete_favorite_quote,
+            list_favorite_quotes,
             get_settings,
             set_setting,
             get_reading_state,

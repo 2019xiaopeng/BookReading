@@ -9,6 +9,7 @@ pub struct Book {
     pub library_path: String,
     pub added_at: i64,
     pub last_opened_at: Option<i64>,
+    pub is_favorite: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,3 +48,12 @@ pub struct Highlight {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FavoriteQuote {
+    pub id: String,
+    pub book_id: String,
+    pub cfi_range: String,
+    pub text: String,
+    pub note: Option<String>,
+    pub created_at: i64,
+}
