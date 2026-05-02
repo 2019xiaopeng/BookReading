@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS books (
   cover_path TEXT,
   library_path TEXT NOT NULL,
   added_at INTEGER NOT NULL,
-  last_opened_at INTEGER
+  last_opened_at INTEGER,
+  is_favorite INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS reading_state (
@@ -39,3 +40,11 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS favorite_quotes (
+  id TEXT PRIMARY KEY,
+  book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  cfi_range TEXT NOT NULL,
+  text TEXT NOT NULL,
+  note TEXT,
+  created_at INTEGER NOT NULL
+);

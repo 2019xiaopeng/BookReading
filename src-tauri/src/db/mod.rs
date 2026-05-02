@@ -17,6 +17,8 @@ pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
     conn.execute_batch(SCHEMA_SQL)
         .map_err(|e| format!("failed to init sqlite schema: {e}"))?;
 
+    ensure_books_is_favorite_column(&conn)?;
+
     Ok(())
 }
 
@@ -26,6 +28,30 @@ pub fn open_db(app: &tauri::AppHandle) -> Result<Connection, String> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|e| format!("failed to set sqlite foreign_keys pragma: {e}"))?;
     Ok(conn)
+}
+
+fn ensure_books_is_favorite_column(conn: &Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(books)")
+        .map_err(|e| format!("failed to prepare pragma table_info(books): {e}"))?;
+
+    let cols = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("failed to query pragma table_info(books): {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to read pragma table_info(books) rows: {e}"))?;
+
+    if cols.iter().any(|c| c == "is_favorite") {
+        return Ok(());
+    }
+
+    conn.execute(
+        "ALTER TABLE books ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0",
+        [],
+    )
+    .map_err(|e| format!("failed to migrate books.is_favorite column: {e}"))?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -49,5 +75,6 @@ mod tests {
         assert!(names.contains(&"bookmarks".to_string()));
         assert!(names.contains(&"highlights".to_string()));
         assert!(names.contains(&"settings".to_string()));
+        assert!(names.contains(&"favorite_quotes".to_string()));
     }
 }
