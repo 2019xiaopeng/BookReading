@@ -2,8 +2,24 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import type { Book } from "../tauri/invoke";
-import { getReadingState, getSettings, listBooks, setSetting, upsertReadingState } from "../tauri/invoke";
+import {
+  addBookmark,
+  addHighlight,
+  deleteBookmark,
+  deleteHighlight,
+  getReadingState,
+  getSettings,
+  listBooks,
+  listBookmarks,
+  listHighlights,
+  setSetting,
+  upsertReadingState,
+  type Bookmark,
+  type Highlight,
+} from "../tauri/invoke";
 import { createReader, type ReaderController, type TocItem } from "../reader/epub/reader";
+import BookmarksPanel from "../reader/components/BookmarksPanel";
+import HighlightsPanel from "../reader/components/HighlightsPanel";
 import SettingsPanel from "../reader/components/SettingsPanel";
 import { defaultSettings } from "../reader/settings/defaults";
 import type { ReaderSettings, Theme } from "../reader/settings/types";
@@ -15,7 +31,9 @@ export default function ReaderPage() {
   const [toc, setToc] = useState<TocItem[]>([]);
   const [percent, setPercent] = useState<number | null>(null);
   const [settings, setSettings] = useState<ReaderSettings>(defaultSettings);
-  const [showSettings, setShowSettings] = useState(false);
+  const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "settings">("toc");
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [isImmersive, setIsImmersive] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
@@ -70,6 +88,15 @@ export default function ReaderPage() {
           }, 1500);
         },
         onTocLoaded: (toc) => setToc(toc),
+        onSelected: (cfiRange) => {
+          void (async () => {
+            const note = window.prompt("添加笔记（可空）", "") ;
+            if (note === null) return;
+            const h = await addHighlight(book.id, cfiRange, "#ffe600", note.trim() ? note : null);
+            setHighlights((prev) => [h, ...prev]);
+            controllerRef.current?.addHighlight(cfiRange);
+          })();
+        },
       });
 
       controllerRef.current.setTheme(settings.theme);
@@ -79,6 +106,13 @@ export default function ReaderPage() {
       if (state?.cfi) {
         await controllerRef.current.display(state.cfi);
         if (typeof state.percent === "number") setPercent(state.percent);
+      }
+
+      const [bm, hl] = await Promise.all([listBookmarks(book.id), listHighlights(book.id)]);
+      setBookmarks(bm);
+      setHighlights(hl);
+      for (const h of hl) {
+        controllerRef.current.addHighlight(h.cfi_range);
       }
     })();
 
@@ -155,7 +189,27 @@ export default function ReaderPage() {
             {book?.title ?? "阅读"}
           </div>
           <div style={{ flex: 1 }} />
-          <button onClick={() => setShowSettings((v) => !v)}>设置</button>
+          <button
+            onClick={() => {
+              setSideTab("bookmarks");
+            }}
+          >
+            书签
+          </button>
+          <button
+            onClick={() => {
+              setSideTab("highlights");
+            }}
+          >
+            标注
+          </button>
+          <button
+            onClick={() => {
+              setSideTab("settings");
+            }}
+          >
+            设置
+          </button>
           <button onClick={() => setIsImmersive(true)}>沉浸</button>
           <div style={{ color: themeColors(settings.theme).subText, fontVariantNumeric: "tabular-nums" }}>
             {typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
@@ -168,7 +222,22 @@ export default function ReaderPage() {
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         {!isImmersive ? (
           <div style={{ width: 300, borderRight: `1px solid ${themeColors(settings.theme).border}`, padding: 12, overflow: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
-            {showSettings ? (
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setSideTab("toc")} disabled={sideTab === "toc"}>
+                目录
+              </button>
+              <button onClick={() => setSideTab("bookmarks")} disabled={sideTab === "bookmarks"}>
+                书签
+              </button>
+              <button onClick={() => setSideTab("highlights")} disabled={sideTab === "highlights"}>
+                标注
+              </button>
+              <button onClick={() => setSideTab("settings")} disabled={sideTab === "settings"}>
+                设置
+              </button>
+            </div>
+
+            {sideTab === "settings" ? (
               <SettingsPanel
                 value={settings}
                 onChange={(next) => {
@@ -176,7 +245,9 @@ export default function ReaderPage() {
                   void persistSettings(next);
                 }}
               />
-            ) : (
+            ) : null}
+
+            {sideTab === "toc" ? (
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 8 }}>目录</div>
                 {toc.length === 0 ? (
@@ -195,7 +266,45 @@ export default function ReaderPage() {
                   </div>
                 )}
               </div>
-            )}
+            ) : null}
+
+            {sideTab === "bookmarks" ? (
+              <BookmarksPanel
+                items={bookmarks}
+                onAdd={() => {
+                  const cfi = lastCfiRef.current;
+                  if (!book || !cfi) return;
+                  const label = window.prompt("书签名称（可空）", "") ;
+                  if (label === null) return;
+                  void (async () => {
+                    const bm = await addBookmark(book.id, cfi, label.trim() ? label : null);
+                    setBookmarks((prev) => [bm, ...prev]);
+                  })();
+                }}
+                onOpen={(cfi) => controllerRef.current?.display(cfi)}
+                onDelete={(id) => {
+                  void (async () => {
+                    await deleteBookmark(id);
+                    setBookmarks((prev) => prev.filter((b) => b.id !== id));
+                  })();
+                }}
+              />
+            ) : null}
+
+            {sideTab === "highlights" ? (
+              <HighlightsPanel
+                items={highlights}
+                onOpen={(cfiRange) => controllerRef.current?.display(cfiRange)}
+                onDelete={(id) => {
+                  const h = highlights.find((x) => x.id === id);
+                  void (async () => {
+                    await deleteHighlight(id);
+                    setHighlights((prev) => prev.filter((x) => x.id !== id));
+                    if (h) controllerRef.current?.removeHighlight(h.cfi_range);
+                  })();
+                }}
+              />
+            ) : null}
           </div>
         ) : null}
 

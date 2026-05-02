@@ -52,3 +52,49 @@ export async function getReadingState(bookId: string): Promise<ReadingState | nu
 export async function upsertReadingState(bookId: string, cfi: string, percent: number | null): Promise<void> {
   return invoke<void>("upsert_reading_state", { book_id: bookId, cfi, percent });
 }
+
+export type Bookmark = {
+  id: string;
+  book_id: string;
+  cfi: string;
+  label: string | null;
+  created_at: number;
+};
+
+export type Highlight = {
+  id: string;
+  book_id: string;
+  cfi_range: string;
+  color: string;
+  note: string | null;
+  created_at: number;
+};
+
+export async function listBookmarks(bookId: string): Promise<Bookmark[]> {
+  return invoke<Bookmark[]>("list_bookmarks", { book_id: bookId });
+}
+
+export async function addBookmark(bookId: string, cfi: string, label: string | null): Promise<Bookmark> {
+  return invoke<Bookmark>("add_bookmark", { book_id: bookId, cfi, label });
+}
+
+export async function deleteBookmark(bookmarkId: string): Promise<void> {
+  return invoke<void>("delete_bookmark", { bookmark_id: bookmarkId });
+}
+
+export async function listHighlights(bookId: string): Promise<Highlight[]> {
+  return invoke<Highlight[]>("list_highlights", { book_id: bookId });
+}
+
+export async function addHighlight(
+  bookId: string,
+  cfiRange: string,
+  color: string,
+  note: string | null,
+): Promise<Highlight> {
+  return invoke<Highlight>("add_highlight", { book_id: bookId, cfi_range: cfiRange, color, note });
+}
+
+export async function deleteHighlight(highlightId: string): Promise<void> {
+  return invoke<void>("delete_highlight", { highlight_id: highlightId });
+}

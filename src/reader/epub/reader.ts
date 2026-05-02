@@ -20,6 +20,8 @@ export type ReaderController = {
   display: (target?: string) => Promise<void>;
   setTheme: (theme: Theme) => void;
   setFontSizePercent: (percent: number) => void;
+  addHighlight: (cfiRange: string) => void;
+  removeHighlight: (cfiRange: string) => void;
   destroy: () => void;
 };
 
@@ -28,6 +30,7 @@ export async function createReader(opts: {
   libraryPath: string;
   onRelocated?: (payload: RelocatedPayload) => void;
   onTocLoaded?: (toc: TocItem[]) => void;
+  onSelected?: (cfiRange: string) => void;
 }): Promise<ReaderController> {
   const bytes = await readFile(opts.libraryPath);
   const book: any = ePub(bytes.buffer);
@@ -56,6 +59,10 @@ export async function createReader(opts: {
   });
   rendition.themes.select("light");
   rendition.themes.fontSize("120%");
+  rendition.themes.default({
+    "::selection": { background: "rgba(255, 230, 0, 0.35)" },
+    ".epubjs-hl": { fill: "rgba(255, 230, 0, 0.35)", "fill-opacity": "0.35", "mix-blend-mode": "multiply" },
+  });
 
   rendition.on("relocated", (location: any) => {
     const cfi: string | undefined = location?.start?.cfi;
@@ -65,6 +72,14 @@ export async function createReader(opts: {
         ? (book.locations.percentageFromCfi(cfi) as number)
         : null;
     opts.onRelocated?.({ cfi, percent });
+  });
+
+  rendition.on("selected", (cfiRange: string, contents: any) => {
+    opts.onSelected?.(cfiRange);
+    try {
+      contents?.window?.getSelection()?.removeAllRanges();
+    } catch {
+    }
   });
 
   const navigation = await book.loaded.navigation;
@@ -93,6 +108,15 @@ export async function createReader(opts: {
     },
     setFontSizePercent: (percent: number) => {
       rendition.themes.fontSize(`${percent}%`);
+    },
+    addHighlight: (cfiRange: string) => {
+      rendition.annotations.highlight(cfiRange, {}, () => {});
+    },
+    removeHighlight: (cfiRange: string) => {
+      try {
+        rendition.annotations.remove(cfiRange);
+      } catch {
+      }
     },
     destroy: () => {
       try {

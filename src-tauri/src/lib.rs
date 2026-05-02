@@ -4,6 +4,9 @@ mod db;
 mod models;
 
 use commands::library::{delete_book, import_book, list_books};
+use commands::annotations::{
+    add_bookmark, add_highlight, delete_bookmark, delete_highlight, list_bookmarks, list_highlights,
+};
 use commands::reading::{get_settings, set_setting};
 use commands::reading::{get_reading_state, upsert_reading_state};
 
@@ -21,6 +24,12 @@ pub fn run() {
             list_books,
             import_book,
             delete_book,
+            list_bookmarks,
+            add_bookmark,
+            delete_bookmark,
+            list_highlights,
+            add_highlight,
+            delete_highlight,
             get_settings,
             set_setting,
             get_reading_state,
