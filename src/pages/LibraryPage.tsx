@@ -6,7 +6,7 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import ePub from "epubjs";
 
 import type { Book } from "../tauri/invoke";
-import { deleteBook, importBook, listBooks } from "../tauri/invoke";
+import { deleteBook, importBook, listBooks, setBookFavorite } from "../tauri/invoke";
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -118,6 +118,9 @@ export default function LibraryPage() {
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <div style={{ fontSize: 18, fontWeight: 600 }}>BookReading</div>
         <div style={{ flex: 1 }} />
+        <button onClick={() => navigate("/favorites")} disabled={loading}>
+          收藏
+        </button>
         <button onClick={onImport} disabled={loading}>
           导入 EPUB
         </button>
@@ -167,6 +170,17 @@ export default function LibraryPage() {
               <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
                 <button onClick={() => navigate(`/read/${b.id}`)} disabled={loading}>
                   打开
+                </button>
+                <button
+                  onClick={() => {
+                    setLoading(true);
+                    setBookFavorite(b.id, !b.is_favorite)
+                      .then(() => refresh())
+                      .finally(() => setLoading(false));
+                  }}
+                  disabled={loading}
+                >
+                  {b.is_favorite ? "取消收藏" : "收藏"}
                 </button>
                 <button onClick={() => onDelete(b.id)} disabled={loading}>
                   删除

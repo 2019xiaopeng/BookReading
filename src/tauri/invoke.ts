@@ -8,6 +8,7 @@ export type Book = {
   library_path: string;
   added_at: number;
   last_opened_at: number | null;
+  is_favorite: boolean;
 };
 
 export type ImportBookRequest = {
@@ -97,4 +98,49 @@ export async function addHighlight(
 
 export async function deleteHighlight(highlightId: string): Promise<void> {
   return invoke<void>("delete_highlight", { highlight_id: highlightId });
+}
+
+export type FavoriteQuote = {
+  id: string;
+  book_id: string;
+  cfi_range: string;
+  text: string;
+  note: string | null;
+  created_at: number;
+};
+
+export async function setBookFavorite(bookId: string, isFavorite: boolean): Promise<void> {
+  return invoke<void>("set_book_favorite", { book_id: bookId, is_favorite: isFavorite });
+}
+
+export async function listFavoriteBooks(): Promise<Book[]> {
+  return invoke<Book[]>("list_favorite_books");
+}
+
+export async function addFavoriteQuote(
+  bookId: string,
+  cfiRange: string,
+  text: string,
+  note: string | null,
+): Promise<FavoriteQuote> {
+  return invoke<FavoriteQuote>("add_favorite_quote", {
+    book_id: bookId,
+    cfi_range: cfiRange,
+    text,
+    note,
+  });
+}
+
+export async function deleteFavoriteQuote(quoteId: string): Promise<void> {
+  return invoke<void>("delete_favorite_quote", { quote_id: quoteId });
+}
+
+export async function listFavoriteQuotes(params?: {
+  bookId?: string | null;
+  query?: string | null;
+}): Promise<FavoriteQuote[]> {
+  return invoke<FavoriteQuote[]>("list_favorite_quotes", {
+    book_id: params?.bookId ?? null,
+    query: params?.query ?? null,
+  });
 }
