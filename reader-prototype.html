@@ -644,7 +644,7 @@
         );
       }
 
-      function ReadingCanvas({ mode, theme, onTapLeft, onTapCenter, onTapRight, children }) {
+      function ReadingCanvas({ mode, theme, fullBleed = false, onTapLeft, onTapCenter, onTapRight, children }) {
         const bg =
           theme === "paper"
             ? "linear-gradient(180deg, rgba(255,255,255,0.9), rgba(255,255,255,0.68))"
@@ -652,23 +652,26 @@
               ? "linear-gradient(180deg, rgba(15,16,18,0.98), rgba(15,16,18,0.92))"
               : "linear-gradient(180deg, rgba(249,246,241,0.96), rgba(249,246,241,0.78))";
         const ink = theme === "night" ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.92)";
+        const contentPadding = mode === "pdf" ? 0 : fullBleed ? 0 : 18;
 
         return (
           <div
             style={{
               position: "relative",
-              borderRadius: 18,
+              height: "100%",
+              borderRadius: fullBleed ? 0 : 18,
               background: bg,
-              border: "1px solid rgba(18,19,22,0.10)",
-              boxShadow: "0 18px 55px rgba(0,0,0,0.14)",
+              border: fullBleed ? "none" : "1px solid rgba(18,19,22,0.10)",
+              boxShadow: fullBleed ? "none" : "0 18px 55px rgba(0,0,0,0.14)",
               overflow: "hidden",
             }}
           >
             <div
               style={{
-                padding: mode === "pdf" ? 0 : 18,
+                padding: contentPadding,
                 color: ink,
-                minHeight: 540,
+                height: fullBleed ? "100%" : "auto",
+                minHeight: fullBleed ? "100%" : 540,
               }}
             >
               {children}
@@ -2097,7 +2100,7 @@
           }
 
           return (
-            <div style={{ minHeight: "100%", background: isDark ? "#0d0e10" : "var(--paper)" }}>
+            <div style={{ height: "100%", background: isDark ? "#0d0e10" : "var(--paper)" }}>
               {hudVisible ? (
                 <ReaderHeader
                   left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
@@ -2118,10 +2121,11 @@
                 />
               ) : null}
 
-              <div style={{ padding: 14, display: "grid", gap: 12 }}>
+              <div style={{ padding: 0, height: "100%" }}>
                 <ReadingCanvas
                   mode="pdf"
                   theme={currentTheme}
+                  fullBleed={true}
                   onTapLeft={prevSegment}
                   onTapCenter={() => {
                     if (hudVisible) hideHUD();
@@ -2131,9 +2135,9 @@
                 >
                   <div
                     style={{
-                      height: 540,
+                      height: "100%",
                       display: "grid",
-                      gridTemplateRows: "auto 1fr auto",
+                      gridTemplateRows: hudVisible ? "auto 1fr auto" : "1fr",
                       background:
                         currentTheme === "night"
                           ? "linear-gradient(180deg, rgba(17,18,20,1), rgba(10,10,12,1))"
@@ -2141,19 +2145,26 @@
                       position: "relative",
                     }}
                   >
-                    <div style={{ padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                        <Pill label="RectN" tone="neutral" />
-                        <div style={{ fontSize: 12, fontWeight: 800, color: ink }}>裁切坐标已缓存</div>
+                    {hudVisible ? (
+                      <div style={{ padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                          <Pill label="RectN" tone="neutral" />
+                          <div style={{ fontSize: 12, fontWeight: 800, color: ink }}>裁切坐标已缓存</div>
+                        </div>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>缓存：前后 2 子页</div>
                       </div>
-                      <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>缓存：前后 2 子页</div>
-                    </div>
-                    <div style={{ padding: 14 }}>
+                    ) : null}
+                    <div style={{ padding: hudVisible ? 14 : 0 }}>
                       <div
                         style={{
                           height: "100%",
-                          borderRadius: 16,
-                          border: currentTheme === "night" ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(18,19,22,0.12)",
+                          borderRadius: hudVisible ? 16 : 0,
+                          border:
+                            hudVisible
+                              ? currentTheme === "night"
+                                ? "1px solid rgba(255,255,255,0.10)"
+                                : "1px solid rgba(18,19,22,0.12)"
+                              : "none",
                           overflow: "hidden",
                           position: "relative",
                           background:
@@ -2176,37 +2187,15 @@
                         </div>
                       </div>
                     </div>
-                    <div style={{ padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>左侧点击：上一子页</div>
-                      <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>右侧点击：下一子页</div>
-                    </div>
+                    {hudVisible ? (
+                      <div style={{ padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>左侧点击：上一子页</div>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: muted }}>右侧点击：下一子页</div>
+                      </div>
+                    ) : null}
                   </div>
                 </ReadingCanvas>
 
-                {hudVisible ? (
-                  <div
-                    style={{
-                      background: isDark ? "rgba(255,255,255,0.04)" : "rgba(255,255,255,0.75)",
-                      border: isDark ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(18,19,22,0.10)",
-                      borderRadius: 18,
-                      padding: 14,
-                      display: "grid",
-                      gap: 10,
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ display: "grid", gap: 2 }}>
-                        <div style={{ fontSize: 13, fontWeight: 900, color: ink }}>{b?.title}</div>
-                        <div style={{ fontSize: 12, fontWeight: 650, color: muted }}>只存切段坐标 · 位图缓存临时生成</div>
-                      </div>
-                      <Pill label={fmtPercent(b?.progress || 0)} tone="neutral" />
-                    </div>
-                    <div style={{ display: "flex", gap: 10 }}>
-                      <GhostButton label="上一段" onClick={prevSegment} />
-                      <PrimaryButton label="下一段" onClick={nextSegment} />
-                    </div>
-                  </div>
-                ) : null}
               </div>
             </div>
           );
@@ -2241,7 +2230,7 @@
           );
 
           return (
-            <div style={{ minHeight: "100%", background: isDark ? "#0d0e10" : "var(--paper)" }}>
+            <div style={{ height: "100%", background: isDark ? "#0d0e10" : "var(--paper)" }}>
               {hudVisible ? (
                 <ReaderHeader
                   left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
@@ -2262,10 +2251,11 @@
                 />
               ) : null}
 
-              <div style={{ padding: 14, display: "grid", gap: 12 }}>
+              <div style={{ padding: 0, height: "100%" }}>
                 <ReadingCanvas
                   mode="text"
                   theme={currentTheme}
+                  fullBleed={true}
                   onTapLeft={prevPage}
                   onTapCenter={() => {
                     if (hudVisible) hideHUD();
@@ -2295,12 +2285,6 @@
                   </div>
                 </ReadingCanvas>
 
-                {hudVisible ? (
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <GhostButton label="上一页" onClick={prevPage} />
-                    <PrimaryButton label="下一页" onClick={nextPage} />
-                  </div>
-                ) : null}
               </div>
             </div>
           );
@@ -2332,7 +2316,7 @@
           }
 
           return (
-            <div style={{ minHeight: "100%", background: isDark ? "#0d0e10" : "var(--paper)" }}>
+            <div style={{ height: "100%", background: isDark ? "#0d0e10" : "var(--paper)" }}>
               {hudVisible ? (
                 <ReaderHeader
                   left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
@@ -2353,10 +2337,11 @@
                 />
               ) : null}
 
-              <div style={{ padding: 14, display: "grid", gap: 12 }}>
+              <div style={{ padding: 0, height: "100%" }}>
                 <ReadingCanvas
                   mode="text"
                   theme={currentTheme}
+                  fullBleed={true}
                   onTapLeft={prevChapter}
                   onTapCenter={() => {
                     if (hudVisible) hideHUD();
@@ -2401,12 +2386,6 @@
                     </div>
                   </div>
                 </ReadingCanvas>
-                {hudVisible ? (
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <GhostButton label="上一章" onClick={prevChapter} />
-                    <PrimaryButton label="下一章" onClick={nextChapter} />
-                  </div>
-                ) : null}
               </div>
             </div>
           );
@@ -2755,7 +2734,7 @@
             </div>
 
             <AndroidFrame time={time} battery={88} darkMode={false}>
-              <div style={{ minHeight: "100%", position: "relative", background: isDark ? "#0d0e10" : "var(--paper)" }}>
+              <div style={{ height: "100%", position: "relative", background: isDark ? "#0d0e10" : "var(--paper)" }}>
                 <ScreenRouter />
                 <div
                   style={{
