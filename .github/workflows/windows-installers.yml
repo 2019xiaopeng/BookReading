@@ -1,0 +1,66 @@
+name: windows-installers
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Windows packaging tools
+        run: choco install -y nsis wixtoolset
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows installers
+        run: npm run tauri build
+
+      - name: Publish installers to artifacts branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          ART_BRANCH="artifacts/windows-installers"
+          OUT_DIR="artifacts/windows"
+
+          rm -rf artifacts
+          mkdir -p "$OUT_DIR"
+
+          COUNT="$(find "src-tauri/target/release/bundle" -type f \( -name "*.msi" -o -name "*.exe" \) | wc -l | tr -d ' ')"
+          if [ "$COUNT" = "0" ]; then
+            echo "No .msi/.exe found under src-tauri/target/release/bundle"
+            find "src-tauri/target/release/bundle" -maxdepth 4 -type f || true
+            exit 1
+          fi
+
+          find "src-tauri/target/release/bundle" -type f \( -name "*.msi" -o -name "*.exe" \) -exec cp {} "$OUT_DIR/" \;
+          echo "${GITHUB_SHA}" > "$OUT_DIR/commit.txt"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout --orphan "$ART_BRANCH"
+          git rm -rf . >/dev/null 2>&1 || true
+          git add artifacts
+          git commit -m "chore: publish windows installers (${GITHUB_SHA})" || true
+          git push -f origin "HEAD:$ART_BRANCH"
