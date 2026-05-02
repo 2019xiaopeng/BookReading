@@ -29,3 +29,11 @@ export async function importBook(req: ImportBookRequest): Promise<Book> {
 export async function deleteBook(bookId: string): Promise<void> {
   return invoke<void>("delete_book", { book_id: bookId });
 }
+
+export async function getSettings(): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("get_settings");
+}
+
+export async function setSetting(key: string, value: string): Promise<void> {
+  return invoke<void>("set_setting", { key, value });
+}

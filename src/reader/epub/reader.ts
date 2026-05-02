@@ -1,6 +1,8 @@
 import ePub from "epubjs";
 import { readFile } from "@tauri-apps/plugin-fs";
 
+import type { Theme } from "../settings/types";
+
 export type TocItem = {
   label: string;
   href: string;
@@ -16,6 +18,8 @@ export type ReaderController = {
   next: () => Promise<void>;
   prev: () => Promise<void>;
   display: (target?: string) => Promise<void>;
+  setTheme: (theme: Theme) => void;
+  setFontSizePercent: (percent: number) => void;
   destroy: () => void;
 };
 
@@ -40,6 +44,18 @@ export async function createReader(opts: {
     spread: "none",
     flow: "paginated",
   });
+
+  rendition.themes.register("light", {
+    body: { background: "#ffffff", color: "#111111" },
+  });
+  rendition.themes.register("dark", {
+    body: { background: "#0f1115", color: "#e8eaf0" },
+  });
+  rendition.themes.register("sepia", {
+    body: { background: "#f7f1e1", color: "#2b2620" },
+  });
+  rendition.themes.select("light");
+  rendition.themes.fontSize("120%");
 
   rendition.on("relocated", (location: any) => {
     const cfi: string | undefined = location?.start?.cfi;
@@ -72,6 +88,12 @@ export async function createReader(opts: {
     display: async (target?: string) => {
       await rendition.display(target);
     },
+    setTheme: (theme: Theme) => {
+      rendition.themes.select(theme);
+    },
+    setFontSizePercent: (percent: number) => {
+      rendition.themes.fontSize(`${percent}%`);
+    },
     destroy: () => {
       try {
         rendition.destroy();
@@ -84,4 +106,3 @@ export async function createReader(opts: {
     },
   };
 }
-
