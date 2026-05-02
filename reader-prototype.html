@@ -583,6 +583,45 @@
         );
       }
 
+      function HintPill({ show, text, dark }) {
+        return (
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 22,
+              display: "flex",
+              justifyContent: "center",
+              pointerEvents: "none",
+              zIndex: 60,
+              opacity: show ? 1 : 0,
+              transform: show ? "translateY(0)" : "translateY(10px)",
+              transition: "transform 200ms ease, opacity 200ms ease",
+            }}
+          >
+            <div
+              style={{
+                maxWidth: 280,
+                padding: "10px 12px",
+                borderRadius: 999,
+                background: dark ? "rgba(0,0,0,0.55)" : "rgba(255,255,255,0.74)",
+                border: dark ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(18,19,22,0.10)",
+                color: dark ? "rgba(255,255,255,0.92)" : "rgba(18,19,22,0.86)",
+                fontSize: 12,
+                fontWeight: 800,
+                letterSpacing: "0.01em",
+                backdropFilter: "blur(10px)",
+                boxShadow: dark ? "0 18px 55px rgba(0,0,0,0.30)" : "0 18px 55px rgba(0,0,0,0.12)",
+                textAlign: "center",
+              }}
+            >
+              {text}
+            </div>
+          </div>
+        );
+      }
+
       function ProgressPill({ progress }) {
         return (
           <div style={{ display: "grid", gap: 8 }}>
@@ -605,7 +644,7 @@
         );
       }
 
-      function ReadingCanvas({ mode, theme, onTapLeft, onTapRight, children }) {
+      function ReadingCanvas({ mode, theme, onTapLeft, onTapCenter, onTapRight, children }) {
         const bg =
           theme === "paper"
             ? "linear-gradient(180deg, rgba(255,255,255,0.9), rgba(255,255,255,0.68))"
@@ -636,15 +675,34 @@
             </div>
             <button
               onClick={onTapLeft}
-              style={{ position: "absolute", inset: 0, width: "36%", border: "none", background: "transparent", cursor: "pointer" }}
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "30%",
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+              }}
             />
             <button
               onClick={onTapRight}
               style={{
                 position: "absolute",
                 inset: 0,
-                left: "64%",
-                width: "36%",
+                left: "70%",
+                width: "30%",
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+              }}
+            />
+            <button
+              onClick={onTapCenter}
+              style={{
+                position: "absolute",
+                inset: 0,
+                left: "30%",
+                width: "40%",
                 border: "none",
                 background: "transparent",
                 cursor: "pointer",
@@ -661,6 +719,10 @@
         const [toast, setToast] = useState(null);
         const [sheet, setSheet] = useState(null);
         const [filter, setFilter] = useState("all");
+        const [hudVisible, setHudVisible] = useState(false);
+        const hudTimerRef = useRef(null);
+        const [pageHint, setPageHint] = useState(null);
+        const pageHintTimerRef = useRef(null);
 
         const [readingPrefs, setReadingPrefs] = useState({
           theme: "paper",
@@ -746,6 +808,27 @@
           window.setTimeout(() => setToast(null), 1800);
         }
 
+        function flashHint(text) {
+          setPageHint(text);
+          window.clearTimeout(pageHintTimerRef.current);
+          pageHintTimerRef.current = window.setTimeout(() => setPageHint(null), 1100);
+        }
+
+        function hideHUD() {
+          window.clearTimeout(hudTimerRef.current);
+          hudTimerRef.current = null;
+          setHudVisible(false);
+        }
+
+        function showHUD(autoHide = false) {
+          window.clearTimeout(hudTimerRef.current);
+          hudTimerRef.current = null;
+          setHudVisible(true);
+          if (autoHide) {
+            hudTimerRef.current = window.setTimeout(() => setHudVisible(false), 2600);
+          }
+        }
+
         function getActiveLocator() {
           if (!activeBook) return null;
           if (route.name === "pdfReader") return { type: "pdf", page: pdfLoc.page, segment: pdfLoc.segment };
@@ -794,11 +877,13 @@
 
         function openReaderMenu() {
           if (!activeBook) return;
+          showHUD(false);
           setSheet("readerMenu");
         }
 
         function openHighlight() {
           if (!activeBook) return;
+          showHUD(false);
           setHighlightDraft({ color: "amber", note: "" });
           setSheet("highlight");
         }
@@ -833,17 +918,20 @@
             showToast("PDF 搜索依赖文本层（原型略）");
             return;
           }
+          showHUD(false);
           setSearchDraft({ query: "" });
           setRoute({ name: "search", bookId: activeBook.id, returnTo: route });
         }
 
         function openBookmarks() {
           if (!activeBook) return;
+          showHUD(false);
           setRoute({ name: "bookmarks", bookId: activeBook.id, returnTo: route });
         }
 
         function openAnnotations() {
           if (!activeBook) return;
+          showHUD(false);
           setRoute({ name: "annotations", bookId: activeBook.id, returnTo: route });
         }
 
@@ -854,6 +942,7 @@
           if (loc.type === "pdf") setProgressDraft({ value: (loc.page - 1) * pdfLoc.segmentsInPage + loc.segment });
           if (loc.type === "epub") setProgressDraft({ value: loc.chapter });
           if (loc.type === "text") setProgressDraft({ value: loc.page });
+          showHUD(false);
           setSheet("progress");
         }
 
@@ -982,6 +1071,7 @@
         }
 
         function openSettings() {
+          showHUD(false);
           setSheet("settings");
         }
 
@@ -1975,6 +2065,7 @@
           const globalIndex = (pdfLoc.page - 1) * pageSegments + pdfLoc.segment;
 
           function nextSegment() {
+            flashHint(`G#${globalIndex + 1}`);
             setPdfLoc((p) => {
               const next = { ...p };
               if (p.segment < p.segmentsInPage) {
@@ -1990,6 +2081,7 @@
           }
 
           function prevSegment() {
+            flashHint(`G#${Math.max(1, globalIndex - 1)}`);
             setPdfLoc((p) => {
               const next = { ...p };
               if (p.segment > 1) {
@@ -2006,26 +2098,37 @@
 
           return (
             <div style={{ minHeight: "100%", background: isDark ? "#0d0e10" : "var(--paper)" }}>
-              <ReaderHeader
-                left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
-                center={
-                  <div style={{ display: "grid", justifyItems: "center", gap: 3 }}>
-                    <div style={{ fontSize: 12, fontWeight: 900, color: ink }}>漫画 · 子页阅读</div>
-                    <div style={{ fontSize: 11, fontWeight: 650, color: muted }}>
-                      第 {pdfLoc.page} 页 · {pdfLoc.segment}/{pdfLoc.segmentsInPage}
+              {hudVisible ? (
+                <ReaderHeader
+                  left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
+                  center={
+                    <div style={{ display: "grid", justifyItems: "center", gap: 3 }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: ink }}>漫画 · 子页阅读</div>
+                      <div style={{ fontSize: 11, fontWeight: 650, color: muted }}>
+                        第 {pdfLoc.page} 页 · {pdfLoc.segment}/{pdfLoc.segmentsInPage}
+                      </div>
                     </div>
-                  </div>
-                }
-                right={
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <IconButton label="书签" onClick={() => toggleBookmark()}>{isCurrentBookmarked() ? "★" : "☆"}</IconButton>
-                    <IconButton label="菜单" onClick={() => openReaderMenu()}>⋯</IconButton>
-                  </div>
-                }
-              />
+                  }
+                  right={
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <IconButton label="书签" onClick={() => toggleBookmark()}>{isCurrentBookmarked() ? "★" : "☆"}</IconButton>
+                      <IconButton label="菜单" onClick={() => openReaderMenu()}>⋯</IconButton>
+                    </div>
+                  }
+                />
+              ) : null}
 
               <div style={{ padding: 14, display: "grid", gap: 12 }}>
-                <ReadingCanvas mode="pdf" theme={currentTheme} onTapLeft={prevSegment} onTapRight={nextSegment}>
+                <ReadingCanvas
+                  mode="pdf"
+                  theme={currentTheme}
+                  onTapLeft={prevSegment}
+                  onTapCenter={() => {
+                    if (hudVisible) hideHUD();
+                    else showHUD(false);
+                  }}
+                  onTapRight={nextSegment}
+                >
                   <div
                     style={{
                       height: 540,
@@ -2080,28 +2183,30 @@
                   </div>
                 </ReadingCanvas>
 
-                <div
-                  style={{
-                    background: isDark ? "rgba(255,255,255,0.04)" : "rgba(255,255,255,0.75)",
-                    border: isDark ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(18,19,22,0.10)",
-                    borderRadius: 18,
-                    padding: 14,
-                    display: "grid",
-                    gap: 10,
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ display: "grid", gap: 2 }}>
-                      <div style={{ fontSize: 13, fontWeight: 900, color: ink }}>{b?.title}</div>
-                      <div style={{ fontSize: 12, fontWeight: 650, color: muted }}>只存切段坐标 · 位图缓存临时生成</div>
+                {hudVisible ? (
+                  <div
+                    style={{
+                      background: isDark ? "rgba(255,255,255,0.04)" : "rgba(255,255,255,0.75)",
+                      border: isDark ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(18,19,22,0.10)",
+                      borderRadius: 18,
+                      padding: 14,
+                      display: "grid",
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ display: "grid", gap: 2 }}>
+                        <div style={{ fontSize: 13, fontWeight: 900, color: ink }}>{b?.title}</div>
+                        <div style={{ fontSize: 12, fontWeight: 650, color: muted }}>只存切段坐标 · 位图缓存临时生成</div>
+                      </div>
+                      <Pill label={fmtPercent(b?.progress || 0)} tone="neutral" />
                     </div>
-                    <Pill label={fmtPercent(b?.progress || 0)} tone="neutral" />
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <GhostButton label="上一段" onClick={prevSegment} />
+                      <PrimaryButton label="下一段" onClick={nextSegment} />
+                    </div>
                   </div>
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <GhostButton label="上一段" onClick={prevSegment} />
-                    <PrimaryButton label="下一段" onClick={nextSegment} />
-                  </div>
-                </div>
+                ) : null}
               </div>
             </div>
           );
@@ -2113,11 +2218,13 @@
           const muted = isDark ? "rgba(255,255,255,0.54)" : "rgba(18,19,22,0.58)";
 
           function nextPage() {
+            flashHint(`第 ${Math.min(textLoc.totalPages, textLoc.page + 1)}/${textLoc.totalPages} 页`);
             setTextLoc((p) => ({ ...p, page: Math.min(p.totalPages, p.page + 1) }));
             if (b) updateProgress(b.id, clamp((textLoc.page + 1) / textLoc.totalPages, 0, 1));
           }
 
           function prevPage() {
+            flashHint(`第 ${Math.max(1, textLoc.page - 1)}/${textLoc.totalPages} 页`);
             setTextLoc((p) => ({ ...p, page: Math.max(1, p.page - 1) }));
             if (b) updateProgress(b.id, clamp((textLoc.page - 1) / textLoc.totalPages, 0, 1));
           }
@@ -2135,26 +2242,37 @@
 
           return (
             <div style={{ minHeight: "100%", background: isDark ? "#0d0e10" : "var(--paper)" }}>
-              <ReaderHeader
-                left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
-                center={
-                  <div style={{ display: "grid", justifyItems: "center", gap: 3 }}>
-                    <div style={{ fontSize: 12, fontWeight: 900, color: ink }}>{b?.format === "MD" ? "Markdown" : "纯文本"} 阅读</div>
-                    <div style={{ fontSize: 11, fontWeight: 650, color: muted }}>
-                      第 {textLoc.page}/{textLoc.totalPages} 页
+              {hudVisible ? (
+                <ReaderHeader
+                  left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
+                  center={
+                    <div style={{ display: "grid", justifyItems: "center", gap: 3 }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: ink }}>{b?.format === "MD" ? "Markdown" : "纯文本"} 阅读</div>
+                      <div style={{ fontSize: 11, fontWeight: 650, color: muted }}>
+                        第 {textLoc.page}/{textLoc.totalPages} 页
+                      </div>
                     </div>
-                  </div>
-                }
-                right={
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <IconButton label="书签" onClick={() => toggleBookmark()}>{isCurrentBookmarked() ? "★" : "☆"}</IconButton>
-                    <IconButton label="菜单" onClick={() => openReaderMenu()}>⋯</IconButton>
-                  </div>
-                }
-              />
+                  }
+                  right={
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <IconButton label="书签" onClick={() => toggleBookmark()}>{isCurrentBookmarked() ? "★" : "☆"}</IconButton>
+                      <IconButton label="菜单" onClick={() => openReaderMenu()}>⋯</IconButton>
+                    </div>
+                  }
+                />
+              ) : null}
 
               <div style={{ padding: 14, display: "grid", gap: 12 }}>
-                <ReadingCanvas mode="text" theme={currentTheme} onTapLeft={prevPage} onTapRight={nextPage}>
+                <ReadingCanvas
+                  mode="text"
+                  theme={currentTheme}
+                  onTapLeft={prevPage}
+                  onTapCenter={() => {
+                    if (hudVisible) hideHUD();
+                    else showHUD(false);
+                  }}
+                  onTapRight={nextPage}
+                >
                   <div
                     style={{
                       padding: readingPrefs.margin,
@@ -2177,10 +2295,12 @@
                   </div>
                 </ReadingCanvas>
 
-                <div style={{ display: "flex", gap: 10 }}>
-                  <GhostButton label="上一页" onClick={prevPage} />
-                  <PrimaryButton label="下一页" onClick={nextPage} />
-                </div>
+                {hudVisible ? (
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <GhostButton label="上一页" onClick={prevPage} />
+                    <PrimaryButton label="下一页" onClick={nextPage} />
+                  </div>
+                ) : null}
               </div>
             </div>
           );
@@ -2192,6 +2312,7 @@
           const muted = isDark ? "rgba(255,255,255,0.54)" : "rgba(18,19,22,0.58)";
 
           function nextChapter() {
+            flashHint(`第 ${Math.min(epubLoc.chapters, epubLoc.chapter + 1)}/${epubLoc.chapters} 章`);
             setEpubLoc((p) => {
               const next = { ...p, chapter: Math.min(p.chapters, p.chapter + 1) };
               next.percent = clamp(next.chapter / next.chapters, 0, 1);
@@ -2201,6 +2322,7 @@
           }
 
           function prevChapter() {
+            flashHint(`第 ${Math.max(1, epubLoc.chapter - 1)}/${epubLoc.chapters} 章`);
             setEpubLoc((p) => {
               const next = { ...p, chapter: Math.max(1, p.chapter - 1) };
               next.percent = clamp(next.chapter / next.chapters, 0, 1);
@@ -2211,26 +2333,37 @@
 
           return (
             <div style={{ minHeight: "100%", background: isDark ? "#0d0e10" : "var(--paper)" }}>
-              <ReaderHeader
-                left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
-                center={
-                  <div style={{ display: "grid", justifyItems: "center", gap: 3 }}>
-                    <div style={{ fontSize: 12, fontWeight: 900, color: ink }}>EPUB</div>
-                    <div style={{ fontSize: 11, fontWeight: 650, color: muted }}>
-                      {epubLoc.chapter}/{epubLoc.chapters} 章 · {fmtPercent(epubLoc.percent)}
+              {hudVisible ? (
+                <ReaderHeader
+                  left={<IconButton label="返回" onClick={() => goBack()}>←</IconButton>}
+                  center={
+                    <div style={{ display: "grid", justifyItems: "center", gap: 3 }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: ink }}>EPUB</div>
+                      <div style={{ fontSize: 11, fontWeight: 650, color: muted }}>
+                        {epubLoc.chapter}/{epubLoc.chapters} 章 · {fmtPercent(epubLoc.percent)}
+                      </div>
                     </div>
-                  </div>
-                }
-                right={
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <IconButton label="书签" onClick={() => toggleBookmark()}>{isCurrentBookmarked() ? "★" : "☆"}</IconButton>
-                    <IconButton label="菜单" onClick={() => openReaderMenu()}>⋯</IconButton>
-                  </div>
-                }
-              />
+                  }
+                  right={
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <IconButton label="书签" onClick={() => toggleBookmark()}>{isCurrentBookmarked() ? "★" : "☆"}</IconButton>
+                      <IconButton label="菜单" onClick={() => openReaderMenu()}>⋯</IconButton>
+                    </div>
+                  }
+                />
+              ) : null}
 
               <div style={{ padding: 14, display: "grid", gap: 12 }}>
-                <ReadingCanvas mode="text" theme={currentTheme} onTapLeft={prevChapter} onTapRight={nextChapter}>
+                <ReadingCanvas
+                  mode="text"
+                  theme={currentTheme}
+                  onTapLeft={prevChapter}
+                  onTapCenter={() => {
+                    if (hudVisible) hideHUD();
+                    else showHUD(false);
+                  }}
+                  onTapRight={nextChapter}
+                >
                   <div
                     style={{
                       padding: readingPrefs.margin,
@@ -2268,10 +2401,12 @@
                     </div>
                   </div>
                 </ReadingCanvas>
-                <div style={{ display: "flex", gap: 10 }}>
-                  <GhostButton label="上一章" onClick={prevChapter} />
-                  <PrimaryButton label="下一章" onClick={nextChapter} />
-                </div>
+                {hudVisible ? (
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <GhostButton label="上一章" onClick={prevChapter} />
+                    <PrimaryButton label="下一章" onClick={nextChapter} />
+                  </div>
+                ) : null}
               </div>
             </div>
           );
@@ -2602,6 +2737,12 @@
           }
         }, [route.name, route.bookId]);
 
+        useEffect(() => {
+          if (route.name === "pdfReader" || route.name === "epubReader" || route.name === "textReader") {
+            hideHUD();
+          }
+        }, [route.name, route.bookId]);
+
         return (
           <div style={{ display: "grid", justifyItems: "center", gap: 18 }}>
             <div style={{ display: "grid", justifyItems: "center", gap: 10 }}>
@@ -2626,6 +2767,7 @@
                     zIndex: 45,
                   }}
                 />
+                <HintPill show={!!pageHint} text={pageHint || ""} dark={isDark} />
                 <TocDrawer />
                 <ReadingSettingsSheet />
                 <ReaderMenuSheet />
