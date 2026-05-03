@@ -1,9 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { appDataDir } from "@tauri-apps/api/path";
+import { BaseDirectory, readFile } from "@tauri-apps/plugin-fs";
 
 import type { Book, FavoriteQuote } from "../tauri/invoke";
 import { deleteFavoriteQuote, listBooks, listFavoriteBooks, listFavoriteQuotes, setBookFavorite } from "../tauri/invoke";
+
+function extToMime(ext: string | null): string {
+  const e = (ext ?? "").toLowerCase();
+  if (e === "png") return "image/png";
+  if (e === "jpg" || e === "jpeg") return "image/jpeg";
+  if (e === "webp") return "image/webp";
+  return "application/octet-stream";
+}
 
 export default function FavoritesPage() {
   const navigate = useNavigate();
@@ -14,6 +23,8 @@ export default function FavoritesPage() {
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [filterBookId, setFilterBookId] = useState<string | "all">("all");
+  const [appDataBase, setAppDataBase] = useState<string | null>(null);
+  const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
 
   const bookIdToTitle = useMemo(() => {
     const map = new Map<string, string>();
@@ -43,6 +54,49 @@ export default function FavoritesPage() {
     setLoading(true);
     refreshBooks().finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    appDataDir().then((p) => setAppDataBase(p)).catch(() => {});
+  }, []);
+
+  function appDataRelativePath(absPath: string): string | null {
+    if (!appDataBase) return null;
+    const baseNorm = appDataBase.split("/").join("\\").replace(/\\+$/, "");
+    const absNorm = absPath.split("/").join("\\");
+    if (!absNorm.toLowerCase().startsWith(baseNorm.toLowerCase())) return null;
+    return absNorm.slice(baseNorm.length).replace(/^\\+/, "");
+  }
+
+  useEffect(() => {
+    if (!appDataBase) return;
+    const abort = new AbortController();
+    const pending: Promise<void>[] = [];
+
+    for (const b of favoriteBooks) {
+      if (!b.cover_path) continue;
+      if (coverUrls[b.cover_path]) continue;
+      const rel = appDataRelativePath(b.cover_path);
+      if (!rel) continue;
+
+      pending.push(
+        (async () => {
+          try {
+            const bytes = await readFile(rel, { baseDir: BaseDirectory.AppData });
+            if (abort.signal.aborted) return;
+            const ext = b.cover_path?.split(".").pop() ?? null;
+            const url = URL.createObjectURL(new Blob([bytes], { type: extToMime(ext) }));
+            setCoverUrls((prev) => ({ ...prev, [b.cover_path as string]: url }));
+          } catch {
+          }
+        })(),
+      );
+    }
+
+    return () => {
+      abort.abort();
+      void Promise.allSettled(pending);
+    };
+  }, [favoriteBooks, appDataBase]);
 
   useEffect(() => {
     if (tab !== "quotes") return;
@@ -92,9 +146,9 @@ export default function FavoritesPage() {
                   flexShrink: 0,
                 }}
               >
-                {b.cover_path ? (
+                {b.cover_path && coverUrls[b.cover_path] ? (
                   <img
-                    src={convertFileSrc(b.cover_path)}
+                    src={coverUrls[b.cover_path]}
                     alt=""
                     style={{ width: "100%", height: "100%", objectFit: "cover" }}
                   />
@@ -204,4 +258,3 @@ export default function FavoritesPage() {
     </div>
   );
 }
-

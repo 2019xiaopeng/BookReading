@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::app_paths;
 use crate::db;
-use crate::models::{Book, ImportBookRequest};
+use crate::models::{Book, ImportBookRequest, UpdateBookMetadataRequest};
 
 fn now_ts() -> i64 {
     OffsetDateTime::now_utc().unix_timestamp()
@@ -71,6 +71,27 @@ fn delete_book_by_id(conn: &Connection, book_id: &str) -> Result<(Option<String>
     Ok((library_path, cover_path))
 }
 
+fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book, rusqlite::Error> {
+    conn.query_row(
+        "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite
+         FROM books
+         WHERE id = ?1",
+        [book_id],
+        |row| {
+            Ok(Book {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                author: row.get(2)?,
+                cover_path: row.get(3)?,
+                library_path: row.get(4)?,
+                added_at: row.get(5)?,
+                last_opened_at: row.get(6)?,
+                is_favorite: row.get(7)?,
+            })
+        },
+    )
+}
+
 #[tauri::command]
 pub fn list_books(app: tauri::AppHandle) -> Result<Vec<Book>, String> {
     let conn = db::open_db(&app)?;
@@ -129,6 +150,56 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
     insert_book(&conn, &book).map_err(|e| format!("failed to insert book: {e}"))?;
 
     Ok(book)
+}
+
+#[tauri::command]
+pub fn update_book_metadata(app: tauri::AppHandle, req: UpdateBookMetadataRequest) -> Result<Book, String> {
+    let conn = db::open_db(&app)?;
+
+    let existing =
+        fetch_book_by_id(&conn, &req.book_id).map_err(|e| format!("failed to fetch book: {e}"))?;
+
+    let cover_path: Option<String> =
+        match (req.cover_bytes_base64.as_deref(), req.cover_ext.as_deref()) {
+            (Some(b64), Some(ext)) if !b64.is_empty() && !ext.is_empty() => {
+                let ext = ext
+                    .trim()
+                    .trim_start_matches('.')
+                    .to_lowercase();
+                let allowed = ["png", "jpg", "jpeg", "webp"];
+                if !allowed.contains(&ext.as_str()) {
+                    existing.cover_path.clone()
+                } else {
+                    let covers_dir = app_paths::covers_dir(&app)?;
+                    fs::create_dir_all(&covers_dir)
+                        .map_err(|e| format!("failed to create covers dir: {e}"))?;
+
+                    let b64 = b64.split(',').last().unwrap_or(b64);
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(b64)
+                        .map_err(|e| format!("failed to decode cover base64: {e}"))?;
+                    let path = covers_dir.join(format!("{}.{}", req.book_id, ext));
+                    fs::write(&path, bytes).map_err(|e| format!("failed to write cover: {e}"))?;
+
+                    if let Some(old) = existing.cover_path.as_ref() {
+                        if old != path.to_string_lossy().as_ref() {
+                            let _ = fs::remove_file(old);
+                        }
+                    }
+
+                    Some(path.to_string_lossy().to_string())
+                }
+            }
+            _ => existing.cover_path.clone(),
+        };
+
+    conn.execute(
+        "UPDATE books SET title = ?2, author = ?3, cover_path = ?4 WHERE id = ?1",
+        params![req.book_id, req.title, req.author, cover_path],
+    )
+    .map_err(|e| format!("failed to update book: {e}"))?;
+
+    fetch_book_by_id(&conn, &req.book_id).map_err(|e| format!("failed to fetch book: {e}"))
 }
 
 #[tauri::command]

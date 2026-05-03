@@ -22,6 +22,15 @@ pub struct ImportBookRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateBookMetadataRequest {
+    pub book_id: String,
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub cover_bytes_base64: Option<String>,
+    pub cover_ext: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadingState {
     pub book_id: String,
     pub cfi: String,

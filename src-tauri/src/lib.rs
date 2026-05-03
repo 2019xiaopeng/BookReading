@@ -6,7 +6,7 @@ mod models;
 use std::fs;
 use std::io::Write;
 
-use commands::library::{delete_book, import_book, list_books};
+use commands::library::{delete_book, import_book, list_books, update_book_metadata};
 use commands::annotations::{
     add_bookmark, add_highlight, delete_bookmark, delete_highlight, list_bookmarks, list_highlights,
 };
@@ -56,6 +56,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_books,
             import_book,
+            update_book_metadata,
             delete_book,
             list_bookmarks,
             add_bookmark,

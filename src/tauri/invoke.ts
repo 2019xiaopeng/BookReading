@@ -19,12 +19,24 @@ export type ImportBookRequest = {
   cover_ext: string | null;
 };
 
+export type UpdateBookMetadataRequest = {
+  book_id: string;
+  title: string | null;
+  author: string | null;
+  cover_bytes_base64: string | null;
+  cover_ext: string | null;
+};
+
 export async function listBooks(): Promise<Book[]> {
   return invoke<Book[]>("list_books");
 }
 
 export async function importBook(req: ImportBookRequest): Promise<Book> {
   return invoke<Book>("import_book", { req });
+}
+
+export async function updateBookMetadata(req: UpdateBookMetadataRequest): Promise<Book> {
+  return invoke<Book>("update_book_metadata", { req });
 }
 
 export async function deleteBook(bookId: string): Promise<void> {

@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { appDataDir } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
-import { readFile } from "@tauri-apps/plugin-fs";
+import { BaseDirectory, readFile } from "@tauri-apps/plugin-fs";
 import ePub from "epubjs";
 
 import type { Book } from "../tauri/invoke";
-import { deleteBook, importBook, listBooks, setBookFavorite } from "../tauri/invoke";
+import { deleteBook, importBook, listBooks, setBookFavorite, updateBookMetadata } from "../tauri/invoke";
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -28,6 +28,18 @@ function mimeToExt(mime: string | null): string | null {
   return null;
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
+function extToMime(ext: string | null): string {
+  const e = (ext ?? "").toLowerCase();
+  if (e === "png") return "image/png";
+  if (e === "jpg" || e === "jpeg") return "image/jpeg";
+  if (e === "webp") return "image/webp";
+  return "application/octet-stream";
+}
+
 function formatTitle(book: Book): string {
   return book.title?.trim() || "未命名";
 }
@@ -40,6 +52,8 @@ export default function LibraryPage() {
   const navigate = useNavigate();
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(false);
+  const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
+  const [appDataBase, setAppDataBase] = useState<string | null>(null);
 
   const booksSorted = useMemo(() => books, [books]);
 
@@ -52,6 +66,49 @@ export default function LibraryPage() {
     refresh();
   }, []);
 
+  useEffect(() => {
+    appDataDir().then((p) => setAppDataBase(p)).catch(() => {});
+  }, []);
+
+  function appDataRelativePath(absPath: string): string | null {
+    if (!appDataBase) return null;
+    const baseNorm = appDataBase.split("/").join("\\").replace(/\\+$/, "");
+    const absNorm = absPath.split("/").join("\\");
+    if (!absNorm.toLowerCase().startsWith(baseNorm.toLowerCase())) return null;
+    return absNorm.slice(baseNorm.length).replace(/^\\+/, "");
+  }
+
+  useEffect(() => {
+    if (!appDataBase) return;
+    const abort = new AbortController();
+    const pending: Promise<void>[] = [];
+
+    for (const b of books) {
+      if (!b.cover_path) continue;
+      if (coverUrls[b.cover_path]) continue;
+      const rel = appDataRelativePath(b.cover_path);
+      if (!rel) continue;
+
+      pending.push(
+        (async () => {
+          try {
+            const bytes = await readFile(rel, { baseDir: BaseDirectory.AppData });
+            if (abort.signal.aborted) return;
+            const ext = b.cover_path?.split(".").pop() ?? null;
+            const url = URL.createObjectURL(new Blob([bytes], { type: extToMime(ext) }));
+            setCoverUrls((prev) => ({ ...prev, [b.cover_path as string]: url }));
+          } catch {
+          }
+        })(),
+      );
+    }
+
+    return () => {
+      abort.abort();
+      void Promise.allSettled(pending);
+    };
+  }, [books, appDataBase]);
+
   async function onImport() {
     if (loading) return;
     setLoading(true);
@@ -62,40 +119,54 @@ export default function LibraryPage() {
       });
       if (!selected || Array.isArray(selected)) return;
 
-      const bytes = await readFile(selected);
-      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-      const book: any = ePub(buffer);
-      await Promise.race([
-        book.ready,
-        new Promise((_, reject) => window.setTimeout(() => reject(new Error("timeout")), 60_000)),
-      ]);
-      const metadata = await book.loaded.metadata;
-      const title = (metadata?.title as string | undefined) ?? null;
-      const author =
-        (metadata?.creator as string | undefined) ??
-        (metadata?.author as string | undefined) ??
-        null;
-
-      let cover_bytes_base64: string | null = null;
-      let cover_ext: string | null = null;
-      try {
-        const coverUrl = (await book.coverUrl?.()) ?? null;
-        if (coverUrl) {
-          const res = await fetch(coverUrl);
-          const buffer = await res.arrayBuffer();
-          cover_bytes_base64 = arrayBufferToBase64(buffer);
-          cover_ext = mimeToExt(res.headers.get("content-type")) ?? "png";
-        }
-      } catch {
-      }
-
-      await importBook({
+      const imported = await importBook({
         source_path: selected,
-        title,
-        author,
-        cover_bytes_base64,
-        cover_ext,
+        title: null,
+        author: null,
+        cover_bytes_base64: null,
+        cover_ext: null,
       });
+
+      const rel = imported.library_path ? appDataRelativePath(imported.library_path) : null;
+      if (rel) {
+        try {
+          const bytes = await readFile(rel, { baseDir: BaseDirectory.AppData });
+          const book: any = ePub(toArrayBuffer(bytes));
+          await Promise.race([
+            book.ready,
+            new Promise((_, reject) => window.setTimeout(() => reject(new Error("timeout")), 60_000)),
+          ]);
+          const metadata = await book.loaded.metadata;
+          const title = (metadata?.title as string | undefined) ?? null;
+          const author =
+            (metadata?.creator as string | undefined) ??
+            (metadata?.author as string | undefined) ??
+            null;
+
+          let cover_bytes_base64: string | null = null;
+          let cover_ext: string | null = null;
+          try {
+            const coverUrl = (await book.coverUrl?.()) ?? null;
+            if (coverUrl) {
+              const res = await fetch(coverUrl);
+              const buffer = await res.arrayBuffer();
+              cover_bytes_base64 = arrayBufferToBase64(buffer);
+              cover_ext = mimeToExt(res.headers.get("content-type")) ?? "png";
+            }
+          } catch {
+          }
+
+          await updateBookMetadata({
+            book_id: imported.id,
+            title,
+            author,
+            cover_bytes_base64,
+            cover_ext,
+          });
+        } catch (e) {
+          window.alert(String(e));
+        }
+      }
 
       await refresh();
     } finally {
@@ -112,6 +183,8 @@ export default function LibraryPage() {
     try {
       await deleteBook(bookId);
       await refresh();
+    } catch (e) {
+      window.alert(String(e));
     } finally {
       setLoading(false);
     }
@@ -154,9 +227,9 @@ export default function LibraryPage() {
                 flexShrink: 0,
               }}
             >
-              {b.cover_path ? (
+              {b.cover_path && coverUrls[b.cover_path] ? (
                 <img
-                  src={convertFileSrc(b.cover_path)}
+                  src={coverUrls[b.cover_path]}
                   alt=""
                   style={{ width: "100%", height: "100%", objectFit: "cover" }}
                 />
