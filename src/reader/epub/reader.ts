@@ -188,6 +188,11 @@ export async function createReader(opts: {
             }
           }
         } catch {
+        } finally {
+          try {
+            section.unload?.();
+          } catch {
+          }
         }
       }
 

@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { appDataDir } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
-import { BaseDirectory, readFile } from "@tauri-apps/plugin-fs";
 import ePub from "epubjs";
 
 import type { Book } from "../tauri/invoke";
 import { deleteBook, importBook, listBooks, setBookFavorite, updateBookMetadata } from "../tauri/invoke";
+import { extToMime, readAppDataBlobUrl, readAppDataFile, revokeObjectUrl } from "../tauri/appDataPaths";
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -32,14 +31,6 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 }
 
-function extToMime(ext: string | null): string {
-  const e = (ext ?? "").toLowerCase();
-  if (e === "png") return "image/png";
-  if (e === "jpg" || e === "jpeg") return "image/jpeg";
-  if (e === "webp") return "image/webp";
-  return "application/octet-stream";
-}
-
 function formatTitle(book: Book): string {
   return book.title?.trim() || "未命名";
 }
@@ -53,7 +44,6 @@ export default function LibraryPage() {
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(false);
   const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
-  const [appDataBase, setAppDataBase] = useState<string | null>(null);
 
   const booksSorted = useMemo(() => books, [books]);
 
@@ -67,36 +57,46 @@ export default function LibraryPage() {
   }, []);
 
   useEffect(() => {
-    appDataDir().then((p) => setAppDataBase(p)).catch(() => {});
-  }, []);
-
-  function appDataRelativePath(absPath: string): string | null {
-    if (!appDataBase) return null;
-    const baseNorm = appDataBase.split("/").join("\\").replace(/\\+$/, "");
-    const absNorm = absPath.split("/").join("\\");
-    if (!absNorm.toLowerCase().startsWith(baseNorm.toLowerCase())) return null;
-    return absNorm.slice(baseNorm.length).replace(/^\\+/, "");
-  }
-
-  useEffect(() => {
-    if (!appDataBase) return;
     const abort = new AbortController();
     const pending: Promise<void>[] = [];
 
+    const wanted = new Set<string>();
     for (const b of books) {
-      if (!b.cover_path) continue;
-      if (coverUrls[b.cover_path]) continue;
-      const rel = appDataRelativePath(b.cover_path);
-      if (!rel) continue;
+      if (b.cover_path) wanted.add(b.cover_path);
+    }
+
+    setCoverUrls((prev) => {
+      const next = { ...prev };
+      for (const key of Object.keys(next)) {
+        if (!wanted.has(key)) {
+          revokeObjectUrl(next[key]);
+          delete next[key];
+        }
+      }
+      return next;
+    });
+
+    for (const b of books) {
+      const coverPath = b.cover_path;
+      if (!coverPath) continue;
+      if (coverUrls[coverPath]) continue;
 
       pending.push(
         (async () => {
           try {
-            const bytes = await readFile(rel, { baseDir: BaseDirectory.AppData });
-            if (abort.signal.aborted) return;
-            const ext = b.cover_path?.split(".").pop() ?? null;
-            const url = URL.createObjectURL(new Blob([bytes], { type: extToMime(ext) }));
-            setCoverUrls((prev) => ({ ...prev, [b.cover_path as string]: url }));
+            const ext = coverPath.split(".").pop() ?? null;
+            const url = await readAppDataBlobUrl(coverPath, extToMime(ext));
+            if (abort.signal.aborted) {
+              revokeObjectUrl(url);
+              return;
+            }
+            setCoverUrls((prev) => {
+              if (prev[coverPath]) {
+                revokeObjectUrl(url);
+                return prev;
+              }
+              return { ...prev, [coverPath]: url };
+            });
           } catch {
           }
         })(),
@@ -107,7 +107,16 @@ export default function LibraryPage() {
       abort.abort();
       void Promise.allSettled(pending);
     };
-  }, [books, appDataBase]);
+  }, [books, coverUrls]);
+
+  useEffect(() => {
+    return () => {
+      setCoverUrls((prev) => {
+        for (const url of Object.values(prev)) revokeObjectUrl(url);
+        return {};
+      });
+    };
+  }, []);
 
   async function onImport() {
     if (loading) return;
@@ -127,10 +136,9 @@ export default function LibraryPage() {
         cover_ext: null,
       });
 
-      const rel = imported.library_path ? appDataRelativePath(imported.library_path) : null;
-      if (rel) {
+      if (imported.library_path) {
         try {
-          const bytes = await readFile(rel, { baseDir: BaseDirectory.AppData });
+          const bytes = await readAppDataFile(imported.library_path);
           const book: any = ePub(toArrayBuffer(bytes));
           await Promise.race([
             book.ready,

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { appDataDir } from "@tauri-apps/api/path";
 
 import type { Book } from "../tauri/invoke";
 import {
@@ -55,16 +54,6 @@ export default function ReaderPage() {
   const lastCfiRef = useRef<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const wheelCooldownRef = useRef(0);
-  const appDataDirRef = useRef<string | null>(null);
-
-  async function appDataRelativePath(absPath: string): Promise<string | null> {
-    const base = appDataDirRef.current ?? (await appDataDir());
-    appDataDirRef.current = base;
-    const baseNorm = base.split("/").join("\\").replace(/\\+$/, "");
-    const absNorm = absPath.split("/").join("\\");
-    if (!absNorm.toLowerCase().startsWith(baseNorm.toLowerCase())) return null;
-    return absNorm.slice(baseNorm.length).replace(/^\\+/, "");
-  }
 
   useEffect(() => {
     (async () => {
@@ -101,15 +90,14 @@ export default function ReaderPage() {
       setTocLoading(true);
 
       try {
-        const rel = await appDataRelativePath(book.library_path);
-        if (!rel) {
-          setReaderError(`无法访问书籍文件：${book.library_path}`);
+        if (/^[a-zA-Z]:[\\/]/.test(book.library_path) || book.library_path.startsWith("\\\\")) {
+          setReaderError(`书籍路径需要迁移或重导入：${book.library_path}`);
           setTocLoading(false);
           return;
         }
         controllerRef.current = await createReader({
           container: containerRef.current,
-          libraryPath: rel,
+          libraryPath: book.library_path,
           onRelocated: ({ cfi, percent }) => {
             lastCfiRef.current = cfi;
             if (typeof percent === "number") setPercent(percent);
