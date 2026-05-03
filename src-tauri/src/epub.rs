@@ -5,15 +5,33 @@ use std::path::{Path, PathBuf};
 use roxmltree::Document;
 use zip::ZipArchive;
 
-fn read_zip_text<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<String, String> {
+const MAX_CONTAINER_XML_BYTES: u64 = 1_000_000;
+const MAX_OPF_XML_BYTES: u64 = 4_000_000;
+const MAX_COVER_BYTES: u64 = 8_000_000;
+
+fn read_zip_text_limited<R: Read + std::io::Seek>(
+    zip: &mut ZipArchive<R>,
+    name: &str,
+    max_bytes: u64,
+) -> Result<String, String> {
     let mut f = zip.by_name(name).map_err(|e| format!("zip missing {name}: {e}"))?;
+    if f.size() > max_bytes {
+        return Err(format!("zip entry too large: {name}"));
+    }
     let mut s = String::new();
     f.read_to_string(&mut s).map_err(|e| format!("failed to read {name}: {e}"))?;
     Ok(s)
 }
 
-fn read_zip_bytes<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<Vec<u8>, String> {
+fn read_zip_bytes_limited<R: Read + std::io::Seek>(
+    zip: &mut ZipArchive<R>,
+    name: &str,
+    max_bytes: u64,
+) -> Result<Vec<u8>, String> {
     let mut f = zip.by_name(name).map_err(|e| format!("zip missing {name}: {e}"))?;
+    if f.size() > max_bytes {
+        return Err(format!("zip entry too large: {name}"));
+    }
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).map_err(|e| format!("failed to read {name}: {e}"))?;
     Ok(buf)
@@ -97,6 +115,23 @@ fn ext_from_media_type(media_type: &str) -> Option<&'static str> {
     None
 }
 
+fn normalize_zip_path(base: &Path, href: &str) -> Option<PathBuf> {
+    let mut out = PathBuf::from(base);
+    for c in Path::new(&href.replace('\\', "/")).components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(p) => out.push(p),
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
 pub struct EpubMetadata {
     pub title: Option<String>,
     pub author: Option<String>,
@@ -108,10 +143,10 @@ pub fn extract_epub_metadata(epub_path: &Path) -> Result<EpubMetadata, String> {
     let file = File::open(epub_path).map_err(|e| format!("failed to open epub: {e}"))?;
     let mut zip = ZipArchive::new(file).map_err(|e| format!("invalid zip: {e}"))?;
 
-    let container_xml = read_zip_text(&mut zip, "META-INF/container.xml")
-        .or_else(|_| read_zip_text(&mut zip, "meta-inf/container.xml"))?;
+    let container_xml = read_zip_text_limited(&mut zip, "META-INF/container.xml", MAX_CONTAINER_XML_BYTES)
+        .or_else(|_| read_zip_text_limited(&mut zip, "meta-inf/container.xml", MAX_CONTAINER_XML_BYTES))?;
     let rootfile = find_rootfile_path(&container_xml)?;
-    let opf_xml = read_zip_text(&mut zip, &rootfile)?;
+    let opf_xml = read_zip_text_limited(&mut zip, &rootfile, MAX_OPF_XML_BYTES)?;
 
     let doc = Document::parse(&opf_xml).map_err(|e| format!("invalid opf: {e}"))?;
     let title = first_dc_text(&doc, "title");
@@ -120,9 +155,12 @@ pub fn extract_epub_metadata(epub_path: &Path) -> Result<EpubMetadata, String> {
     let opf_dir = PathBuf::from(&rootfile).parent().map(|p| p.to_path_buf()).unwrap_or_default();
 
     let (cover_bytes, cover_ext) = if let Some((href, media_type)) = find_cover_href(&doc) {
-        let cover_path = opf_dir.join(href.replace('\\', "/"));
+        let cover_path = match normalize_zip_path(&opf_dir, &href) {
+            Some(p) => p,
+            None => PathBuf::from(&opf_dir),
+        };
         let cover_name = cover_path.to_string_lossy().to_string();
-        let bytes = read_zip_bytes(&mut zip, &cover_name).ok();
+        let bytes = read_zip_bytes_limited(&mut zip, &cover_name, MAX_COVER_BYTES).ok();
         let ext = cover_path
             .extension()
             .and_then(|e| e.to_str())
@@ -140,4 +178,3 @@ pub fn extract_epub_metadata(epub_path: &Path) -> Result<EpubMetadata, String> {
         cover_ext,
     })
 }
-
