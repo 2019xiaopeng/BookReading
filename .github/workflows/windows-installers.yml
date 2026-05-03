@@ -15,6 +15,9 @@ jobs:
     concurrency:
       group: windows-installers-${{ github.ref }}
       cancel-in-progress: true
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
