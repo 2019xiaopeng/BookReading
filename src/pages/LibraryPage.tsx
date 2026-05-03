@@ -3,9 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import type { Book } from "../tauri/invoke";
-import { deleteBook, importBook, listBooks, setBookFavorite, updateBookMetadata } from "../tauri/invoke";
-import { extToMime, readAppDataBlobUrl, readAppDataFile, revokeObjectUrl } from "../tauri/appDataPaths";
-import { extractEpubMetadataInWorker } from "../reader/epub/metadataWorker";
+import { deleteBook, importBook, listBooks, setBookFavorite } from "../tauri/invoke";
+import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../tauri/appDataPaths";
 
 function formatTitle(book: Book): string {
   return book.title?.trim() || "未命名";
@@ -107,7 +106,7 @@ export default function LibraryPage() {
         return;
       }
 
-      const imported = await importBook({
+      await importBook({
         source_path: selected,
         title: null,
         author: null,
@@ -117,25 +116,6 @@ export default function LibraryPage() {
 
       await refresh();
       setLoading(false);
-
-      if (imported.library_path) {
-        void (async () => {
-          try {
-            const bytes = await readAppDataFile(imported.library_path);
-            const meta = await extractEpubMetadataInWorker(bytes);
-            await updateBookMetadata({
-              book_id: imported.id,
-              title: meta.title,
-              author: meta.author,
-              cover_bytes_base64: meta.cover_bytes_base64,
-              cover_ext: meta.cover_ext,
-            });
-            await refresh();
-          } catch (e) {
-            window.alert(String(e));
-          }
-        })();
-      }
       return;
     } finally {
       setLoading(false);
