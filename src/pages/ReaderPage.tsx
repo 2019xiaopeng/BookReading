@@ -278,16 +278,6 @@ export default function ReaderPage() {
     await setSetting("pageAnimation", next.pageAnimation);
   }
 
-  function themeColors(theme: Theme): { bg: string; border: string; text: string; subText: string } {
-    if (theme === "dark") {
-      return { bg: "#0f1115", border: "rgba(255,255,255,0.12)", text: "#e8eaf0", subText: "rgba(232,234,240,0.7)" };
-    }
-    if (theme === "sepia") {
-      return { bg: "#f7f1e1", border: "rgba(0,0,0,0.12)", text: "#2b2620", subText: "rgba(43,38,32,0.65)" };
-    }
-    return { bg: "#ffffff", border: "rgba(0,0,0,0.12)", text: "#111111", subText: "rgba(0,0,0,0.6)" };
-  }
-
   async function animateTurn(direction: "next" | "prev") {
     const ctrl = controllerRef.current;
     const el = viewerRef.current;
@@ -321,9 +311,9 @@ export default function ReaderPage() {
   }
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: themeColors(settings.theme).bg, color: themeColors(settings.theme).text }}>
+    <div data-theme={settings.theme} style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
       {!isImmersive ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: 12, borderBottom: `1px solid ${themeColors(settings.theme).border}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: 12, borderBottom: "1px solid var(--border)" }}>
           <button onClick={() => navigate("/")}>返回书库</button>
           <div style={{ fontSize: 16, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {book?.title ?? "阅读"}
@@ -365,7 +355,7 @@ export default function ReaderPage() {
             设置
           </button>
           <button onClick={() => setIsImmersive(true)}>沉浸</button>
-          <div style={{ color: themeColors(settings.theme).subText, fontVariantNumeric: "tabular-nums" }}>
+          <div style={{ color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>
             {typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
           </div>
         </div>
@@ -375,7 +365,7 @@ export default function ReaderPage() {
 
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         {!isImmersive ? (
-          <div style={{ width: 300, borderRight: `1px solid ${themeColors(settings.theme).border}`, padding: 12, overflow: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ width: 300, borderRight: "1px solid var(--border)", padding: 12, overflow: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={() => setSideTab("toc")} disabled={sideTab === "toc"}>
                 目录
@@ -411,9 +401,9 @@ export default function ReaderPage() {
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 8 }}>目录</div>
                 {tocLoading ? (
-                  <div style={{ color: themeColors(settings.theme).subText }}>加载中…</div>
+                  <div style={{ color: "var(--text-muted)" }}>加载中…</div>
                 ) : toc.length === 0 ? (
-                  <div style={{ color: themeColors(settings.theme).subText }}>暂无目录</div>
+                  <div style={{ color: "var(--text-muted)" }}>暂无目录</div>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     {toc.map((item) => (
@@ -533,7 +523,7 @@ export default function ReaderPage() {
           </div>
         ) : null}
 
-        <div ref={viewerRef} style={{ position: "relative", flex: 1, minWidth: 0, background: "white" }}>
+        <div ref={viewerRef} style={{ position: "relative", flex: 1, minWidth: 0, background: "var(--panel-solid)" }}>
           <div ref={containerRef} style={{ height: "100%", width: "100%", background: "transparent" }} />
           {readerError ? (
             <div
@@ -544,18 +534,19 @@ export default function ReaderPage() {
                 alignItems: "center",
                 justifyContent: "center",
                 padding: 16,
-                background: "rgba(255,255,255,0.92)",
+                background: "rgba(0,0,0,0.45)",
                 zIndex: 10,
               }}
             >
-              <div style={{ maxWidth: 720, width: "100%", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 12, padding: 14, background: "white" }}>
+              <div style={{ maxWidth: 720, width: "100%", border: "1px solid var(--border)", borderRadius: 14, padding: 14, background: "var(--panel-solid)", boxShadow: "var(--shadow-sm)" }}>
                 <div style={{ fontWeight: 600, marginBottom: 8 }}>加载失败</div>
-                <div style={{ whiteSpace: "pre-wrap", color: "rgba(0,0,0,0.75)", marginBottom: 12 }}>{readerError}</div>
+                <div style={{ whiteSpace: "pre-wrap", color: "var(--text-muted)", marginBottom: 12 }}>{readerError}</div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button
                     onClick={() => {
                       void navigator.clipboard?.writeText(readerError);
                     }}
+                    className="btn-primary"
                   >
                     复制错误
                   </button>
@@ -565,6 +556,7 @@ export default function ReaderPage() {
                       setTocLoading(true);
                       controllerRef.current?.display();
                     }}
+                    className="btn-primary"
                   >
                     重试
                   </button>
