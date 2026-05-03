@@ -159,6 +159,56 @@ fn merge_optional_text(update: Option<String>, existing: Option<String>) -> Opti
 }
 
 #[tauri::command]
+pub fn repair_book_metadata(app: tauri::AppHandle, book_id: String) -> Result<Book, String> {
+    let conn = db::open_db(&app)?;
+    let existing =
+        fetch_book_by_id(&conn, &book_id).map_err(|e| format!("failed to fetch book: {e}"))?;
+
+    let books_dir = app_paths::books_dir(&app)?;
+    let epub_abs = books_dir.join(format!("{book_id}.epub"));
+    if !epub_abs.exists() {
+        return Ok(existing);
+    }
+
+    let extracted = epub::extract_epub_metadata(&epub_abs).ok();
+    let title = merge_optional_text(extracted.as_ref().and_then(|m| m.title.clone()), existing.title.clone());
+    let author = merge_optional_text(extracted.as_ref().and_then(|m| m.author.clone()), existing.author.clone());
+
+    let mut cover_path = existing.cover_path.clone();
+    if cover_path.is_none() {
+        if let Some(bytes) = extracted.as_ref().and_then(|m| m.cover_bytes.as_ref()) {
+            if !bytes.is_empty() {
+                let ext = extracted
+                    .as_ref()
+                    .and_then(|m| m.cover_ext.as_ref())
+                    .map(|s| s.trim().trim_start_matches('.').to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "png".to_string());
+                let allowed = ["png", "jpg", "jpeg", "webp"];
+                if allowed.contains(&ext.as_str()) {
+                    let covers_dir = app_paths::covers_dir(&app)?;
+                    fs::create_dir_all(&covers_dir)
+                        .map_err(|e| format!("failed to create covers dir: {e}"))?;
+                    let final_cover_abs = covers_dir.join(format!("{book_id}.{ext}"));
+                    let tmp_cover_abs = covers_dir.join(format!("{book_id}.{ext}.part"));
+                    atomic_write_to(&tmp_cover_abs, &final_cover_abs, bytes)
+                        .map_err(|e| format!("failed to write cover: {e}"))?;
+                    cover_path = Some(format!("library/covers/{book_id}.{ext}"));
+                }
+            }
+        }
+    }
+
+    conn.execute(
+        "UPDATE books SET title = ?2, author = ?3, cover_path = ?4 WHERE id = ?1",
+        params![book_id, title, author, cover_path],
+    )
+    .map_err(|e| format!("failed to update book: {e}"))?;
+
+    fetch_book_by_id(&conn, &book_id).map_err(|e| format!("failed to fetch book: {e}"))
+}
+
+#[tauri::command]
 pub fn list_books(app: tauri::AppHandle) -> Result<Vec<Book>, String> {
     let conn = db::open_db(&app)?;
     fetch_books(&conn).map_err(|e| format!("failed to list books: {e}"))

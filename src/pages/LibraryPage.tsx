@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import type { Book } from "../tauri/invoke";
-import { deleteBook, importBook, listBooks, setBookFavorite } from "../tauri/invoke";
+import { deleteBook, importBook, listBooks, repairBookMetadata, setBookFavorite } from "../tauri/invoke";
 import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../tauri/appDataPaths";
+import { needsMetadataRepair } from "../library/metadataRepair";
 
 function formatTitle(book: Book): string {
   return book.title?.trim() || "未命名";
@@ -19,6 +20,8 @@ export default function LibraryPage() {
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(false);
   const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
+  const repairingRef = useRef<Set<string>>(new Set());
+  const attemptedRef = useRef<Set<string>>(new Set());
 
   const booksSorted = useMemo(() => books, [books]);
 
@@ -30,6 +33,31 @@ export default function LibraryPage() {
   useEffect(() => {
     refresh();
   }, []);
+
+  useEffect(() => {
+    const pending: Promise<void>[] = [];
+    for (const b of books) {
+      if (!needsMetadataRepair(b)) continue;
+      if (attemptedRef.current.has(b.id)) continue;
+      if (repairingRef.current.has(b.id)) continue;
+      repairingRef.current.add(b.id);
+      attemptedRef.current.add(b.id);
+      pending.push(
+        (async () => {
+          try {
+            await repairBookMetadata(b.id);
+            await refresh();
+          } catch {
+          } finally {
+            repairingRef.current.delete(b.id);
+          }
+        })(),
+      );
+    }
+    return () => {
+      void Promise.allSettled(pending);
+    };
+  }, [books]);
 
   useEffect(() => {
     const abort = new AbortController();

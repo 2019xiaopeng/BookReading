@@ -35,6 +35,10 @@ export async function importBook(req: ImportBookRequest): Promise<Book> {
   return invoke<Book>("import_book", { req });
 }
 
+export async function repairBookMetadata(bookId: string): Promise<Book> {
+  return invoke<Book>("repair_book_metadata", { book_id: bookId });
+}
+
 export async function updateBookMetadata(req: UpdateBookMetadataRequest): Promise<Book> {
   return invoke<Book>("update_book_metadata", { req });
 }
