@@ -12,6 +12,9 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    concurrency:
+      group: windows-installers-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,6 +39,31 @@ jobs:
       - name: Build Windows installers
         run: npm run tauri build
 
+      - name: Collect installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT_DIR="artifacts/windows"
+          rm -rf artifacts
+          mkdir -p "$OUT_DIR"
+
+          COUNT="$(find "src-tauri/target/release/bundle" -type f \( -name "*.msi" -o -name "*.exe" \) | wc -l | tr -d ' ')"
+          if [ "$COUNT" = "0" ]; then
+            echo "No .msi/.exe found under src-tauri/target/release/bundle"
+            find "src-tauri/target/release/bundle" -maxdepth 6 -type f || true
+            exit 1
+          fi
+
+          find "src-tauri/target/release/bundle" -type f \( -name "*.msi" -o -name "*.exe" \) -exec cp {} "$OUT_DIR/" \;
+          echo "${GITHUB_SHA}" > "$OUT_DIR/commit.txt"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: artifacts/windows/*
+          if-no-files-found: error
+
       - name: Publish installers to artifacts branch
         shell: bash
         run: |
@@ -43,24 +71,14 @@ jobs:
           ART_BRANCH="artifacts/windows-installers"
           OUT_DIR="artifacts/windows"
 
-          rm -rf artifacts
-          mkdir -p "$OUT_DIR"
-
-          COUNT="$(find "src-tauri/target/release/bundle" -type f \( -name "*.msi" -o -name "*.exe" \) | wc -l | tr -d ' ')"
-          if [ "$COUNT" = "0" ]; then
-            echo "No .msi/.exe found under src-tauri/target/release/bundle"
-            find "src-tauri/target/release/bundle" -maxdepth 4 -type f || true
-            exit 1
-          fi
-
-          find "src-tauri/target/release/bundle" -type f \( -name "*.msi" -o -name "*.exe" \) -exec cp {} "$OUT_DIR/" \;
-          echo "${GITHUB_SHA}" > "$OUT_DIR/commit.txt"
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git checkout --orphan "$ART_BRANCH"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          git fetch origin "$ART_BRANCH" || true
+          git switch --orphan "$ART_BRANCH"
           git rm -rf . >/dev/null 2>&1 || true
-          git add artifacts
+          git add "$OUT_DIR"
           git commit -m "chore: publish windows installers (${GITHUB_SHA})" || true
           git push -f origin "HEAD:$ART_BRANCH"
