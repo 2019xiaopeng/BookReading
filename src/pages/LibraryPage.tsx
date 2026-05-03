@@ -1,35 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
-import ePub from "epubjs";
 
 import type { Book } from "../tauri/invoke";
 import { deleteBook, importBook, listBooks, setBookFavorite, updateBookMetadata } from "../tauri/invoke";
 import { extToMime, readAppDataBlobUrl, readAppDataFile, revokeObjectUrl } from "../tauri/appDataPaths";
-
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
-}
-
-function mimeToExt(mime: string | null): string | null {
-  const m = (mime ?? "").toLowerCase();
-  if (m.includes("png")) return "png";
-  if (m.includes("jpeg")) return "jpeg";
-  if (m.includes("jpg")) return "jpg";
-  if (m.includes("webp")) return "webp";
-  return null;
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-}
+import { extractEpubMetadataInWorker } from "../reader/epub/metadataWorker";
 
 function formatTitle(book: Book): string {
   return book.title?.trim() || "未命名";
@@ -126,7 +102,10 @@ export default function LibraryPage() {
         multiple: false,
         filters: [{ name: "EPUB", extensions: ["epub"] }],
       });
-      if (!selected || Array.isArray(selected)) return;
+      if (!selected || Array.isArray(selected)) {
+        setLoading(false);
+        return;
+      }
 
       const imported = await importBook({
         source_path: selected,
@@ -136,47 +115,28 @@ export default function LibraryPage() {
         cover_ext: null,
       });
 
-      if (imported.library_path) {
-        try {
-          const bytes = await readAppDataFile(imported.library_path);
-          const book: any = ePub(toArrayBuffer(bytes));
-          await Promise.race([
-            book.ready,
-            new Promise((_, reject) => window.setTimeout(() => reject(new Error("timeout")), 60_000)),
-          ]);
-          const metadata = await book.loaded.metadata;
-          const title = (metadata?.title as string | undefined) ?? null;
-          const author =
-            (metadata?.creator as string | undefined) ??
-            (metadata?.author as string | undefined) ??
-            null;
-
-          let cover_bytes_base64: string | null = null;
-          let cover_ext: string | null = null;
-          try {
-            const coverUrl = (await book.coverUrl?.()) ?? null;
-            if (coverUrl) {
-              const res = await fetch(coverUrl);
-              const buffer = await res.arrayBuffer();
-              cover_bytes_base64 = arrayBufferToBase64(buffer);
-              cover_ext = mimeToExt(res.headers.get("content-type")) ?? "png";
-            }
-          } catch {
-          }
-
-          await updateBookMetadata({
-            book_id: imported.id,
-            title,
-            author,
-            cover_bytes_base64,
-            cover_ext,
-          });
-        } catch (e) {
-          window.alert(String(e));
-        }
-      }
-
       await refresh();
+      setLoading(false);
+
+      if (imported.library_path) {
+        void (async () => {
+          try {
+            const bytes = await readAppDataFile(imported.library_path);
+            const meta = await extractEpubMetadataInWorker(bytes);
+            await updateBookMetadata({
+              book_id: imported.id,
+              title: meta.title,
+              author: meta.author,
+              cover_bytes_base64: meta.cover_bytes_base64,
+              cover_ext: meta.cover_ext,
+            });
+            await refresh();
+          } catch (e) {
+            window.alert(String(e));
+          }
+        })();
+      }
+      return;
     } finally {
       setLoading(false);
     }
