@@ -57,7 +57,49 @@ jobs:
             exit 1
           fi
 
-          find "src-tauri/target/release/bundle" -type f \( -name "*.msi" -o -name "*.exe" \) -exec cp {} "$OUT_DIR/" \;
+          RAW_DIR="$OUT_DIR/raw"
+          mkdir -p "$RAW_DIR"
+          find "src-tauri/target/release/bundle" -type f \( -name "*.msi" -o -name "*.exe" \) -exec cp {} "$RAW_DIR/" \;
+
+          ZIP_PATH="$OUT_DIR/bookreading_${GITHUB_SHA}_windows.zip"
+          powershell -NoProfile -Command "Compress-Archive -Path '${RAW_DIR}\\*' -DestinationPath '${ZIP_PATH}' -Force"
+
+          powershell -NoProfile -Command "
+            \$zip = '${ZIP_PATH}';
+            \$max = 95MB;
+            \$chunk = 90MB;
+            \$fi = Get-Item \$zip;
+            if (\$fi.Length -le \$max) { exit 0 }
+            \$in = [System.IO.File]::OpenRead(\$zip);
+            try {
+              \$idx = 0;
+              \$buf = New-Object byte[] (1MB);
+              while (\$true) {
+                \$outPath = \"\$zip.part\$('{0:D3}' -f \$idx)\";
+                \$out = [System.IO.File]::Create(\$outPath);
+                try {
+                  \$written = 0;
+                  while (\$written -lt \$chunk) {
+                    \$need = [Math]::Min(\$buf.Length, \$chunk - \$written);
+                    \$read = \$in.Read(\$buf, 0, \$need);
+                    if (\$read -le 0) { break }
+                    \$out.Write(\$buf, 0, \$read);
+                    \$written += \$read;
+                  }
+                } finally {
+                  \$out.Dispose();
+                }
+                if (\$in.Position -ge \$in.Length) { break }
+                \$idx += 1;
+              }
+            } finally {
+              \$in.Dispose();
+            }
+            Remove-Item -Force \$zip
+          "
+
+          rm -rf "$RAW_DIR"
+
           echo "${GITHUB_SHA}" > "$OUT_DIR/commit.txt"
 
       - name: Upload workflow artifact
