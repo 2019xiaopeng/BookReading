@@ -73,15 +73,25 @@ jobs:
           set -euo pipefail
           ART_BRANCH="artifacts/windows-installers"
           OUT_DIR="artifacts/windows"
+          TMP_DIR="${RUNNER_TEMP:-/tmp}/bookreading-windows-installers"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
-          git fetch origin "$ART_BRANCH" || true
+          rm -rf "$TMP_DIR"
+          mkdir -p "$TMP_DIR"
+          cp "$OUT_DIR"/* "$TMP_DIR"/
+
+          git reset --hard
+          git clean -fdx
+
           git switch --orphan "$ART_BRANCH"
           git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p "$OUT_DIR"
+          cp "$TMP_DIR"/* "$OUT_DIR"/
           git add "$OUT_DIR"
           git commit -m "chore: publish windows installers (${GITHUB_SHA})" || true
           git push -f origin "HEAD:$ART_BRANCH"
