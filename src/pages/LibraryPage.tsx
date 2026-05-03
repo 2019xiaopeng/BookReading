@@ -167,61 +167,36 @@ export default function LibraryPage() {
   }
 
   return (
-    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ fontSize: 18, fontWeight: 600 }}>BookReading</div>
-        <div style={{ flex: 1 }} />
+    <div className="app-page" data-theme="light">
+      <div className="app-header">
+        <div className="app-title">BookReading</div>
+        <div className="app-spacer" />
         <button onClick={() => navigate("/favorites")} disabled={loading}>
           收藏
         </button>
-        <button onClick={onImport} disabled={loading}>
+        <button onClick={onImport} disabled={loading} className="btn-primary">
           导入 EPUB
         </button>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
+      <div className="app-grid">
         {booksSorted.map((b) => (
           <div
             key={b.id}
-            style={{
-              border: "1px solid rgba(0,0,0,0.12)",
-              borderRadius: 10,
-              padding: 12,
-              display: "flex",
-              gap: 12,
-              background: "white",
-            }}
+            className="app-card"
           >
-            <div
-              style={{
-                width: 64,
-                height: 96,
-                borderRadius: 6,
-                border: "1px solid rgba(0,0,0,0.12)",
-                background: "rgba(0,0,0,0.04)",
-                overflow: "hidden",
-                flexShrink: 0,
-              }}
-            >
+            <div className="app-cover">
               {b.cover_path && coverUrls[b.cover_path] ? (
-                <img
-                  src={coverUrls[b.cover_path]}
-                  alt=""
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
+                <img src={coverUrls[b.cover_path]} alt="" />
               ) : null}
             </div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0, flex: 1 }}>
-              <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {formatTitle(b)}
-              </div>
-              <div style={{ color: "rgba(0,0,0,0.65)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {formatAuthor(b)}
-              </div>
+            <div className="app-meta">
+              <div className="app-meta-title">{formatTitle(b)}</div>
+              <div className="app-meta-sub">{formatAuthor(b)}</div>
 
-              <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
-                <button onClick={() => navigate(`/read/${b.id}`)} disabled={loading}>
+              <div className="app-actions">
+                <button onClick={() => navigate(`/read/${b.id}`)} disabled={loading} className="btn-primary">
                   打开
                 </button>
                 <button
@@ -235,7 +210,7 @@ export default function LibraryPage() {
                 >
                   {b.is_favorite ? "取消收藏" : "收藏"}
                 </button>
-                <button onClick={() => onDelete(b.id)} disabled={loading}>
+                <button onClick={() => onDelete(b.id)} disabled={loading} className="btn-danger">
                   删除
                 </button>
               </div>
@@ -245,7 +220,9 @@ export default function LibraryPage() {
       </div>
 
       {booksSorted.length === 0 ? (
-        <div style={{ color: "rgba(0,0,0,0.6)", padding: 16 }}>暂无书籍，点击右上角导入 EPUB。</div>
+        <div className="muted" style={{ padding: 16 }}>
+          暂无书籍，点击右上角导入 EPUB。
+        </div>
       ) : null}
     </div>
   );

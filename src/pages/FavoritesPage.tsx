@@ -114,66 +114,38 @@ export default function FavoritesPage() {
   }, [tab, filterBookId]);
 
   return (
-    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+    <div className="app-page" data-theme="light">
+      <div className="app-header">
         <button onClick={() => navigate("/")}>返回书库</button>
-        <div style={{ fontSize: 18, fontWeight: 600 }}>收藏</div>
-        <div style={{ flex: 1 }} />
+        <div className="app-title">收藏</div>
+        <div className="app-spacer" />
       </div>
 
-      <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={() => setTab("books")} disabled={tab === "books"}>
+      <div className="tabs" role="tablist" aria-label="收藏">
+        <button className="tab" role="tab" aria-selected={tab === "books"} onClick={() => setTab("books")}>
           收藏书籍
         </button>
-        <button onClick={() => setTab("quotes")} disabled={tab === "quotes"}>
+        <button className="tab" role="tab" aria-selected={tab === "quotes"} onClick={() => setTab("quotes")}>
           收藏句子
         </button>
       </div>
 
       {tab === "books" ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
+        <div className="app-grid">
           {favoriteBooks.map((b) => (
-            <div
-              key={b.id}
-              style={{
-                border: "1px solid rgba(0,0,0,0.12)",
-                borderRadius: 10,
-                padding: 12,
-                display: "flex",
-                gap: 12,
-                background: "white",
-              }}
-            >
-              <div
-                style={{
-                  width: 64,
-                  height: 96,
-                  borderRadius: 6,
-                  border: "1px solid rgba(0,0,0,0.12)",
-                  background: "rgba(0,0,0,0.04)",
-                  overflow: "hidden",
-                  flexShrink: 0,
-                }}
-              >
+            <div key={b.id} className="app-card">
+              <div className="app-cover">
                 {b.cover_path && coverUrls[b.cover_path] ? (
-                  <img
-                    src={coverUrls[b.cover_path]}
-                    alt=""
-                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  />
+                  <img src={coverUrls[b.cover_path]} alt="" />
                 ) : null}
               </div>
 
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0, flex: 1 }}>
-                <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {b.title?.trim() || "未命名"}
-                </div>
-                <div style={{ color: "rgba(0,0,0,0.65)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {b.author?.trim() || "未知作者"}
-                </div>
+              <div className="app-meta">
+                <div className="app-meta-title">{b.title?.trim() || "未命名"}</div>
+                <div className="app-meta-sub">{b.author?.trim() || "未知作者"}</div>
 
-                <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
-                  <button onClick={() => navigate(`/read/${b.id}`)} disabled={loading}>
+                <div className="app-actions">
+                  <button onClick={() => navigate(`/read/${b.id}`)} disabled={loading} className="btn-primary">
                     打开
                   </button>
                   <button
@@ -193,7 +165,9 @@ export default function FavoritesPage() {
           ))}
 
           {favoriteBooks.length === 0 ? (
-            <div style={{ color: "rgba(0,0,0,0.6)", padding: 16 }}>暂无收藏书籍</div>
+            <div className="muted" style={{ padding: 16 }}>
+              暂无收藏书籍
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -221,32 +195,34 @@ export default function FavoritesPage() {
                 refreshQuotes().finally(() => setLoading(false));
               }}
               disabled={loading}
+              className="btn-primary"
             >
               搜索
             </button>
           </div>
 
           {quotes.length === 0 ? (
-            <div style={{ color: "rgba(0,0,0,0.6)", padding: 16 }}>暂无收藏句子</div>
+            <div className="muted" style={{ padding: 16 }}>
+              暂无收藏句子
+            </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {quotes.map((q) => (
                 <div
                   key={q.id}
-                  style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 10, padding: 12, background: "white" }}
+                  className="app-card"
                 >
-                  <div style={{ color: "rgba(0,0,0,0.7)", fontSize: 12, marginBottom: 8 }}>
-                    {bookIdToTitle.get(q.book_id) ?? q.book_id}
-                  </div>
-                  <div style={{ whiteSpace: "pre-wrap", color: "rgba(0,0,0,0.9)", marginBottom: 8 }}>
-                    {q.text}
-                  </div>
-                  {q.note ? <div style={{ whiteSpace: "pre-wrap", color: "rgba(0,0,0,0.7)", marginBottom: 8 }}>{q.note}</div> : null}
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={() => navigate(`/read/${q.book_id}?cfi=${encodeURIComponent(q.cfi_range)}`)}>
+                  <div className="app-meta" style={{ gap: 10 }}>
+                    <div className="app-meta-sub" style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                      {bookIdToTitle.get(q.book_id) ?? q.book_id}
+                    </div>
+                    <div style={{ whiteSpace: "pre-wrap" }}>{q.text}</div>
+                    {q.note ? <div className="muted" style={{ whiteSpace: "pre-wrap" }}>{q.note}</div> : null}
+                    <div className="app-actions">
+                      <button onClick={() => navigate(`/read/${q.book_id}?cfi=${encodeURIComponent(q.cfi_range)}`)} className="btn-primary">
                       打开定位
-                    </button>
-                    <button
+                      </button>
+                      <button
                       onClick={() => {
                         setLoading(true);
                         deleteFavoriteQuote(q.id)
@@ -254,9 +230,11 @@ export default function FavoritesPage() {
                           .finally(() => setLoading(false));
                       }}
                       disabled={loading}
+                      className="btn-danger"
                     >
                       删除
-                    </button>
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
