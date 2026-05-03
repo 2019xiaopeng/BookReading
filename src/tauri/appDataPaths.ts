@@ -22,27 +22,32 @@ export function isSafeRelPath(rel: string): boolean {
   return v.length > 0;
 }
 
-export function coerceToAppDataRelPath(input: string): string {
-  const v = normalizeAppDataRelPath(input);
-  if (v.toLowerCase().startsWith("library/")) return v;
-
-  const vv = input.split("\\").join("/");
-  const idx = vv.toLowerCase().indexOf("/library/");
-  if (idx !== -1) {
-    return normalizeAppDataRelPath(vv.slice(idx + 1));
-  }
-
-  throw new Error(
-    `forbidden path: ${input}, maybe it is not allowed on the scope for \`allow-read-file\` permission in your capability file`,
-  );
-}
-
 export async function readAppDataFile(rel: string): Promise<Uint8Array> {
-  const v = coerceToAppDataRelPath(rel);
-  if (!isSafeRelPath(v)) {
-    throw new Error(`invalid relative path: ${rel}`);
+  const input = rel;
+  const v0 = normalizeAppDataRelPath(input);
+  if (v0.toLowerCase().startsWith("library/")) {
+    if (!isSafeRelPath(v0)) throw new Error(`invalid relative path: ${input}`);
+    return readFile(v0, { baseDir: BaseDirectory.AppData });
   }
-  return readFile(v, { baseDir: BaseDirectory.AppData });
+
+  const base = await getAppDataBase();
+  const baseNorm = base.split("\\").join("/").replace(/\/+$/, "");
+  const inputNorm = input.split("\\").join("/");
+
+  if (inputNorm.toLowerCase().startsWith(baseNorm.toLowerCase())) {
+    const sliced = normalizeAppDataRelPath(inputNorm.slice(baseNorm.length));
+    if (!isSafeRelPath(sliced)) throw new Error(`invalid relative path: ${input}`);
+    return readFile(sliced, { baseDir: BaseDirectory.AppData });
+  }
+
+  const idx = inputNorm.toLowerCase().indexOf("/library/");
+  if (idx !== -1) {
+    const sliced = normalizeAppDataRelPath(inputNorm.slice(idx + 1));
+    if (!isSafeRelPath(sliced)) throw new Error(`invalid relative path: ${input}`);
+    return readFile(sliced, { baseDir: BaseDirectory.AppData });
+  }
+
+  throw new Error(`无法访问文件（不在应用数据目录内）：${input}`);
 }
 
 export function extToMime(ext: string | null): string {
