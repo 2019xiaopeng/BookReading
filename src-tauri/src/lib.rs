@@ -10,6 +10,7 @@ use commands::library::{delete_book, import_book, list_books, update_book_metada
 use commands::annotations::{
     add_bookmark, add_highlight, delete_bookmark, delete_highlight, list_bookmarks, list_highlights,
 };
+use commands::appdata::read_library_file;
 use commands::reading::{get_settings, set_setting};
 use commands::reading::{get_reading_state, upsert_reading_state};
 use commands::favorites::{
@@ -58,6 +59,7 @@ pub fn run() {
             import_book,
             update_book_metadata,
             delete_book,
+            read_library_file,
             list_bookmarks,
             add_bookmark,
             delete_bookmark,

@@ -1,5 +1,5 @@
 import { appDataDir } from "@tauri-apps/api/path";
-import { BaseDirectory, readFile } from "@tauri-apps/plugin-fs";
+import { readLibraryFile } from "./invoke";
 
 let basePromise: Promise<string> | null = null;
 
@@ -27,7 +27,8 @@ export async function readAppDataFile(rel: string): Promise<Uint8Array> {
   const v0 = normalizeAppDataRelPath(input);
   if (v0.toLowerCase().startsWith("library/")) {
     if (!isSafeRelPath(v0)) throw new Error(`invalid relative path: ${input}`);
-    return readFile(v0, { baseDir: BaseDirectory.AppData });
+    const bytes = await readLibraryFile(v0);
+    return new Uint8Array(bytes);
   }
 
   const base = await getAppDataBase();
@@ -37,14 +38,16 @@ export async function readAppDataFile(rel: string): Promise<Uint8Array> {
   if (inputNorm.toLowerCase().startsWith(baseNorm.toLowerCase())) {
     const sliced = normalizeAppDataRelPath(inputNorm.slice(baseNorm.length));
     if (!isSafeRelPath(sliced)) throw new Error(`invalid relative path: ${input}`);
-    return readFile(sliced, { baseDir: BaseDirectory.AppData });
+    const bytes = await readLibraryFile(sliced);
+    return new Uint8Array(bytes);
   }
 
   const idx = inputNorm.toLowerCase().indexOf("/library/");
   if (idx !== -1) {
     const sliced = normalizeAppDataRelPath(inputNorm.slice(idx + 1));
     if (!isSafeRelPath(sliced)) throw new Error(`invalid relative path: ${input}`);
-    return readFile(sliced, { baseDir: BaseDirectory.AppData });
+    const bytes = await readLibraryFile(sliced);
+    return new Uint8Array(bytes);
   }
 
   throw new Error(`无法访问文件（不在应用数据目录内）：${input}`);
