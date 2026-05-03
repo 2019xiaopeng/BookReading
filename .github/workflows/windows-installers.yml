@@ -109,6 +109,16 @@ jobs:
           path: artifacts/windows/*
           if-no-files-found: error
 
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-latest
+          name: Windows Latest
+          prerelease: true
+          generate_release_notes: false
+          files: |
+            artifacts/windows/*
+
       - name: Publish installers to artifacts branch
         shell: bash
         run: |
