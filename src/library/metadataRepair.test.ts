@@ -18,7 +18,7 @@ function b(partial: Partial<Book>): Book {
 }
 
 describe("needsMetadataRepair", () => {
-  test("returns true when both title and author missing", () => {
+  test("returns true when title missing", () => {
     expect(needsMetadataRepair(b({ title: null, author: null }))).toBe(true);
   });
 
@@ -26,8 +26,7 @@ describe("needsMetadataRepair", () => {
     expect(needsMetadataRepair(b({ title: "   ", author: "A" }))).toBe(true);
   });
 
-  test("returns false when title and author present", () => {
-    expect(needsMetadataRepair(b({ title: "T", author: "A" }))).toBe(false);
+  test("returns false when title present even without author", () => {
+    expect(needsMetadataRepair(b({ title: "T", author: null }))).toBe(false);
   });
 });
-
