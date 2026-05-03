@@ -19,11 +19,9 @@ use commands::favorites::{
 fn append_startup_log(app: &tauri::AppHandle, line: &str) {
     let dir = match app_paths::app_data_dir(app) {
         Ok(p) => p.join("logs"),
-        Err(_) => return,
+        Err(_) => std::env::temp_dir().join("bookreading-logs"),
     };
-    if fs::create_dir_all(&dir).is_err() {
-        return;
-    }
+    let _ = fs::create_dir_all(&dir);
     let path = dir.join("startup.log");
     let mut f = match fs::OpenOptions::new().create(true).append(true).open(path) {
         Ok(v) => v,
