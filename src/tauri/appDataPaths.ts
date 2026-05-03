@@ -22,8 +22,23 @@ export function isSafeRelPath(rel: string): boolean {
   return v.length > 0;
 }
 
+export function coerceToAppDataRelPath(input: string): string {
+  const v = normalizeAppDataRelPath(input);
+  if (v.toLowerCase().startsWith("library/")) return v;
+
+  const vv = input.split("\\").join("/");
+  const idx = vv.toLowerCase().indexOf("/library/");
+  if (idx !== -1) {
+    return normalizeAppDataRelPath(vv.slice(idx + 1));
+  }
+
+  throw new Error(
+    `forbidden path: ${input}, maybe it is not allowed on the scope for \`allow-read-file\` permission in your capability file`,
+  );
+}
+
 export async function readAppDataFile(rel: string): Promise<Uint8Array> {
-  const v = normalizeAppDataRelPath(rel);
+  const v = coerceToAppDataRelPath(rel);
   if (!isSafeRelPath(v)) {
     throw new Error(`invalid relative path: ${rel}`);
   }
@@ -47,4 +62,3 @@ export async function readAppDataBlobUrl(rel: string, mime: string): Promise<str
   const bytes = await readAppDataFile(rel);
   return URL.createObjectURL(new Blob([bytes], { type: mime }));
 }
-

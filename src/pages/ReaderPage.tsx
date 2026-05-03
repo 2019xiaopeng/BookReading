@@ -90,11 +90,6 @@ export default function ReaderPage() {
       setTocLoading(true);
 
       try {
-        if (/^[a-zA-Z]:[\\/]/.test(book.library_path) || book.library_path.startsWith("\\\\")) {
-          setReaderError(`书籍路径需要迁移或重导入：${book.library_path}`);
-          setTocLoading(false);
-          return;
-        }
         controllerRef.current = await createReader({
           container: containerRef.current,
           libraryPath: book.library_path,

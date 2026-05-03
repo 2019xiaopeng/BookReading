@@ -1,7 +1,7 @@
 import ePub from "epubjs";
-import { BaseDirectory, readFile } from "@tauri-apps/plugin-fs";
 
 import type { Theme } from "../settings/types";
+import { readAppDataFile } from "../../tauri/appDataPaths";
 
 export type TocItem = {
   label: string;
@@ -47,7 +47,7 @@ export async function createReader(opts: {
   onSelected?: (payload: { cfiRange: string; text: string }) => void;
   onError?: (message: string) => void;
 }): Promise<ReaderController> {
-  const bytes = await readFile(opts.libraryPath, { baseDir: BaseDirectory.AppData });
+  const bytes = await readAppDataFile(opts.libraryPath);
   const book: any = ePub(toArrayBuffer(bytes));
   let openFailed: string | null = null;
   if (typeof book?.on === "function") {
