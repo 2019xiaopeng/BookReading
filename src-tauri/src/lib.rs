@@ -2,6 +2,7 @@ mod app_paths;
 mod commands;
 mod db;
 mod models;
+mod epub;
 
 use std::fs;
 use std::io::Write;

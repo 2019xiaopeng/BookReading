@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::app_paths;
 use crate::db;
+use crate::epub;
 use crate::models::{Book, ImportBookRequest, UpdateBookMetadataRequest};
 
 fn now_ts() -> i64 {
@@ -178,30 +179,37 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
     atomic_copy_to(&req.source_path, &tmp_book_abs, &final_book_abs)
         .map_err(|e| format!("failed to copy epub into library: {e}"))?;
 
-    let cover_abs: Option<PathBuf> =
-        match (req.cover_bytes_base64.as_deref(), req.cover_ext.as_deref()) {
-            (Some(b64), Some(ext)) if !b64.is_empty() && !ext.is_empty() => {
-                let ext = ext
-                    .trim()
-                    .trim_start_matches('.')
-                    .to_lowercase();
-                let allowed = ["png", "jpg", "jpeg", "webp"];
-                if !allowed.contains(&ext.as_str()) {
-                    None
-                } else {
-                    let b64 = b64.split(',').last().unwrap_or(b64);
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(b64)
-                        .map_err(|e| format!("failed to decode cover base64: {e}"))?;
-                    let final_cover_abs = covers_dir.join(format!("{book_id}.{ext}"));
-                    let tmp_cover_abs = covers_dir.join(format!("{book_id}.{ext}.part"));
-                    atomic_write_to(&tmp_cover_abs, &final_cover_abs, &bytes)
-                        .map_err(|e| format!("failed to write cover: {e}"))?;
-                    Some(final_cover_abs)
-                }
+    let extracted = epub::extract_epub_metadata(&final_book_abs).ok();
+
+    let fallback_title = Path::new(&req.source_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let title = merge_optional_text(
+        req.title.clone().or_else(|| extracted.as_ref().and_then(|m| m.title.clone())),
+        fallback_title,
+    );
+    let author = merge_optional_text(req.author.clone(), extracted.as_ref().and_then(|m| m.author.clone()));
+
+    let cover_ext = extracted.as_ref().and_then(|m| m.cover_ext.clone());
+    let cover_abs: Option<PathBuf> = match (extracted.as_ref().and_then(|m| m.cover_bytes.as_deref()), cover_ext.as_deref()) {
+        (Some(bytes), Some(ext)) if !bytes.is_empty() && !ext.is_empty() => {
+            let ext = ext.trim().trim_start_matches('.').to_lowercase();
+            let allowed = ["png", "jpg", "jpeg", "webp"];
+            if !allowed.contains(&ext.as_str()) {
+                None
+            } else {
+                let final_cover_abs = covers_dir.join(format!("{book_id}.{ext}"));
+                let tmp_cover_abs = covers_dir.join(format!("{book_id}.{ext}.part"));
+                atomic_write_to(&tmp_cover_abs, &final_cover_abs, bytes)
+                    .map_err(|e| format!("failed to write cover: {e}"))?;
+                Some(final_cover_abs)
             }
-            _ => None,
-        };
+        }
+        _ => None,
+    };
 
     let library_path = format!("library/books/{book_id}.epub");
     let cover_path = cover_abs
@@ -211,8 +219,8 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
 
     let book = Book {
         id: book_id,
-        title: req.title,
-        author: req.author,
+        title,
+        author,
         cover_path,
         library_path,
         added_at: now_ts(),
