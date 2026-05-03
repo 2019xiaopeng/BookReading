@@ -14,7 +14,7 @@ fn diag_popup(message: &str) {
     let text = to_wide(message);
     let title = to_wide("BookReading");
     unsafe {
-        MessageBoxW(0, text.as_ptr(), title.as_ptr(), MB_OK | MB_TOPMOST | MB_SYSTEMMODAL);
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_TOPMOST | MB_SYSTEMMODAL);
     }
 }
 
