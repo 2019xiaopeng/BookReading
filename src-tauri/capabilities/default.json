@@ -7,8 +7,10 @@
     "core:default",
     "dialog:default",
     "fs:default",
-    "fs:allow-appdata-read-recursive",
-    "fs:scope-appdata-recursive",
+    {
+      "identifier": "fs:scope",
+      "allow": [{ "path": "$APPDATA/library/**" }]
+    },
     "opener:default"
   ]
 }
