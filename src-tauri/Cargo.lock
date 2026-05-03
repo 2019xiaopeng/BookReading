@@ -313,6 +313,7 @@ dependencies = [
  "tauri-plugin-opener",
  "time",
  "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
