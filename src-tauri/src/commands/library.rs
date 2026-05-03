@@ -143,6 +143,20 @@ fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book, rusqlite::
     )
 }
 
+fn merge_optional_text(update: Option<String>, existing: Option<String>) -> Option<String> {
+    match update {
+        Some(v) => {
+            let t = v.trim().to_string();
+            if t.is_empty() {
+                existing
+            } else {
+                Some(t)
+            }
+        }
+        None => existing,
+    }
+}
+
 #[tauri::command]
 pub fn list_books(app: tauri::AppHandle) -> Result<Vec<Book>, String> {
     let conn = db::open_db(&app)?;
@@ -225,6 +239,9 @@ pub fn update_book_metadata(app: tauri::AppHandle, req: UpdateBookMetadataReques
     let existing =
         fetch_book_by_id(&conn, &req.book_id).map_err(|e| format!("failed to fetch book: {e}"))?;
 
+    let title = merge_optional_text(req.title.clone(), existing.title.clone());
+    let author = merge_optional_text(req.author.clone(), existing.author.clone());
+
     let cover_path: Option<String> =
         match (req.cover_bytes_base64.as_deref(), req.cover_ext.as_deref()) {
             (Some(b64), Some(ext)) if !b64.is_empty() && !ext.is_empty() => {
@@ -265,7 +282,7 @@ pub fn update_book_metadata(app: tauri::AppHandle, req: UpdateBookMetadataReques
 
     conn.execute(
         "UPDATE books SET title = ?2, author = ?3, cover_path = ?4 WHERE id = ?1",
-        params![req.book_id, req.title, req.author, cover_path],
+        params![req.book_id, title, author, cover_path],
     )
     .map_err(|e| format!("failed to update book: {e}"))?;
 
@@ -375,5 +392,26 @@ mod tests {
         conn.execute("DELETE FROM books WHERE id = ?1", ["b2"]).unwrap();
         let books = fetch_books(&conn).unwrap();
         assert!(books.is_empty());
+    }
+
+    #[test]
+    fn merge_optional_text_prefers_update_when_non_empty() {
+        assert_eq!(
+            merge_optional_text(Some("New".to_string()), Some("Old".to_string())),
+            Some("New".to_string())
+        );
+    }
+
+    #[test]
+    fn merge_optional_text_keeps_existing_when_update_none() {
+        assert_eq!(merge_optional_text(None, Some("Old".to_string())), Some("Old".to_string()));
+    }
+
+    #[test]
+    fn merge_optional_text_keeps_existing_when_update_blank() {
+        assert_eq!(
+            merge_optional_text(Some("   ".to_string()), Some("Old".to_string())),
+            Some("Old".to_string())
+        );
     }
 }
