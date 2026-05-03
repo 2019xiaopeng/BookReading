@@ -6,6 +6,8 @@ use crate::app_paths;
 
 pub const SCHEMA_SQL: &str = include_str!("schema.sql");
 
+mod migrations;
+
 pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
     let db_path = app_paths::db_path(app)?;
 
@@ -14,10 +16,13 @@ pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
     }
 
     let conn = Connection::open(db_path).map_err(|e| format!("failed to open sqlite: {e}"))?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|e| format!("failed to set sqlite foreign_keys pragma: {e}"))?;
     conn.execute_batch(SCHEMA_SQL)
         .map_err(|e| format!("failed to init sqlite schema: {e}"))?;
 
     ensure_books_is_favorite_column(&conn)?;
+    migrations::migrate_book_paths_to_appdata_relative(&conn, app)?;
 
     Ok(())
 }
