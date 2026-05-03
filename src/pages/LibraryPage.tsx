@@ -63,8 +63,12 @@ export default function LibraryPage() {
       if (!selected || Array.isArray(selected)) return;
 
       const bytes = await readFile(selected);
-      const book: any = ePub(bytes.buffer);
-      await book.ready;
+      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      const book: any = ePub(buffer);
+      await Promise.race([
+        book.ready,
+        new Promise((_, reject) => window.setTimeout(() => reject(new Error("timeout")), 60_000)),
+      ]);
       const metadata = await book.loaded.metadata;
       const title = (metadata?.title as string | undefined) ?? null;
       const author =

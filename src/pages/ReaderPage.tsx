@@ -35,6 +35,8 @@ export default function ReaderPage() {
   const { bookId } = useParams();
   const [book, setBook] = useState<Book | null>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
+  const [tocLoading, setTocLoading] = useState(true);
+  const [readerError, setReaderError] = useState<string | null>(null);
   const [percent, setPercent] = useState<number | null>(null);
   const [settings, setSettings] = useState<ReaderSettings>(defaultSettings);
   const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings">("toc");
@@ -83,48 +85,65 @@ export default function ReaderPage() {
       if (!containerRef.current) return;
 
       containerRef.current.innerHTML = "";
-      controllerRef.current = await createReader({
-        container: containerRef.current,
-        libraryPath: book.library_path,
-        onRelocated: ({ cfi, percent }) => {
-          lastCfiRef.current = cfi;
-          if (typeof percent === "number") setPercent(percent);
+      setReaderError(null);
+      setToc([]);
+      setTocLoading(true);
 
-          if (persistTimerRef.current) {
-            window.clearTimeout(persistTimerRef.current);
-          }
-          persistTimerRef.current = window.setTimeout(() => {
-            const lastCfi = lastCfiRef.current;
-            if (!lastCfi) return;
-            void upsertReadingState(book.id, lastCfi, typeof percent === "number" ? percent : null);
-          }, 1500);
-        },
-        onTocLoaded: (toc) => setToc(toc),
-        onSelected: ({ cfiRange, text }) => {
-          void (async () => {
-            const useFavorite = window.confirm("是否将选中文本加入收藏？\n确定=收藏句子，取消=高亮标注");
-            if (useFavorite) {
-              const note = window.prompt("收藏备注（可空）", "");
-              if (note === null) return;
-              const q = await addFavoriteQuote(
-                book.id,
-                cfiRange,
-                text.trim() ? text : "",
-                note.trim() ? note : null,
-              );
-              setFavoriteQuotes((prev) => [q, ...prev]);
-              setSideTab("favorites");
-            } else {
-              const note = window.prompt("添加笔记（可空）", "");
-              if (note === null) return;
-              const h = await addHighlight(book.id, cfiRange, "#ffe600", note.trim() ? note : null);
-              setHighlights((prev) => [h, ...prev]);
-              controllerRef.current?.addHighlight(cfiRange);
-              setSideTab("highlights");
+      try {
+        controllerRef.current = await createReader({
+          container: containerRef.current,
+          libraryPath: book.library_path,
+          onRelocated: ({ cfi, percent }) => {
+            lastCfiRef.current = cfi;
+            if (typeof percent === "number") setPercent(percent);
+
+            if (persistTimerRef.current) {
+              window.clearTimeout(persistTimerRef.current);
             }
-          })();
-        },
-      });
+            persistTimerRef.current = window.setTimeout(() => {
+              const lastCfi = lastCfiRef.current;
+              if (!lastCfi) return;
+              void upsertReadingState(book.id, lastCfi, typeof percent === "number" ? percent : null);
+            }, 1500);
+          },
+          onTocLoaded: (toc) => {
+            setToc(toc);
+            setTocLoading(false);
+          },
+          onError: (msg) => {
+            setReaderError(msg);
+            setTocLoading(false);
+          },
+          onSelected: ({ cfiRange, text }) => {
+            void (async () => {
+              const useFavorite = window.confirm("是否将选中文本加入收藏？\n确定=收藏句子，取消=高亮标注");
+              if (useFavorite) {
+                const note = window.prompt("收藏备注（可空）", "");
+                if (note === null) return;
+                const q = await addFavoriteQuote(
+                  book.id,
+                  cfiRange,
+                  text.trim() ? text : "",
+                  note.trim() ? note : null,
+                );
+                setFavoriteQuotes((prev) => [q, ...prev]);
+                setSideTab("favorites");
+              } else {
+                const note = window.prompt("添加笔记（可空）", "");
+                if (note === null) return;
+                const h = await addHighlight(book.id, cfiRange, "#ffe600", note.trim() ? note : null);
+                setHighlights((prev) => [h, ...prev]);
+                controllerRef.current?.addHighlight(cfiRange);
+                setSideTab("highlights");
+              }
+            })();
+          },
+        });
+      } catch (e) {
+        setReaderError(String(e));
+        setTocLoading(false);
+        return;
+      }
 
       controllerRef.current.setTheme(settings.theme);
       controllerRef.current.setFontSizePercent(settings.fontSizePercent);
@@ -391,8 +410,10 @@ export default function ReaderPage() {
             {sideTab === "toc" ? (
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 8 }}>目录</div>
-                {toc.length === 0 ? (
+                {tocLoading ? (
                   <div style={{ color: themeColors(settings.theme).subText }}>加载中…</div>
+                ) : toc.length === 0 ? (
+                  <div style={{ color: themeColors(settings.theme).subText }}>暂无目录</div>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     {toc.map((item) => (
@@ -514,6 +535,43 @@ export default function ReaderPage() {
 
         <div ref={viewerRef} style={{ position: "relative", flex: 1, minWidth: 0, background: "white" }}>
           <div ref={containerRef} style={{ height: "100%", width: "100%", background: "transparent" }} />
+          {readerError ? (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: 16,
+                background: "rgba(255,255,255,0.92)",
+                zIndex: 10,
+              }}
+            >
+              <div style={{ maxWidth: 720, width: "100%", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 12, padding: 14, background: "white" }}>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>加载失败</div>
+                <div style={{ whiteSpace: "pre-wrap", color: "rgba(0,0,0,0.75)", marginBottom: 12 }}>{readerError}</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(readerError);
+                    }}
+                  >
+                    复制错误
+                  </button>
+                  <button
+                    onClick={() => {
+                      setReaderError(null);
+                      setTocLoading(true);
+                      controllerRef.current?.display();
+                    }}
+                  >
+                    重试
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
           <div
             style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "1fr 1fr" }}
           >

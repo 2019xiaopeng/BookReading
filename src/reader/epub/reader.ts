@@ -26,6 +26,10 @@ export type ReaderController = {
   destroy: () => void;
 };
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
     p,
@@ -41,17 +45,27 @@ export async function createReader(opts: {
   onRelocated?: (payload: RelocatedPayload) => void;
   onTocLoaded?: (toc: TocItem[]) => void;
   onSelected?: (payload: { cfiRange: string; text: string }) => void;
+  onError?: (message: string) => void;
 }): Promise<ReaderController> {
   const bytes = await readFile(opts.libraryPath);
-  const book: any = ePub(bytes.buffer);
-  try {
-    await withTimeout(book.ready, 15_000);
-  } catch {
+  const book: any = ePub(toArrayBuffer(bytes));
+  let openFailed: string | null = null;
+  if (typeof book?.on === "function") {
+    book.on("openFailed", (e: any) => {
+      openFailed = String(e ?? "openFailed");
+      opts.onError?.(`EPUB 打开失败：${openFailed}`);
+    });
   }
+
+  await withTimeout(book.ready, 60_000).catch((e) => {
+    const msg = openFailed ? `EPUB 打开失败：${openFailed}` : `EPUB 解析超时/失败：${String(e)}`;
+    opts.onError?.(msg);
+    throw new Error(msg);
+  });
 
   void (async () => {
     try {
-      await withTimeout(book.locations.generate(1024), 8_000);
+      await withTimeout(book.locations.generate(1024), 30_000);
     } catch {
     }
   })();
@@ -61,6 +75,10 @@ export async function createReader(opts: {
     height: "100%",
     spread: "none",
     flow: "paginated",
+  });
+
+  rendition.on?.("displayerror", (e: any) => {
+    opts.onError?.(`章节渲染失败：${String(e ?? "displayerror")}`);
   });
 
   rendition.themes.register("light", {
@@ -108,7 +126,7 @@ export async function createReader(opts: {
 
   void (async () => {
     try {
-      const navigation: any = await withTimeout<any>(book.loaded.navigation as Promise<any>, 8_000);
+      const navigation: any = await withTimeout<any>(book.loaded.navigation as Promise<any>, 30_000);
       const toc: TocItem[] =
         navigation?.toc?.map((i: any) => ({
           label: i.label,
@@ -116,15 +134,17 @@ export async function createReader(opts: {
           subitems: i.subitems?.map((s: any) => ({ label: s.label, href: s.href, subitems: [] })),
         })) ?? [];
       opts.onTocLoaded?.(toc);
-    } catch {
+    } catch (e) {
+      opts.onError?.(`目录解析失败：${String(e)}`);
       opts.onTocLoaded?.([]);
     }
   })();
 
-  try {
-    await withTimeout(rendition.display(), 12_000);
-  } catch {
-  }
+  await withTimeout(rendition.display(), 30_000).catch((e) => {
+    const msg = `首次渲染超时/失败：${String(e)}`;
+    opts.onError?.(msg);
+    throw new Error(msg);
+  });
 
   return {
     next: async () => {
