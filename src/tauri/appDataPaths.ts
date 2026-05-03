@@ -1,5 +1,5 @@
 import { appDataDir } from "@tauri-apps/api/path";
-import { readLibraryFile } from "./invoke";
+import { readLibraryFileBase64 } from "./invoke";
 
 let basePromise: Promise<string> | null = null;
 
@@ -23,12 +23,21 @@ export function isSafeRelPath(rel: string): boolean {
 }
 
 export async function readAppDataFile(rel: string): Promise<Uint8Array> {
+  function base64ToBytes(b64: string): Uint8Array {
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  }
+
   const input = rel;
   const v0 = normalizeAppDataRelPath(input);
   if (v0.toLowerCase().startsWith("library/")) {
     if (!isSafeRelPath(v0)) throw new Error(`invalid relative path: ${input}`);
-    const bytes = await readLibraryFile(v0);
-    return new Uint8Array(bytes);
+    const b64 = await readLibraryFileBase64(v0);
+    return base64ToBytes(b64);
   }
 
   const base = await getAppDataBase();
@@ -38,16 +47,16 @@ export async function readAppDataFile(rel: string): Promise<Uint8Array> {
   if (inputNorm.toLowerCase().startsWith(baseNorm.toLowerCase())) {
     const sliced = normalizeAppDataRelPath(inputNorm.slice(baseNorm.length));
     if (!isSafeRelPath(sliced)) throw new Error(`invalid relative path: ${input}`);
-    const bytes = await readLibraryFile(sliced);
-    return new Uint8Array(bytes);
+    const b64 = await readLibraryFileBase64(sliced);
+    return base64ToBytes(b64);
   }
 
   const idx = inputNorm.toLowerCase().indexOf("/library/");
   if (idx !== -1) {
     const sliced = normalizeAppDataRelPath(inputNorm.slice(idx + 1));
     if (!isSafeRelPath(sliced)) throw new Error(`invalid relative path: ${input}`);
-    const bytes = await readLibraryFile(sliced);
-    return new Uint8Array(bytes);
+    const b64 = await readLibraryFileBase64(sliced);
+    return base64ToBytes(b64);
   }
 
   throw new Error(`无法访问文件（不在应用数据目录内）：${input}`);

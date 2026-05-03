@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::Path;
 
+use base64::Engine;
+
 use crate::app_paths;
 
 fn normalize_seps(s: &str) -> String {
@@ -42,4 +44,15 @@ pub fn read_library_file(app: tauri::AppHandle, path: String) -> Result<Vec<u8>,
     }
     let abs = app_paths::app_data_dir(&app)?.join(rel);
     fs::read(abs).map_err(|e| format!("failed to read file: {e}"))
+}
+
+#[tauri::command]
+pub fn read_library_file_base64(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let rel = extract_library_rel(&path)?;
+    if !is_safe_rel_path(&rel) {
+        return Err(format!("unsafe library path: {path}"));
+    }
+    let abs = app_paths::app_data_dir(&app)?.join(rel);
+    let bytes = fs::read(abs).map_err(|e| format!("failed to read file: {e}"))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
