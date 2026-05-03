@@ -26,6 +26,15 @@ export type ReaderController = {
   destroy: () => void;
 };
 
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error("timeout")), ms);
+    }),
+  ]);
+}
+
 export async function createReader(opts: {
   container: HTMLElement;
   libraryPath: string;
@@ -35,12 +44,17 @@ export async function createReader(opts: {
 }): Promise<ReaderController> {
   const bytes = await readFile(opts.libraryPath);
   const book: any = ePub(bytes.buffer);
-  await book.ready;
-
   try {
-    await book.locations.generate(1024);
+    await withTimeout(book.ready, 15_000);
   } catch {
   }
+
+  void (async () => {
+    try {
+      await withTimeout(book.locations.generate(1024), 8_000);
+    } catch {
+    }
+  })();
 
   const rendition: any = book.renderTo(opts.container, {
     width: "100%",
@@ -92,16 +106,25 @@ export async function createReader(opts: {
     })();
   });
 
-  const navigation = await book.loaded.navigation;
-  const toc: TocItem[] =
-    navigation?.toc?.map((i: any) => ({
-      label: i.label,
-      href: i.href,
-      subitems: i.subitems?.map((s: any) => ({ label: s.label, href: s.href, subitems: [] })),
-    })) ?? [];
-  opts.onTocLoaded?.(toc);
+  void (async () => {
+    try {
+      const navigation: any = await withTimeout<any>(book.loaded.navigation as Promise<any>, 8_000);
+      const toc: TocItem[] =
+        navigation?.toc?.map((i: any) => ({
+          label: i.label,
+          href: i.href,
+          subitems: i.subitems?.map((s: any) => ({ label: s.label, href: s.href, subitems: [] })),
+        })) ?? [];
+      opts.onTocLoaded?.(toc);
+    } catch {
+      opts.onTocLoaded?.([]);
+    }
+  })();
 
-  await rendition.display();
+  try {
+    await withTimeout(rendition.display(), 12_000);
+  } catch {
+  }
 
   return {
     next: async () => {
