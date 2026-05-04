@@ -80,6 +80,19 @@ fn find_cover_href(doc: &Document) -> Option<(String, Option<String>)> {
             let media_type = item.attribute("media-type").map(|s| s.to_string());
             return Some((href, media_type));
         }
+
+        let item = doc.descendants().find(|n| {
+            if !n.is_element() || !n.tag_name().name().eq_ignore_ascii_case("item") {
+                return false;
+            }
+            let href = n.attribute("href").unwrap_or("");
+            href == id || href.to_lowercase().ends_with(&format!("/{}", id.to_lowercase()))
+        });
+        if let Some(item) = item {
+            let href = item.attribute("href").map(|s| s.to_string())?;
+            let media_type = item.attribute("media-type").map(|s| s.to_string());
+            return Some((href, media_type));
+        }
     }
 
     let cover_item = doc.descendants().find(|n| {

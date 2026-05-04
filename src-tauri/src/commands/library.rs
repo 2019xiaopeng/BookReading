@@ -175,6 +175,13 @@ pub fn repair_book_metadata(app: tauri::AppHandle, book_id: String) -> Result<Bo
     let author = merge_optional_text(extracted.as_ref().and_then(|m| m.author.clone()), existing.author.clone());
 
     let mut cover_path = existing.cover_path.clone();
+    if let Some(rel) = cover_path.as_deref() {
+        if let Ok(abs) = abs_from_appdata_rel(&app, rel) {
+            if !abs.exists() {
+                cover_path = None;
+            }
+        }
+    }
     if cover_path.is_none() {
         if let Some(bytes) = extracted.as_ref().and_then(|m| m.cover_bytes.as_ref()) {
             if !bytes.is_empty() {
