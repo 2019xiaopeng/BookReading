@@ -11,6 +11,5 @@ export function normalizeLayoutMode(v: unknown): LayoutMode {
 export function resolveSpreadMode(mode: LayoutMode, containerWidth: number): SpreadMode {
   if (mode === "single") return "none";
   if (mode === "double") return "both";
-  return containerWidth >= 980 ? "both" : "none";
+  return containerWidth >= 1200 ? "both" : "none";
 }
-

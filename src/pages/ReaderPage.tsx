@@ -67,6 +67,7 @@ export default function ReaderPage() {
   const [noteDraft, setNoteDraft] = useState<{ cfiRange: string; text: string } | null>(null);
   const [noteText, setNoteText] = useState("");
   const [immersiveHudVisible, setImmersiveHudVisible] = useState(false);
+  const [viewerWidth, setViewerWidth] = useState<number>(() => window.innerWidth);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<ReaderController | null>(null);
@@ -83,6 +84,16 @@ export default function ReaderPage() {
       setBook(found);
     })();
   }, [bookId]);
+
+  useEffect(() => {
+    const update = () => setViewerWidth(viewerRef.current?.clientWidth ?? window.innerWidth);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  const spreadMode = resolveSpreadMode(settings.layoutMode, viewerWidth);
+  const paperMaxWidth = spreadMode === "both" ? 1260 : 980;
 
   useEffect(() => {
     (async () => {
@@ -114,7 +125,6 @@ export default function ReaderPage() {
 
       try {
         logFrontend(`reader: create ${book.id} ${book.library_path}`);
-        const spreadMode = resolveSpreadMode(settings.layoutMode, viewerRef.current?.clientWidth ?? 0);
         controllerRef.current = await createReader({
           container: containerRef.current,
           libraryPath: book.library_path,
@@ -154,7 +164,7 @@ export default function ReaderPage() {
 
       controllerRef.current.setTheme(settings.theme);
       controllerRef.current.setFontSizePercent(settings.fontSizePercent);
-      controllerRef.current.setSpreadMode(resolveSpreadMode(settings.layoutMode, viewerRef.current?.clientWidth ?? 0));
+      controllerRef.current.setSpreadMode(spreadMode);
 
       const [bm, hl, fav] = await Promise.all([
         listBookmarks(book.id),
@@ -188,14 +198,14 @@ export default function ReaderPage() {
       controllerRef.current?.destroy();
       controllerRef.current = null;
     };
-  }, [book, settings.theme, settings.fontSizePercent, settings.layoutMode, location.search]);
+  }, [book, settings.theme, settings.fontSizePercent, settings.layoutMode, location.search, spreadMode]);
 
   useEffect(() => {
     if (!controllerRef.current) return;
     controllerRef.current.setTheme(settings.theme);
     controllerRef.current.setFontSizePercent(settings.fontSizePercent);
-    controllerRef.current.setSpreadMode(resolveSpreadMode(settings.layoutMode, viewerRef.current?.clientWidth ?? 0));
-  }, [settings.theme, settings.fontSizePercent, settings.layoutMode]);
+    controllerRef.current.setSpreadMode(spreadMode);
+  }, [settings.theme, settings.fontSizePercent, settings.layoutMode, spreadMode]);
 
   useEffect(() => {
     if (settings.layoutMode !== "auto") return;
@@ -647,12 +657,15 @@ export default function ReaderPage() {
             ) : null}
           </Drawer>
 
-          <div style={{ height: "100%", width: "100%", display: "grid", placeItems: "center", padding: 18 }}>
+          <div style={{ height: "100%", width: "100%", display: "flex", padding: 18 }}>
             <div
               ref={containerRef}
               style={{
+                flex: 1,
                 height: "100%",
-                width: "min(980px, 100%)",
+                width: "100%",
+                maxWidth: paperMaxWidth,
+                margin: "0 auto",
                 background: "var(--wr-paper)",
                 borderRadius: 22,
                 border: "1px solid var(--wr-hairline)",
