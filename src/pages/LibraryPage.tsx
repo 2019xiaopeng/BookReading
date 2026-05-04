@@ -6,6 +6,7 @@ import type { Book } from "../tauri/invoke";
 import { deleteBook, importBook, listBooks, repairBookMetadata, setBookFavorite } from "../tauri/invoke";
 import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../tauri/appDataPaths";
 import { needsMetadataRepair } from "../library/metadataRepair";
+import { logFrontend } from "../tauri/frontendLog";
 
 function formatTitle(book: Book): string {
   return book.title?.trim() || "未命名";
@@ -196,7 +197,14 @@ export default function LibraryPage() {
               <div className="app-meta-sub">{formatAuthor(b)}</div>
 
               <div className="app-actions">
-                <button onClick={() => navigate(`/read/${b.id}`)} disabled={loading} className="btn-primary">
+                <button
+                  onClick={() => {
+                    logFrontend(`ui: open book ${b.id}`);
+                    navigate(`/read/${b.id}`);
+                  }}
+                  disabled={loading}
+                  className="btn-primary"
+                >
                   打开
                 </button>
                 <button

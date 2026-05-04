@@ -11,6 +11,10 @@
       "identifier": "fs:allow-read-file",
       "allow": [{ "path": "$APPDATA/library/**" }]
     },
+    {
+      "identifier": "fs:scope",
+      "allow": [{ "path": "$APPDATA/library/**" }]
+    },
     "opener:default"
   ]
 }

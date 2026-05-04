@@ -28,6 +28,7 @@ import SearchPanel from "../reader/components/SearchPanel";
 import SettingsPanel from "../reader/components/SettingsPanel";
 import { defaultSettings } from "../reader/settings/defaults";
 import type { ReaderSettings, Theme } from "../reader/settings/types";
+import { logFrontend } from "../tauri/frontendLog";
 
 export default function ReaderPage() {
   const navigate = useNavigate();
@@ -90,6 +91,7 @@ export default function ReaderPage() {
       setTocLoading(true);
 
       try {
+        logFrontend(`reader: create ${book.id} ${book.library_path}`);
         controllerRef.current = await createReader({
           container: containerRef.current,
           libraryPath: book.library_path,
@@ -111,6 +113,7 @@ export default function ReaderPage() {
             setTocLoading(false);
           },
           onError: (msg) => {
+            logFrontend(`reader: onError ${book.id} ${msg}`);
             setReaderError(msg);
             setTocLoading(false);
           },
@@ -140,6 +143,7 @@ export default function ReaderPage() {
           },
         });
       } catch (e) {
+        logFrontend(`reader: create failed ${book.id} ${String(e)}`);
         setReaderError(String(e));
         setTocLoading(false);
         return;

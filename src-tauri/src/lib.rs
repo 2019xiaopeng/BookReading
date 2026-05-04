@@ -13,6 +13,7 @@ use commands::annotations::{
 };
 use commands::reading::{get_settings, set_setting};
 use commands::reading::{get_reading_state, upsert_reading_state};
+use commands::logging::append_frontend_log;
 use commands::favorites::{
     add_favorite_quote, delete_favorite_quote, list_favorite_books, list_favorite_quotes, set_book_favorite,
 };
@@ -74,7 +75,8 @@ pub fn run() {
             get_settings,
             set_setting,
             get_reading_state,
-            upsert_reading_state
+            upsert_reading_state,
+            append_frontend_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2,6 +2,10 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles/global.css";
+import { installFrontendLogging, logFrontend } from "./tauri/frontendLog";
+
+installFrontendLogging();
+logFrontend("frontend: boot");
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
