@@ -34,6 +34,7 @@ import { normalizePageAnimation, normalizeTheme } from "../reader/settings/norma
 import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
+import { useElementSize } from "../ui/useElementSize";
 import {
   IconBookmark,
   IconChevronLeft,
@@ -69,11 +70,10 @@ export default function ReaderPage() {
   const [noteDraft, setNoteDraft] = useState<{ cfiRange: string; text: string } | null>(null);
   const [noteText, setNoteText] = useState("");
   const [immersiveHudVisible, setImmersiveHudVisible] = useState(false);
-  const [viewerWidth, setViewerWidth] = useState<number>(() => window.innerWidth);
-  const [viewerHeight, setViewerHeight] = useState<number>(() => window.innerHeight);
   const [pagerHover, setPagerHover] = useState<"left" | "right" | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
+  const viewerSize = useElementSize(viewerRef);
   const controllerRef = useRef<ReaderController | null>(null);
   const settingsRef = useRef<ReaderSettings>(settings);
   const spreadModeRef = useRef<"none" | "both">("none");
@@ -87,7 +87,6 @@ export default function ReaderPage() {
   const wheelCooldownRef = useRef(0);
   const wheelAccumRef = useRef(0);
   const immersiveHudTimerRef = useRef<number | null>(null);
-  const resizeRafRef = useRef<number | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -97,31 +96,8 @@ export default function ReaderPage() {
     })();
   }, [bookId]);
 
-  useEffect(() => {
-    const measure = () => {
-      setViewerWidth(viewerRef.current?.clientWidth ?? window.innerWidth);
-      setViewerHeight(viewerRef.current?.clientHeight ?? window.innerHeight);
-    };
-
-    const onResize = () => {
-      if (resizeRafRef.current != null) return;
-      resizeRafRef.current = window.requestAnimationFrame(() => {
-        resizeRafRef.current = null;
-        measure();
-      });
-    };
-
-    measure();
-    window.addEventListener("resize", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-      if (resizeRafRef.current != null) {
-        window.cancelAnimationFrame(resizeRafRef.current);
-        resizeRafRef.current = null;
-      }
-    };
-  }, []);
-
+  const viewerWidth = viewerSize.width || window.innerWidth;
+  const viewerHeight = viewerSize.height || window.innerHeight;
   const spreadMode = resolveSpreadMode(settings.layoutMode, viewerWidth);
   const edgeRatio = viewerWidth >= 1400 ? 0.2 : viewerWidth >= 1100 ? 0.18 : 0.16;
   const stage = calcPaperStage({ viewerWidth, viewerHeight, margin: 18, edgeRatio });
