@@ -346,16 +346,10 @@ export default function ReaderPage() {
       void animateTurn(e.deltaY > 0 ? "next" : "prev");
     };
 
-    const onDblClick = () => {
-      setIsImmersive((v) => !v);
-    };
-
     el.addEventListener("wheel", onWheel, { passive: false });
-    el.addEventListener("dblclick", onDblClick);
 
     return () => {
       el.removeEventListener("wheel", onWheel as any);
-      el.removeEventListener("dblclick", onDblClick);
     };
   }, [settings.pageAnimation]);
 
