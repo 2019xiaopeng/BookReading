@@ -31,6 +31,17 @@ import { defaultSettings } from "../reader/settings/defaults";
 import type { ReaderSettings, Theme } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
+import {
+  IconBookmark,
+  IconChevronLeft,
+  IconChevronRight,
+  IconHighlight,
+  IconList,
+  IconMoon,
+  IconQuote,
+  IconSearch,
+  IconSettings,
+} from "../ui/icons";
 
 export default function ReaderPage() {
   const navigate = useNavigate();
@@ -342,25 +353,32 @@ export default function ReaderPage() {
             {book?.title ?? "阅读"}
           </div>
           <div style={{ flex: 1 }} />
-          <button className="wr-btn" onClick={() => openDrawer("toc")}>
+          <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("toc")}>
+            <IconList />
             目录
           </button>
-          <button className="wr-btn" onClick={() => openDrawer("bookmarks")}>
+          <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("bookmarks")}>
+            <IconBookmark />
             书签
           </button>
-          <button className="wr-btn" onClick={() => openDrawer("highlights")}>
+          <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("highlights")}>
+            <IconHighlight />
             标注
           </button>
-          <button className="wr-btn" onClick={() => openDrawer("favorites")}>
+          <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("favorites")}>
+            <IconQuote />
             收藏
           </button>
-          <button className="wr-btn" onClick={() => openDrawer("search")}>
+          <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("search")}>
+            <IconSearch />
             搜索
           </button>
-          <button className="wr-btn" onClick={() => openDrawer("settings")}>
+          <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("settings")}>
+            <IconSettings />
             设置
           </button>
-          <button className="wr-btn" onClick={() => setIsImmersive(true)}>
+          <button className="wr-btn wr-icon-btn" onClick={() => setIsImmersive(true)}>
+            <IconMoon />
             沉浸
           </button>
           <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -655,10 +673,12 @@ export default function ReaderPage() {
             background: "var(--wr-paper)",
           }}
         >
-          <button className="wr-btn" onClick={() => void animateTurn("prev")}>
+          <button className="wr-btn wr-icon-btn" onClick={() => void animateTurn("prev")}>
+            <IconChevronLeft />
             上一页
           </button>
-          <button className="wr-btn" onClick={() => void animateTurn("next")}>
+          <button className="wr-btn wr-icon-btn" onClick={() => void animateTurn("next")}>
+            <IconChevronRight />
             下一页
           </button>
           <div style={{ flex: 1 }} />

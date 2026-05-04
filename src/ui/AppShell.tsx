@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { IconBook, IconStar } from "./icons";
 
 export default function AppShell(props: {
   active: "library" | "favorites" | "reader";
@@ -17,10 +18,12 @@ export default function AppShell(props: {
         </div>
 
         <div style={{ padding: 10, display: "grid", gap: 8 }}>
-          <button className="wr-btn" data-active={props.active === "library"} onClick={() => navigate("/")}>
+          <button className="wr-btn wr-icon-btn" data-active={props.active === "library"} onClick={() => navigate("/")}>
+            <IconBook />
             书架
           </button>
-          <button className="wr-btn" data-active={props.active === "favorites"} onClick={() => navigate("/favorites")}>
+          <button className="wr-btn wr-icon-btn" data-active={props.active === "favorites"} onClick={() => navigate("/favorites")}>
+            <IconStar />
             收藏
           </button>
         </div>
@@ -38,4 +41,3 @@ export default function AppShell(props: {
     </div>
   );
 }
-
