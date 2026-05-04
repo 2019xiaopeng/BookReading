@@ -126,6 +126,19 @@ fn find_cover_href(doc: &Document) -> Option<(String, Option<String>)> {
         return Some((href, media_type));
     }
 
+    let first_image = doc.descendants().find(|n| {
+        if !n.is_element() || !n.tag_name().name().eq_ignore_ascii_case("item") {
+            return false;
+        }
+        let media = n.attribute("media-type").unwrap_or("").to_lowercase();
+        media.starts_with("image/")
+    });
+    if let Some(item) = first_image {
+        let href = item.attribute("href").map(|s| s.to_string())?;
+        let media_type = item.attribute("media-type").map(|s| s.to_string());
+        return Some((href, media_type));
+    }
+
     None
 }
 
@@ -245,5 +258,21 @@ mod tests {
         let (href, media) = find_cover_href(&doc).unwrap();
         assert_eq!(href, "cover.png");
         assert_eq!(media.unwrap(), "image/png");
+    }
+
+    #[test]
+    fn cover_fallback_uses_first_manifest_image_when_no_markers() {
+        let opf = r#"
+        <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="3.0">
+          <manifest>
+            <item id="img1" href="Images/0001.jpg" media-type="image/jpeg" />
+            <item id="img2" href="Images/0002.jpg" media-type="image/jpeg" />
+          </manifest>
+        </package>
+        "#;
+        let doc = Document::parse(opf).unwrap();
+        let (href, media) = find_cover_href(&doc).unwrap();
+        assert_eq!(href, "Images/0001.jpg");
+        assert_eq!(media.unwrap(), "image/jpeg");
     }
 }
