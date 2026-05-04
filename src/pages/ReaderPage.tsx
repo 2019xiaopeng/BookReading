@@ -650,17 +650,15 @@ export default function ReaderPage() {
             </div>
           ) : null}
           {!drawerOpen ? (
-            <div style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "1fr 1fr", zIndex: 5 }}>
+            <div style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "1fr 1fr", zIndex: 15 }}>
               <div
                 onClick={() => {
-                  if (isImmersive) setIsImmersive(false);
                   void animateTurn("prev");
                 }}
                 style={{ cursor: "w-resize" }}
               />
               <div
                 onClick={() => {
-                  if (isImmersive) setIsImmersive(false);
                   void animateTurn("next");
                 }}
                 style={{ cursor: "e-resize" }}
@@ -694,7 +692,48 @@ export default function ReaderPage() {
             {typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
           </div>
         </div>
-      ) : null}
+      ) : (
+        <div
+          style={{
+            position: "fixed",
+            left: 16,
+            right: 16,
+            bottom: 16,
+            zIndex: 60,
+            pointerEvents: "auto",
+          }}
+        >
+          <div
+            className="wr-panel"
+            style={{
+              borderRadius: 999,
+              padding: 10,
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              justifyContent: "space-between",
+              boxShadow: "var(--wr-shadow)",
+            }}
+          >
+            <button className="wr-btn" onClick={() => setIsImmersive(false)}>
+              退出沉浸
+            </button>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button className="wr-btn wr-icon-btn" onClick={() => void animateTurn("prev")}>
+                <IconChevronLeft />
+                上一页
+              </button>
+              <button className="wr-btn wr-icon-btn" onClick={() => void animateTurn("next")}>
+                <IconChevronRight />
+                下一页
+              </button>
+            </div>
+            <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums", paddingRight: 6 }}>
+              {typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
