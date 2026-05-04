@@ -69,6 +69,8 @@ export default function ReaderPage() {
   const [noteText, setNoteText] = useState("");
   const [immersiveHudVisible, setImmersiveHudVisible] = useState(false);
   const [viewerWidth, setViewerWidth] = useState<number>(() => window.innerWidth);
+  const [viewerHeight, setViewerHeight] = useState<number>(() => window.innerHeight);
+  const [pagerHover, setPagerHover] = useState<"left" | "right" | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<ReaderController | null>(null);
@@ -77,10 +79,12 @@ export default function ReaderPage() {
   const locationSearchRef = useRef(location.search);
   const readerCreateCountRef = useRef(0);
   const lastUrlCfiRef = useRef<string | null>(null);
+  const showImmersiveHudRef = useRef<(holdMs?: number) => void>(() => {});
   const persistTimerRef = useRef<number | null>(null);
   const lastCfiRef = useRef<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const wheelCooldownRef = useRef(0);
+  const wheelAccumRef = useRef(0);
   const immersiveHudTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -92,14 +96,18 @@ export default function ReaderPage() {
   }, [bookId]);
 
   useEffect(() => {
-    const update = () => setViewerWidth(viewerRef.current?.clientWidth ?? window.innerWidth);
+    const update = () => {
+      setViewerWidth(viewerRef.current?.clientWidth ?? window.innerWidth);
+      setViewerHeight(viewerRef.current?.clientHeight ?? window.innerHeight);
+    };
     update();
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, []);
 
   const spreadMode = resolveSpreadMode(settings.layoutMode, viewerWidth);
-  const stage = calcPaperStage({ viewerWidth, viewerHeight: window.innerHeight, margin: 18, edgeRatio: 0.2 });
+  const edgeRatio = viewerWidth >= 1400 ? 0.2 : viewerWidth >= 1100 ? 0.18 : 0.16;
+  const stage = calcPaperStage({ viewerWidth, viewerHeight, margin: 18, edgeRatio });
   const pagerEnabled = !drawerOpen && !readerError && !selection && !noteDraft;
 
   useEffect(() => {
@@ -236,6 +244,7 @@ export default function ReaderPage() {
 
   useEffect(() => {
     if (!isImmersive) {
+      showImmersiveHudRef.current = () => {};
       setImmersiveHudVisible(false);
       if (immersiveHudTimerRef.current) {
         window.clearTimeout(immersiveHudTimerRef.current);
@@ -244,14 +253,15 @@ export default function ReaderPage() {
       return;
     }
 
-    const showHud = () => {
+    const showHud = (holdMs = 2500) => {
       setImmersiveHudVisible(true);
       if (immersiveHudTimerRef.current) window.clearTimeout(immersiveHudTimerRef.current);
       immersiveHudTimerRef.current = window.setTimeout(() => {
         setImmersiveHudVisible(false);
         immersiveHudTimerRef.current = null;
-      }, 2500);
+      }, holdMs);
     };
+    showImmersiveHudRef.current = showHud;
 
     const onMouseMove = (e: MouseEvent) => {
       if (e.clientY <= 56) showHud();
@@ -260,6 +270,7 @@ export default function ReaderPage() {
     window.addEventListener("mousemove", onMouseMove);
     showHud();
     return () => {
+      showImmersiveHudRef.current = () => {};
       window.removeEventListener("mousemove", onMouseMove);
       if (immersiveHudTimerRef.current) {
         window.clearTimeout(immersiveHudTimerRef.current);
@@ -340,10 +351,19 @@ export default function ReaderPage() {
     const onWheel = (e: WheelEvent) => {
       const now = Date.now();
       if (now - wheelCooldownRef.current < 300) return;
-      if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
+      if (Math.abs(e.deltaY) < Math.abs(e.deltaX) * 1.2) return;
+      if (Math.abs(e.deltaY) < 10) return;
       e.preventDefault();
+      const d = e.deltaY;
+      if ((wheelAccumRef.current > 0 && d < 0) || (wheelAccumRef.current < 0 && d > 0)) {
+        wheelAccumRef.current = 0;
+      }
+      wheelAccumRef.current += d;
+      if (Math.abs(wheelAccumRef.current) < 60) return;
       wheelCooldownRef.current = now;
-      void animateTurn(e.deltaY > 0 ? "next" : "prev");
+      const dir = wheelAccumRef.current > 0 ? "next" : "prev";
+      wheelAccumRef.current = 0;
+      void animateTurn(dir);
     };
 
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -687,17 +707,54 @@ export default function ReaderPage() {
 
           {pagerEnabled ? (
             <div style={{ position: "absolute", inset: 18, zIndex: 15, pointerEvents: "none", borderRadius: 22 }}>
+              {pagerHover ? (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    bottom: 0,
+                    left: pagerHover === "left" ? 0 : "auto",
+                    right: pagerHover === "right" ? 0 : "auto",
+                    width: pagerHover === "left" ? stage.leftEdgeWidth : stage.rightEdgeWidth,
+                    pointerEvents: "none",
+                    background:
+                      pagerHover === "left"
+                        ? "linear-gradient(90deg, rgba(0,0,0,0.06), rgba(0,0,0,0))"
+                        : "linear-gradient(270deg, rgba(0,0,0,0.06), rgba(0,0,0,0))",
+                  }}
+                />
+              ) : null}
               <div
                 onClick={() => {
                   void animateTurn("prev");
                 }}
-                style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: stage.leftEdgeWidth, cursor: "w-resize", pointerEvents: "auto" }}
+                onMouseEnter={() => setPagerHover("left")}
+                onMouseLeave={() => setPagerHover(null)}
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: stage.leftEdgeWidth,
+                  cursor: "w-resize",
+                  pointerEvents: "auto",
+                }}
               />
               <div
                 onClick={() => {
                   void animateTurn("next");
                 }}
-                style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: stage.rightEdgeWidth, cursor: "e-resize", pointerEvents: "auto" }}
+                onMouseEnter={() => setPagerHover("right")}
+                onMouseLeave={() => setPagerHover(null)}
+                style={{
+                  position: "absolute",
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: stage.rightEdgeWidth,
+                  cursor: "e-resize",
+                  pointerEvents: "auto",
+                }}
               />
             </div>
           ) : null}
@@ -804,6 +861,8 @@ export default function ReaderPage() {
 
       {isImmersive ? (
         <div
+          onMouseEnter={() => showImmersiveHudRef.current(10_000)}
+          onMouseLeave={() => showImmersiveHudRef.current(900)}
           style={{
             position: "fixed",
             left: 16,
@@ -828,19 +887,43 @@ export default function ReaderPage() {
               boxShadow: "var(--wr-shadow)",
             }}
           >
-            <button className="wr-btn" onClick={() => setIsImmersive(false)}>
+            <button
+              className="wr-btn"
+              onClick={() => {
+                showImmersiveHudRef.current();
+                setIsImmersive(false);
+              }}
+            >
               退出沉浸
             </button>
             <div style={{ display: "flex", gap: 10 }}>
-              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("toc")}>
+              <button
+                className="wr-btn wr-icon-btn"
+                onClick={() => {
+                  showImmersiveHudRef.current();
+                  openDrawer("toc");
+                }}
+              >
                 <IconList />
                 目录
               </button>
-              <button className="wr-btn wr-icon-btn" onClick={() => void animateTurn("prev")}>
+              <button
+                className="wr-btn wr-icon-btn"
+                onClick={() => {
+                  showImmersiveHudRef.current();
+                  void animateTurn("prev");
+                }}
+              >
                 <IconChevronLeft />
                 上一页
               </button>
-              <button className="wr-btn wr-icon-btn" onClick={() => void animateTurn("next")}>
+              <button
+                className="wr-btn wr-icon-btn"
+                onClick={() => {
+                  showImmersiveHudRef.current();
+                  void animateTurn("next");
+                }}
+              >
                 <IconChevronRight />
                 下一页
               </button>
