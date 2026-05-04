@@ -624,7 +624,7 @@ export default function ReaderPage() {
             </div>
           ) : null}
           {!drawerOpen ? (
-            <div style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "1fr 1fr" }}>
+            <div style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "1fr 1fr", zIndex: 5 }}>
               <div
                 onClick={() => {
                   if (isImmersive) setIsImmersive(false);
@@ -643,6 +643,30 @@ export default function ReaderPage() {
           ) : null}
         </div>
       </div>
+
+      {!isImmersive ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: 10,
+            borderTop: "1px solid var(--wr-hairline)",
+            background: "var(--wr-paper)",
+          }}
+        >
+          <button className="wr-btn" onClick={() => void animateTurn("prev")}>
+            上一页
+          </button>
+          <button className="wr-btn" onClick={() => void animateTurn("next")}>
+            下一页
+          </button>
+          <div style={{ flex: 1 }} />
+          <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
+            {typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
