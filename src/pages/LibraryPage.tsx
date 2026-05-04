@@ -50,7 +50,8 @@ export default function LibraryPage() {
           try {
             await repairBookMetadata(b.id);
             await refresh();
-          } catch {
+          } catch (e) {
+            logFrontend(`meta: repair failed ${b.id} ${String(e)}`);
           } finally {
             repairingRef.current.delete(b.id);
           }
@@ -109,7 +110,8 @@ export default function LibraryPage() {
               }
               return { ...prev, [coverPath]: url };
             });
-          } catch {
+          } catch (e) {
+            logFrontend(`cover: load failed ${coverPath} ${String(e)}`);
           } finally {
             coverLoadingRef.current.delete(coverPath);
           }
@@ -199,7 +201,9 @@ export default function LibraryPage() {
             <div className="app-cover">
               {b.cover_path && coverUrls[b.cover_path] ? (
                 <img src={coverUrls[b.cover_path]} alt="" />
-              ) : null}
+              ) : (
+                <div className="app-cover-fallback">{(formatTitle(b).trim() || "未").slice(0, 1)}</div>
+              )}
             </div>
 
             <div className="app-meta">

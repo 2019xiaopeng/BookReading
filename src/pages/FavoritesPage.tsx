@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import type { Book, FavoriteQuote } from "../tauri/invoke";
 import { deleteFavoriteQuote, listBooks, listFavoriteBooks, listFavoriteQuotes, setBookFavorite } from "../tauri/invoke";
 import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../tauri/appDataPaths";
+import { logFrontend } from "../tauri/frontendLog";
 
 export default function FavoritesPage() {
   const navigate = useNavigate();
@@ -94,7 +95,8 @@ export default function FavoritesPage() {
               }
               return { ...prev, [coverPath]: url };
             });
-          } catch {
+          } catch (e) {
+            logFrontend(`cover: load failed ${coverPath} ${String(e)}`);
           } finally {
             coverLoadingRef.current.delete(coverPath);
           }
@@ -147,7 +149,9 @@ export default function FavoritesPage() {
               <div className="app-cover">
                 {b.cover_path && coverUrls[b.cover_path] ? (
                   <img src={coverUrls[b.cover_path]} alt="" />
-                ) : null}
+                ) : (
+                  <div className="app-cover-fallback">{(b.title?.trim() || "未").slice(0, 1)}</div>
+                )}
               </div>
 
               <div className="app-meta">

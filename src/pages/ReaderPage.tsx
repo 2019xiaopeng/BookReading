@@ -315,7 +315,10 @@ export default function ReaderPage() {
   }
 
   return (
-    <div data-theme={settings.theme} style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+    <div
+      data-theme={settings.theme}
+      style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--text)", overflow: "hidden" }}
+    >
       {!isImmersive ? (
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: 12, borderBottom: "1px solid var(--border)" }}>
           <button onClick={() => navigate("/")}>返回书库</button>
@@ -527,7 +530,7 @@ export default function ReaderPage() {
           </div>
         ) : null}
 
-        <div ref={viewerRef} style={{ position: "relative", flex: 1, minWidth: 0, background: "var(--panel-solid)" }}>
+        <div ref={viewerRef} style={{ position: "relative", flex: 1, minWidth: 0, background: "var(--panel-solid)", overflow: "hidden" }}>
           <div ref={containerRef} style={{ height: "100%", width: "100%", background: "transparent" }} />
           {readerError ? (
             <div

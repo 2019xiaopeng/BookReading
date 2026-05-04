@@ -81,14 +81,31 @@ export async function createReader(opts: {
     opts.onError?.(`章节渲染失败：${String(e ?? "displayerror")}`);
   });
 
+  const common: Record<string, any> = {
+    "*, *::before, *::after": { "box-sizing": "border-box" },
+    img: { "max-width": "100%", height: "auto" },
+    svg: { "max-width": "100%" },
+    table: { "max-width": "100%", width: "100%" },
+    body: {
+      margin: "0 auto",
+      padding: "24px 20px",
+      "line-height": "1.85",
+      "word-break": "break-word",
+      "overflow-wrap": "anywhere",
+    },
+  };
+
   rendition.themes.register("light", {
-    body: { background: "#ffffff", color: "#111111" },
+    ...common,
+    body: { ...common.body, background: "#ffffff", color: "#111111" },
   });
   rendition.themes.register("dark", {
-    body: { background: "#0f1115", color: "#e8eaf0" },
+    ...common,
+    body: { ...common.body, background: "#0f1115", color: "#e8eaf0" },
   });
   rendition.themes.register("sepia", {
-    body: { background: "#f7f1e1", color: "#2b2620" },
+    ...common,
+    body: { ...common.body, background: "#f7f1e1", color: "#2b2620" },
   });
   rendition.themes.select("light");
   rendition.themes.fontSize("120%");
