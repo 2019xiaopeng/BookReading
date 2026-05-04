@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import type { Book, FavoriteQuote } from "../tauri/invoke";
@@ -15,6 +15,8 @@ export default function FavoritesPage() {
   const [query, setQuery] = useState("");
   const [filterBookId, setFilterBookId] = useState<string | "all">("all");
   const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
+  const coverUrlsRef = useRef<Record<string, string>>({});
+  const coverLoadingRef = useRef<Set<string>>(new Set());
 
   const bookIdToTitle = useMemo(() => {
     const map = new Map<string, string>();
@@ -46,6 +48,10 @@ export default function FavoritesPage() {
   }, []);
 
   useEffect(() => {
+    coverUrlsRef.current = coverUrls;
+  }, [coverUrls]);
+
+  useEffect(() => {
     const abort = new AbortController();
     const pending: Promise<void>[] = [];
 
@@ -68,7 +74,9 @@ export default function FavoritesPage() {
     for (const b of favoriteBooks) {
       const coverPath = b.cover_path;
       if (!coverPath) continue;
-      if (coverUrls[coverPath]) continue;
+      if (coverUrlsRef.current[coverPath]) continue;
+      if (coverLoadingRef.current.has(coverPath)) continue;
+      coverLoadingRef.current.add(coverPath);
 
       pending.push(
         (async () => {
@@ -87,6 +95,8 @@ export default function FavoritesPage() {
               return { ...prev, [coverPath]: url };
             });
           } catch {
+          } finally {
+            coverLoadingRef.current.delete(coverPath);
           }
         })(),
       );
@@ -96,7 +106,7 @@ export default function FavoritesPage() {
       abort.abort();
       void Promise.allSettled(pending);
     };
-  }, [favoriteBooks, coverUrls]);
+  }, [favoriteBooks]);
 
   useEffect(() => {
     return () => {

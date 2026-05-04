@@ -23,6 +23,8 @@ export default function LibraryPage() {
   const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
   const repairingRef = useRef<Set<string>>(new Set());
   const attemptedRef = useRef<Set<string>>(new Set());
+  const coverUrlsRef = useRef<Record<string, string>>({});
+  const coverLoadingRef = useRef<Set<string>>(new Set());
 
   const booksSorted = useMemo(() => books, [books]);
 
@@ -61,6 +63,10 @@ export default function LibraryPage() {
   }, [books]);
 
   useEffect(() => {
+    coverUrlsRef.current = coverUrls;
+  }, [coverUrls]);
+
+  useEffect(() => {
     const abort = new AbortController();
     const pending: Promise<void>[] = [];
 
@@ -83,7 +89,9 @@ export default function LibraryPage() {
     for (const b of books) {
       const coverPath = b.cover_path;
       if (!coverPath) continue;
-      if (coverUrls[coverPath]) continue;
+      if (coverUrlsRef.current[coverPath]) continue;
+      if (coverLoadingRef.current.has(coverPath)) continue;
+      coverLoadingRef.current.add(coverPath);
 
       pending.push(
         (async () => {
@@ -102,6 +110,8 @@ export default function LibraryPage() {
               return { ...prev, [coverPath]: url };
             });
           } catch {
+          } finally {
+            coverLoadingRef.current.delete(coverPath);
           }
         })(),
       );
@@ -111,7 +121,7 @@ export default function LibraryPage() {
       abort.abort();
       void Promise.allSettled(pending);
     };
-  }, [books, coverUrls]);
+  }, [books]);
 
   useEffect(() => {
     return () => {
