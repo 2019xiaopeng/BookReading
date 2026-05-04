@@ -9,21 +9,9 @@ export default function SelectionToolbar(props: {
   if (!props.open) return null;
 
   return (
-    <div style={{ position: "absolute", left: 16, right: 16, bottom: 16, zIndex: 25 }}>
-      <div
-        className="wr-panel"
-        style={{
-          padding: 10,
-          borderRadius: 999,
-          display: "flex",
-          gap: 10,
-          alignItems: "center",
-          boxShadow: "var(--wr-shadow)",
-        }}
-      >
-        <div style={{ flex: 1, minWidth: 0, color: "var(--wr-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {props.text}
-        </div>
+    <div className="wr-selection">
+      <div className="wr-panel wr-selection-bar">
+        <div className="wr-selection-text">{props.text}</div>
         <button className="wr-btn" onClick={props.onHighlight}>
           高亮
         </button>
@@ -40,4 +28,3 @@ export default function SelectionToolbar(props: {
     </div>
   );
 }
-

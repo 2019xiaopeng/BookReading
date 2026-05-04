@@ -445,17 +445,10 @@ export default function ReaderPage() {
   return (
     <div
       data-theme={settings.theme}
-      style={{
-        height: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        background: "var(--wr-bg)",
-        color: "var(--wr-ink)",
-        overflow: "hidden",
-      }}
+      className="wr-reader-root"
     >
       {!isImmersive ? (
-        <div className="wr-topbar" style={{ borderBottom: "1px solid var(--wr-hairline)", background: "var(--wr-paper)" }}>
+        <div className="wr-topbar wr-reader-topbar">
           <button className="wr-btn" onClick={() => navigate("/")}>
             返回书库
           </button>
@@ -499,18 +492,10 @@ export default function ReaderPage() {
         <div style={{ height: 8 }} />
       )}
 
-      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+      <div className="wr-reader-stage">
         <div
           ref={viewerRef}
-          style={{
-            position: "relative",
-            flex: 1,
-            minWidth: 0,
-            background: "var(--wr-bg)",
-            overflow: "hidden",
-            display: "grid",
-            placeItems: "stretch",
-          }}
+          className="wr-reader-viewer"
         >
           <Drawer
             open={drawerOpen && !isImmersive}
@@ -689,19 +674,10 @@ export default function ReaderPage() {
             ) : null}
           </Drawer>
 
-          <div style={{ height: "100%", width: "100%", display: "flex", padding: 18 }}>
+          <div className="wr-reader-paper-wrap">
             <div
               ref={containerRef}
-              style={{
-                flex: 1,
-                height: "100%",
-                width: "100%",
-                background: "var(--wr-paper)",
-                borderRadius: 22,
-                border: "1px solid var(--wr-hairline)",
-                overflow: "hidden",
-                boxShadow: "var(--wr-shadow)",
-              }}
+              className="wr-reader-paper"
             />
           </div>
 
@@ -835,13 +811,13 @@ export default function ReaderPage() {
 
       {!isImmersive ? (
         <div
+          className="wr-reader-footer"
           style={{
             display: "flex",
             alignItems: "center",
             gap: 10,
             padding: 10,
             borderTop: "1px solid var(--wr-hairline)",
-            background: "var(--wr-paper)",
           }}
         >
           <button className="wr-btn wr-icon-btn" onClick={() => void animateTurn("prev")}>
@@ -863,30 +839,14 @@ export default function ReaderPage() {
         <div
           onMouseEnter={() => showImmersiveHudRef.current(10_000)}
           onMouseLeave={() => showImmersiveHudRef.current(900)}
+          className="wr-immersive-hud"
           style={{
-            position: "fixed",
-            left: 16,
-            right: 16,
-            top: 10,
-            zIndex: 60,
             pointerEvents: immersiveHudVisible ? "auto" : "none",
             opacity: immersiveHudVisible ? 1 : 0,
             transform: immersiveHudVisible ? "translateY(0)" : "translateY(-6px)",
-            transition: "opacity 160ms ease, transform 160ms ease",
           }}
         >
-          <div
-            className="wr-panel"
-            style={{
-              borderRadius: 999,
-              padding: 10,
-              display: "flex",
-              gap: 10,
-              alignItems: "center",
-              justifyContent: "space-between",
-              boxShadow: "var(--wr-shadow)",
-            }}
-          >
+          <div className="wr-immersive-hud-card">
             <button
               className="wr-btn"
               onClick={() => {
