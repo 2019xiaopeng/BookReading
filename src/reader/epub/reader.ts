@@ -3,6 +3,15 @@ import ePub from "epubjs";
 import type { Theme } from "../settings/types";
 import { readAppDataFile } from "../../tauri/appDataPaths";
 import type { SpreadMode } from "../settings/layoutMode";
+import { logFrontend } from "../../tauri/frontendLog";
+
+const loggedKeys = new Set<string>();
+
+function logOnce(key: string, line: string): void {
+  if (loggedKeys.has(key)) return;
+  loggedKeys.add(key);
+  logFrontend(line);
+}
 
 export type TocItem = {
   label: string;
@@ -45,7 +54,8 @@ export function applySpreadMode(rendition: any, mode: SpreadMode): void {
   try {
     const spreadFn = rendition?.spread;
     if (typeof spreadFn === "function") spreadFn.call(rendition, mode);
-  } catch {
+  } catch (e) {
+    logOnce("reader.spread", `reader: spread failed ${String(e)}`);
   }
 }
 
@@ -77,7 +87,8 @@ export async function createReader(opts: {
   void (async () => {
     try {
       await withTimeout(book.locations.generate(1024), 30_000);
-    } catch {
+    } catch (e) {
+      logOnce("reader.locations", `reader: locations.generate failed ${String(e)}`);
     }
   })();
 
@@ -141,7 +152,8 @@ export async function createReader(opts: {
       try {
         const range = await book.getRange(cfiRange);
         text = range?.toString?.() ?? "";
-      } catch {
+      } catch (e) {
+        logOnce("reader.getRange", `reader: getRange failed ${String(e)}`);
       }
 
       opts.onSelected?.({ cfiRange, text });
@@ -194,7 +206,8 @@ export async function createReader(opts: {
       applySpreadMode(rendition, mode);
       try {
         rendition.resize?.();
-      } catch {
+      } catch (e) {
+        logOnce("reader.resize", `reader: resize failed ${String(e)}`);
       }
     },
     addHighlight: (cfiRange: string) => {
@@ -203,7 +216,8 @@ export async function createReader(opts: {
     removeHighlight: (cfiRange: string) => {
       try {
         rendition.annotations.remove(cfiRange);
-      } catch {
+      } catch (e) {
+        logOnce("reader.removeHighlight", `reader: removeHighlight failed ${String(e)}`);
       }
     },
     search: async (query: string) => {
@@ -211,6 +225,8 @@ export async function createReader(opts: {
       if (!q) return [];
       const items: any[] = Array.isArray(book.spine?.spineItems) ? book.spine.spineItems : [];
       const matches: { cfi: string; excerpt: string }[] = [];
+      let errors = 0;
+      let lastError: unknown = null;
 
       for (const section of items) {
         try {
@@ -222,7 +238,9 @@ export async function createReader(opts: {
               if (matches.length >= 200) return matches;
             }
           }
-        } catch {
+        } catch (e) {
+          errors += 1;
+          lastError = e;
         } finally {
           try {
             section.unload?.();
@@ -231,16 +249,21 @@ export async function createReader(opts: {
         }
       }
 
+      if (errors && !matches.length) {
+        logOnce("reader.search", `reader: search failed errors=${errors} last=${String(lastError)}`);
+      }
       return matches;
     },
     destroy: () => {
       try {
         rendition.destroy();
-      } catch {
+      } catch (e) {
+        logOnce("reader.rendition.destroy", `reader: rendition.destroy failed ${String(e)}`);
       }
       try {
         book.destroy();
-      } catch {
+      } catch (e) {
+        logOnce("reader.book.destroy", `reader: book.destroy failed ${String(e)}`);
       }
     },
   };
