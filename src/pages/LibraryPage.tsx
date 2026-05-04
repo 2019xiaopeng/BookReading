@@ -230,6 +230,19 @@ export default function LibraryPage() {
                 >
                   {b.is_favorite ? "取消收藏" : "收藏"}
                 </button>
+                {!b.cover_path ? (
+                  <button
+                    onClick={() => {
+                      setLoading(true);
+                      repairBookMetadata(b.id)
+                        .then(() => refresh())
+                        .finally(() => setLoading(false));
+                    }}
+                    disabled={loading}
+                  >
+                    修复封面
+                  </button>
+                ) : null}
                 <button onClick={() => onDelete(b.id)} disabled={loading} className="btn-danger">
                   删除
                 </button>

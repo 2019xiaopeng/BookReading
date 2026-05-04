@@ -291,15 +291,23 @@ export default function ReaderPage() {
     const ctrl = controllerRef.current;
     const el = viewerRef.current;
     if (!ctrl) return;
+    const run = async () => {
+      try {
+        await (direction === "next" ? ctrl.next() : ctrl.prev());
+      } catch (e) {
+        logFrontend(`reader: turn failed ${direction} ${String(e)}`);
+      }
+    };
+
     if (!el || settings.pageAnimation === "none") {
-      await (direction === "next" ? ctrl.next() : ctrl.prev());
+      await run();
       return;
     }
 
     if (settings.pageAnimation === "fade") {
       el.style.transition = "opacity 180ms ease";
       el.style.opacity = "0.35";
-      await (direction === "next" ? ctrl.next() : ctrl.prev());
+      await run();
       requestAnimationFrame(() => {
         el.style.opacity = "1";
       });
@@ -309,14 +317,14 @@ export default function ReaderPage() {
     if (settings.pageAnimation === "slide") {
       el.style.transition = "transform 180ms ease";
       el.style.transform = direction === "next" ? "translateX(-2%)" : "translateX(2%)";
-      await (direction === "next" ? ctrl.next() : ctrl.prev());
+      await run();
       requestAnimationFrame(() => {
         el.style.transform = "translateX(0)";
       });
       return;
     }
 
-    await (direction === "next" ? ctrl.next() : ctrl.prev());
+    await run();
   }
 
   function openDrawer(tab: typeof sideTab) {

@@ -203,7 +203,7 @@ pub fn extract_epub_metadata(epub_path: &Path) -> Result<EpubMetadata, String> {
             Some(p) => p,
             None => PathBuf::from(&opf_dir),
         };
-        let cover_name = cover_path.to_string_lossy().to_string();
+        let cover_name = cover_path.to_string_lossy().to_string().replace('\\', "/");
         let bytes = read_zip_bytes_limited(&mut zip, &cover_name, MAX_COVER_BYTES).ok();
         let ext = cover_path
             .extension()
