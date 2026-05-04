@@ -78,7 +78,6 @@ export default function ReaderPage() {
   const settingsRef = useRef<ReaderSettings>(settings);
   const spreadModeRef = useRef<"none" | "both">("none");
   const locationSearchRef = useRef(location.search);
-  const readerCreateCountRef = useRef(0);
   const lastUrlCfiRef = useRef<string | null>(null);
   const showImmersiveHudRef = useRef<(holdMs?: number) => void>(() => {});
   const persistTimerRef = useRef<number | null>(null);
@@ -89,11 +88,16 @@ export default function ReaderPage() {
   const immersiveHudTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       const books = await listBooks();
+      if (cancelled) return;
       const found = books.find((b) => b.id === bookId) ?? null;
       setBook(found);
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [bookId]);
 
   const viewerWidth = viewerSize.width || window.innerWidth;
@@ -116,8 +120,10 @@ export default function ReaderPage() {
   }, [location.search]);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       const map = await getSettings();
+      if (cancelled) return;
       const theme = normalizeTheme(map.theme);
       const fontSizePercent = Number(map.fontSizePercent ?? defaultSettings.fontSizePercent);
       const pageAnimation = normalizePageAnimation(map.pageAnimation);
@@ -129,87 +135,110 @@ export default function ReaderPage() {
         layoutMode,
       });
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      controllerRef.current?.destroy();
-      controllerRef.current = null;
       if (!book) return;
       if (!containerRef.current) return;
 
-      containerRef.current.innerHTML = "";
+      const container = containerRef.current;
+      container.innerHTML = "";
       setReaderError(null);
       setToc([]);
       setTocLoading(true);
 
+      const onRelocated = ({ cfi, percent }: { cfi: string; percent: number | null }) => {
+        lastCfiRef.current = cfi;
+        if (typeof percent === "number") setPercent(percent);
+
+        if (persistTimerRef.current) {
+          window.clearTimeout(persistTimerRef.current);
+        }
+        persistTimerRef.current = window.setTimeout(() => {
+          const lastCfi = lastCfiRef.current;
+          if (!lastCfi) return;
+          void upsertReadingState(book.id, lastCfi, typeof percent === "number" ? percent : null);
+        }, 1500);
+      };
+
+      const onTocLoaded = (toc: TocItem[]) => {
+        if (cancelled) return;
+        setToc(toc);
+        setTocLoading(false);
+      };
+
+      const onError = (msg: string) => {
+        logFrontend(`reader: onError ${book.id} ${msg}`);
+        if (cancelled) return;
+        setReaderError(msg);
+        setTocLoading(false);
+      };
+
+      const onSelected = ({ cfiRange, text }: { cfiRange: string; text: string }) => {
+        if (cancelled) return;
+        setSelection({ cfiRange, text: text.trim() ? text : "" });
+      };
+
+      let ctrl: ReaderController | null = null;
       try {
-        readerCreateCountRef.current += 1;
-        logFrontend(`reader: create ${book.id} ${book.library_path} count=${readerCreateCountRef.current}`);
-        controllerRef.current = await createReader({
-          container: containerRef.current,
+        logFrontend(`reader: create ${book.id} ${book.library_path}`);
+        ctrl = await createReader({
+          container,
           libraryPath: book.library_path,
           spreadMode: spreadModeRef.current,
-          onRelocated: ({ cfi, percent }) => {
-            lastCfiRef.current = cfi;
-            if (typeof percent === "number") setPercent(percent);
-
-            if (persistTimerRef.current) {
-              window.clearTimeout(persistTimerRef.current);
-            }
-            persistTimerRef.current = window.setTimeout(() => {
-              const lastCfi = lastCfiRef.current;
-              if (!lastCfi) return;
-              void upsertReadingState(book.id, lastCfi, typeof percent === "number" ? percent : null);
-            }, 1500);
-          },
-          onTocLoaded: (toc) => {
-            setToc(toc);
-            setTocLoading(false);
-          },
-          onError: (msg) => {
-            logFrontend(`reader: onError ${book.id} ${msg}`);
-            setReaderError(msg);
-            setTocLoading(false);
-          },
-          onSelected: ({ cfiRange, text }) => {
-            setSelection({ cfiRange, text: text.trim() ? text : "" });
-          },
+          onRelocated,
+          onTocLoaded,
+          onSelected,
+          onError,
         });
       } catch (e) {
         logFrontend(`reader: create failed ${book.id} ${String(e)}`);
+        if (cancelled) return;
         setReaderError(String(e));
         setTocLoading(false);
         return;
       }
 
-      controllerRef.current.setTheme(settingsRef.current.theme);
-      controllerRef.current.setFontSizePercent(settingsRef.current.fontSizePercent);
-      controllerRef.current.setSpreadMode(spreadModeRef.current);
+      if (cancelled) {
+        ctrl.destroy();
+        return;
+      }
+
+      controllerRef.current = ctrl;
+      ctrl.setTheme(settingsRef.current.theme);
+      ctrl.setFontSizePercent(settingsRef.current.fontSizePercent);
+      ctrl.setSpreadMode(spreadModeRef.current);
 
       const [bm, hl, fav] = await Promise.all([
         listBookmarks(book.id),
         listHighlights(book.id),
         listFavoriteQuotes({ bookId: book.id }),
       ]);
+      if (cancelled) return;
       setBookmarks(bm);
       setHighlights(hl);
       setFavoriteQuotes(fav);
       for (const h of hl) {
-        controllerRef.current.addHighlight(h.cfi_range);
+        ctrl.addHighlight(h.cfi_range);
       }
 
       const cfiFromUrl = new URLSearchParams(locationSearchRef.current).get("cfi");
-      if (!cfiFromUrl) {
-        const state = await getReadingState(book.id);
-        if (state?.cfi) {
-          await controllerRef.current.display(state.cfi);
-          if (typeof state.percent === "number") setPercent(state.percent);
-        }
+      if (cfiFromUrl) return;
+      const state = await getReadingState(book.id);
+      if (cancelled) return;
+      if (state?.cfi) {
+        await ctrl.display(state.cfi);
+        if (typeof state.percent === "number") setPercent(state.percent);
       }
     })();
 
     return () => {
+      cancelled = true;
       if (persistTimerRef.current) {
         window.clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
