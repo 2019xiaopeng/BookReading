@@ -1,0 +1,1296 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BookReading · 微信读书风原型</title>
+    <style>
+      :root {
+        --bg: #f6f4ef;
+        --paper: #fbfaf7;
+        --ink: rgba(22, 24, 26, 0.92);
+        --muted: rgba(22, 24, 26, 0.56);
+        --hairline: rgba(22, 24, 26, 0.12);
+        --shadow: 0 16px 60px rgba(14, 16, 18, 0.16);
+        --shadow-soft: 0 10px 36px rgba(14, 16, 18, 0.12);
+        --radius-xl: 22px;
+        --radius-lg: 16px;
+        --radius-md: 12px;
+        --accent: #1aad19;
+        --accent-ink: #ffffff;
+        --serif: "Songti SC", "STSong", "Source Han Serif SC", "Noto Serif SC", "SimSun", serif;
+        --sans: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+
+      [data-theme="dark"] {
+        --bg: #0f1214;
+        --paper: rgba(255, 255, 255, 0.06);
+        --ink: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.62);
+        --hairline: rgba(255, 255, 255, 0.14);
+        --shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+        --shadow-soft: 0 10px 40px rgba(0, 0, 0, 0.44);
+        --accent: #28c76f;
+        --accent-ink: rgba(6, 10, 10, 0.96);
+      }
+
+      [data-theme="sepia"] {
+        --bg: #f4efe6;
+        --paper: #fffaf0;
+        --ink: rgba(38, 29, 18, 0.9);
+        --muted: rgba(38, 29, 18, 0.62);
+        --hairline: rgba(38, 29, 18, 0.14);
+        --shadow: 0 16px 60px rgba(38, 29, 18, 0.18);
+        --shadow-soft: 0 10px 40px rgba(38, 29, 18, 0.14);
+        --accent: #b45309;
+        --accent-ink: #fff7ed;
+      }
+
+      html,
+      body {
+        height: 100%;
+      }
+
+      body {
+        margin: 0;
+        font-family: var(--sans);
+        color: var(--ink);
+        background: radial-gradient(800px 520px at 18% 0%, rgba(26, 173, 25, 0.12), transparent 62%),
+          radial-gradient(780px 540px at 92% 22%, rgba(34, 197, 94, 0.09), transparent 58%), var(--bg);
+        overflow: hidden;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      .app {
+        height: 100%;
+        display: grid;
+        grid-template-columns: 270px 1fr;
+        gap: 18px;
+        padding: 18px;
+      }
+
+      .panel {
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius-xl);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.55));
+        box-shadow: var(--shadow-soft);
+        overflow: hidden;
+      }
+
+      [data-theme="dark"] .panel {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+      }
+
+      [data-theme="sepia"] .panel {
+        background: linear-gradient(180deg, rgba(255, 252, 246, 0.96), rgba(255, 250, 240, 0.86));
+      }
+
+      .side {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+
+      .side-top {
+        padding: 16px 16px 14px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border-bottom: 1px solid var(--hairline);
+      }
+
+      .brand {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .brand-name {
+        font-weight: 750;
+        letter-spacing: 0.2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .brand-sub {
+        font-size: 12px;
+        color: var(--muted);
+        font-family: var(--mono);
+      }
+
+      .pill {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(0, 0, 0, 0.06);
+        border: 1px solid var(--hairline);
+        border-radius: 999px;
+        padding: 6px 10px;
+        color: var(--muted);
+      }
+
+      [data-theme="dark"] .pill {
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--accent);
+        box-shadow: 0 0 0 4px rgba(26, 173, 25, 0.15);
+      }
+
+      .nav {
+        padding: 10px 10px 12px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .nav button {
+        border: 1px solid transparent;
+        background: transparent;
+        text-align: left;
+        border-radius: 12px;
+        padding: 10px 12px;
+        cursor: pointer;
+        color: var(--muted);
+        transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, color 120ms ease;
+      }
+
+      .nav button:hover {
+        transform: translateY(-1px);
+        background: rgba(0, 0, 0, 0.04);
+        border-color: rgba(0, 0, 0, 0.06);
+        color: var(--ink);
+      }
+
+      [data-theme="dark"] .nav button:hover {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: rgba(255, 255, 255, 0.08);
+      }
+
+      .nav button[data-active="true"] {
+        background: rgba(26, 173, 25, 0.12);
+        border-color: rgba(26, 173, 25, 0.22);
+        color: var(--ink);
+      }
+
+      [data-theme="dark"] .nav button[data-active="true"] {
+        background: rgba(40, 199, 111, 0.14);
+        border-color: rgba(40, 199, 111, 0.22);
+      }
+
+      .nav-title {
+        font-weight: 650;
+        color: inherit;
+      }
+
+      .nav-sub {
+        margin-top: 2px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .side-bottom {
+        margin-top: auto;
+        padding: 12px;
+        border-top: 1px solid var(--hairline);
+        display: flex;
+        gap: 10px;
+      }
+
+      .small-btn {
+        flex: 1;
+        border: 1px solid var(--hairline);
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.04);
+        padding: 10px 12px;
+        cursor: pointer;
+        color: var(--ink);
+        transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+      }
+
+      [data-theme="dark"] .small-btn {
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .small-btn:hover {
+        transform: translateY(-1px);
+        border-color: rgba(26, 173, 25, 0.28);
+      }
+
+      .small-btn.primary {
+        border-color: rgba(26, 173, 25, 0.32);
+        background: linear-gradient(180deg, rgba(26, 173, 25, 0.96), rgba(26, 173, 25, 0.76));
+        color: var(--accent-ink);
+      }
+
+      [data-theme="dark"] .small-btn.primary {
+        border-color: rgba(40, 199, 111, 0.32);
+        background: linear-gradient(180deg, rgba(40, 199, 111, 0.94), rgba(40, 199, 111, 0.72));
+      }
+
+      .main {
+        display: grid;
+        grid-template-rows: 62px 1fr;
+        min-width: 0;
+        min-height: 0;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--hairline);
+      }
+
+      .search {
+        flex: 1;
+        min-width: 0;
+        position: relative;
+      }
+
+      .search input {
+        width: 100%;
+        border: 1px solid var(--hairline);
+        background: rgba(0, 0, 0, 0.04);
+        border-radius: 999px;
+        padding: 11px 14px 11px 40px;
+        outline: none;
+        color: var(--ink);
+      }
+
+      [data-theme="dark"] .search input {
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .search input:focus {
+        border-color: rgba(26, 173, 25, 0.35);
+        box-shadow: 0 0 0 4px rgba(26, 173, 25, 0.12);
+      }
+
+      .search-icon {
+        position: absolute;
+        left: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 18px;
+        height: 18px;
+        border-radius: 7px;
+        border: 1px solid var(--hairline);
+        background: rgba(0, 0, 0, 0.04);
+      }
+
+      [data-theme="dark"] .search-icon {
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .seg {
+        display: inline-flex;
+        border: 1px solid var(--hairline);
+        border-radius: 999px;
+        padding: 4px;
+        background: rgba(0, 0, 0, 0.03);
+      }
+
+      [data-theme="dark"] .seg {
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      .seg button {
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--muted);
+        padding: 8px 12px;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+      }
+
+      .seg button:hover {
+        transform: translateY(-1px);
+        color: var(--ink);
+      }
+
+      .seg button[data-active="true"] {
+        background: var(--paper);
+        color: var(--ink);
+        border-color: var(--hairline);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+      }
+
+      [data-theme="dark"] .seg button[data-active="true"] {
+        background: rgba(255, 255, 255, 0.08);
+        box-shadow: 0 12px 34px rgba(0, 0, 0, 0.4);
+      }
+
+      .content {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 1fr;
+      }
+
+      .screen {
+        min-height: 0;
+        display: none;
+      }
+
+      .screen[data-active="true"] {
+        display: grid;
+      }
+
+      .library {
+        padding: 16px 18px 18px;
+        overflow: auto;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 14px;
+      }
+
+      .book {
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius-lg);
+        background: var(--paper);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+        padding: 12px;
+        display: grid;
+        grid-template-columns: 64px 1fr;
+        gap: 12px;
+        cursor: pointer;
+        transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+      }
+
+      [data-theme="dark"] .book {
+        background: rgba(255, 255, 255, 0.06);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.42);
+      }
+
+      .book:hover {
+        transform: translateY(-2px);
+        border-color: rgba(26, 173, 25, 0.28);
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.16);
+      }
+
+      .cover {
+        width: 64px;
+        height: 92px;
+        border-radius: 12px;
+        border: 1px solid var(--hairline);
+        position: relative;
+        overflow: hidden;
+        background: radial-gradient(90px 110px at 35% 20%, rgba(26, 173, 25, 0.42), rgba(26, 173, 25, 0) 60%),
+          radial-gradient(80px 80px at 70% 72%, rgba(16, 185, 129, 0.3), rgba(16, 185, 129, 0) 60%),
+          linear-gradient(180deg, rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0));
+      }
+
+      [data-theme="dark"] .cover {
+        background: radial-gradient(90px 110px at 35% 20%, rgba(40, 199, 111, 0.34), rgba(40, 199, 111, 0) 60%),
+          radial-gradient(80px 80px at 70% 72%, rgba(45, 212, 191, 0.24), rgba(45, 212, 191, 0) 60%),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+      }
+
+      .cover::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0) 60%);
+        opacity: 0.65;
+      }
+
+      .cover-mark {
+        position: absolute;
+        inset: 10px 10px auto 10px;
+        height: 14px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.38);
+        border: 1px solid rgba(255, 255, 255, 0.28);
+        z-index: 1;
+      }
+
+      .cover-letter {
+        position: absolute;
+        inset: auto 0 12px 0;
+        text-align: center;
+        font-family: var(--serif);
+        font-weight: 800;
+        letter-spacing: 0.18em;
+        color: rgba(255, 255, 255, 0.88);
+        z-index: 1;
+      }
+
+      .meta {
+        min-width: 0;
+        display: grid;
+        gap: 6px;
+        align-content: start;
+      }
+
+      .title {
+        font-weight: 780;
+        letter-spacing: 0.15px;
+        line-height: 1.25;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      .author {
+        font-size: 12px;
+        color: var(--muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .stat {
+        margin-top: 6px;
+        display: flex;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--hairline);
+        border-radius: 999px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.03);
+      }
+
+      [data-theme="dark"] .chip {
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .chip i {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(26, 173, 25, 0.85);
+      }
+
+      .reader {
+        grid-template-columns: 290px 1fr;
+        min-height: 0;
+      }
+
+      .reader-aside {
+        border-right: 1px solid var(--hairline);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .reader-aside-top {
+        padding: 14px 14px 10px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        border-bottom: 1px solid var(--hairline);
+      }
+
+      .book-mini {
+        width: 40px;
+        height: 56px;
+        border-radius: 12px;
+        border: 1px solid var(--hairline);
+        background: linear-gradient(180deg, rgba(26, 173, 25, 0.28), rgba(0, 0, 0, 0));
+        position: relative;
+        overflow: hidden;
+      }
+
+      .book-mini::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0) 60%);
+        opacity: 0.8;
+      }
+
+      .reader-bookname {
+        min-width: 0;
+        display: grid;
+        gap: 2px;
+      }
+
+      .reader-bookname strong {
+        font-weight: 780;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .reader-bookname span {
+        font-size: 12px;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .reader-tabs {
+        padding: 10px 12px;
+        display: flex;
+        gap: 10px;
+      }
+
+      .reader-tabs button {
+        flex: 1;
+        border: 1px solid var(--hairline);
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.03);
+        padding: 9px 10px;
+        cursor: pointer;
+        color: var(--muted);
+        transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, color 120ms ease;
+      }
+
+      [data-theme="dark"] .reader-tabs button {
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .reader-tabs button:hover {
+        transform: translateY(-1px);
+        color: var(--ink);
+      }
+
+      .reader-tabs button[data-active="true"] {
+        background: rgba(26, 173, 25, 0.12);
+        border-color: rgba(26, 173, 25, 0.25);
+        color: var(--ink);
+      }
+
+      .aside-scroll {
+        padding: 8px 12px 14px;
+        overflow: auto;
+        min-height: 0;
+      }
+
+      .toc-item {
+        padding: 10px 10px;
+        border-radius: 12px;
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: background 120ms ease, border-color 120ms ease;
+      }
+
+      .toc-item:hover {
+        background: rgba(0, 0, 0, 0.03);
+        border-color: rgba(0, 0, 0, 0.06);
+      }
+
+      [data-theme="dark"] .toc-item:hover {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: rgba(255, 255, 255, 0.08);
+      }
+
+      .toc-item strong {
+        display: block;
+        font-weight: 650;
+        margin-bottom: 2px;
+      }
+
+      .toc-item span {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .reader-stage {
+        min-width: 0;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: 52px 1fr 44px;
+      }
+
+      .reader-topbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--hairline);
+      }
+
+      .ghost {
+        border: 1px solid var(--hairline);
+        background: rgba(0, 0, 0, 0.03);
+        border-radius: 999px;
+        padding: 8px 12px;
+        cursor: pointer;
+        color: var(--ink);
+        transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+      }
+
+      [data-theme="dark"] .ghost {
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .ghost:hover {
+        transform: translateY(-1px);
+        border-color: rgba(26, 173, 25, 0.26);
+      }
+
+      .top-hint {
+        margin-left: auto;
+        font-size: 12px;
+        color: var(--muted);
+        font-family: var(--mono);
+      }
+
+      .page {
+        overflow: auto;
+        padding: 26px 24px;
+        display: grid;
+        justify-items: center;
+      }
+
+      .paper {
+        width: min(760px, 100%);
+        border-radius: var(--radius-xl);
+        border: 1px solid var(--hairline);
+        background: var(--paper);
+        box-shadow: var(--shadow);
+        padding: 26px 28px 28px;
+        position: relative;
+      }
+
+      .paper::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        background-image: radial-gradient(rgba(0, 0, 0, 0.045) 1px, transparent 1px);
+        background-size: 7px 7px;
+        opacity: 0.06;
+        pointer-events: none;
+      }
+
+      [data-theme="dark"] .paper::before {
+        background-image: radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+        opacity: 0.06;
+      }
+
+      .paper h1 {
+        font-family: var(--serif);
+        font-size: 24px;
+        margin: 0 0 14px;
+        letter-spacing: 0.2px;
+      }
+
+      .paper p {
+        margin: 0 0 14px;
+        font-family: var(--serif);
+        font-size: var(--font-size, 18px);
+        line-height: var(--line-height, 1.95);
+        letter-spacing: 0.2px;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
+
+      .paper .quote {
+        padding: 14px 14px 14px 16px;
+        border-left: 3px solid rgba(26, 173, 25, 0.45);
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.03);
+        margin: 18px 0;
+      }
+
+      [data-theme="dark"] .paper .quote {
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .reader-bottombar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border-top: 1px solid var(--hairline);
+      }
+
+      .progress {
+        flex: 1;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.05);
+        border: 1px solid var(--hairline);
+        overflow: hidden;
+      }
+
+      [data-theme="dark"] .progress {
+        background: rgba(255, 255, 255, 0.07);
+      }
+
+      .progress > div {
+        width: var(--progress, 32%);
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, rgba(26, 173, 25, 0.95), rgba(16, 185, 129, 0.92));
+      }
+
+      .percent {
+        font-size: 12px;
+        color: var(--muted);
+        font-family: var(--mono);
+        min-width: 78px;
+        text-align: right;
+      }
+
+      .drawer {
+        position: absolute;
+        inset: 0;
+        display: none;
+        place-items: center;
+        padding: 22px;
+        background: rgba(0, 0, 0, 0.32);
+      }
+
+      .drawer[data-open="true"] {
+        display: grid;
+      }
+
+      .sheet {
+        width: min(520px, 100%);
+        border-radius: 20px;
+        border: 1px solid var(--hairline);
+        background: var(--paper);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .sheet-head {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--hairline);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .sheet-head strong {
+        font-weight: 780;
+        letter-spacing: 0.2px;
+      }
+
+      .sheet-head button {
+        margin-left: auto;
+        border: 1px solid var(--hairline);
+        background: rgba(0, 0, 0, 0.03);
+        border-radius: 999px;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+
+      .sheet-body {
+        padding: 14px 16px 18px;
+        display: grid;
+        gap: 14px;
+      }
+
+      .row {
+        display: grid;
+        gap: 8px;
+      }
+
+      .row label {
+        font-size: 12px;
+        color: var(--muted);
+        letter-spacing: 0.12px;
+      }
+
+      .row input[type="range"] {
+        width: 100%;
+      }
+
+      .themes {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+      }
+
+      .theme-btn {
+        border: 1px solid var(--hairline);
+        border-radius: 14px;
+        background: rgba(0, 0, 0, 0.03);
+        padding: 12px 10px;
+        cursor: pointer;
+        display: grid;
+        gap: 8px;
+        transition: transform 120ms ease, border-color 120ms ease;
+      }
+
+      [data-theme="dark"] .theme-btn {
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .theme-btn:hover {
+        transform: translateY(-1px);
+        border-color: rgba(26, 173, 25, 0.24);
+      }
+
+      .swatch {
+        height: 34px;
+        border-radius: 12px;
+        border: 1px solid var(--hairline);
+      }
+
+      .swatch.light {
+        background: #fbfaf7;
+      }
+
+      .swatch.sepia {
+        background: #fffaf0;
+      }
+
+      .swatch.dark {
+        background: #121519;
+      }
+
+      .theme-btn span {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      @media (max-width: 980px) {
+        body {
+          overflow: auto;
+        }
+        .app {
+          grid-template-columns: 1fr;
+          padding: 14px;
+        }
+        .main {
+          grid-template-rows: auto 1fr;
+        }
+        .reader {
+          grid-template-columns: 1fr;
+        }
+        .reader-aside {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" class="app" data-theme="light">
+      <section class="panel side">
+        <div class="side-top">
+          <div class="brand">
+            <div class="brand-name">BookReading</div>
+            <div class="brand-sub">weread-inspired prototype</div>
+          </div>
+          <div class="pill" title="状态">
+            <span class="dot"></span>
+            <span style="font-size: 12px">本地库</span>
+          </div>
+        </div>
+        <div class="nav" role="navigation">
+          <button data-tab="library" data-active="true">
+            <div class="nav-title">书架</div>
+            <div class="nav-sub">最近阅读、收藏与导入</div>
+          </button>
+          <button data-tab="reader">
+            <div class="nav-title">阅读</div>
+            <div class="nav-sub">纸感排版与沉浸模式</div>
+          </button>
+          <button data-tab="notes">
+            <div class="nav-title">笔记</div>
+            <div class="nav-sub">标注、书签、收藏句子</div>
+          </button>
+        </div>
+        <div class="side-bottom">
+          <button class="small-btn" id="btnSettings">阅读设置</button>
+          <button class="small-btn primary" id="btnImport">导入</button>
+        </div>
+      </section>
+
+      <section class="panel main">
+        <div class="topbar">
+          <div class="search">
+            <span class="search-icon"></span>
+            <input id="searchInput" placeholder="搜索书名 / 作者 / 笔记" />
+          </div>
+          <div class="seg" aria-label="视图切换">
+            <button data-view="library" data-active="true">书架</button>
+            <button data-view="reader">阅读</button>
+          </div>
+        </div>
+
+        <div class="content">
+          <div class="screen library" data-screen="library" data-active="true">
+            <div class="grid" id="bookGrid"></div>
+          </div>
+
+          <div class="screen reader" data-screen="reader">
+            <aside class="reader-aside">
+              <div class="reader-aside-top">
+                <div class="book-mini"></div>
+                <div class="reader-bookname">
+                  <strong id="readerBookTitle">无职转生 第一卷</strong>
+                  <span id="readerBookAuthor">理不尽な孫の手</span>
+                </div>
+              </div>
+              <div class="reader-tabs">
+                <button data-aside="toc" data-active="true">目录</button>
+                <button data-aside="marks">标注</button>
+                <button data-aside="quotes">收藏</button>
+              </div>
+              <div class="aside-scroll" id="asideScroll"></div>
+            </aside>
+
+            <div class="reader-stage">
+              <div class="reader-topbar">
+                <button class="ghost" id="btnBackToShelf">返回书架</button>
+                <button class="ghost" id="btnImmersive">沉浸</button>
+                <button class="ghost" id="btnTheme">主题</button>
+                <button class="ghost" id="btnFont">字号</button>
+                <div class="top-hint"><span id="hintPercent">32%</span> · <span id="hintChapter">第 1 章</span></div>
+              </div>
+
+              <div class="page">
+                <div class="paper" id="paper">
+                  <h1 id="chapterTitle">第 1 章：在房间里结束的人生</h1>
+                  <p>
+                    我以前所有认识我的同龄人都看着那些照片嘲笑我。就算没有出门，只要有电脑和网络，要耗掉多少时间都不成问题。
+                  </p>
+                  <p>
+                    受到网络的影响，我对各种领域产生兴趣，也尝试了很多事情。例如组装塑胶模型或是写部落格等等。母亲就像是要支持我，只要我开口，多少钱她都愿意给。
+                  </p>
+                  <div class="quote">
+                    <p style="margin: 0">
+                      「这次一定要认真地活下去……」——这样的决心，在某个瞬间显得格外真实。
+                    </p>
+                  </div>
+                  <p>
+                    然而，没有任何一项有撑过一年。只要看到比自己厉害的人，我就会失去干劲。可是孤身被时间抛下，躲进昏暗的房间中封闭不出的我，没有其他能做的事情。
+                  </p>
+                  <p>
+                    不，现在回想起来，那只不过是借口。真正回到过去，如果可以的话，想回到最美好的小学或是国中时代。不，回到一两年前也行。只要有一点时间，我应该能做出什么成果。
+                  </p>
+                </div>
+              </div>
+
+              <div class="reader-bottombar">
+                <button class="ghost" id="btnPrev">上一页</button>
+                <div class="progress" aria-label="进度条"><div id="progressFill"></div></div>
+                <button class="ghost" id="btnNext">下一页</button>
+                <div class="percent" id="percentText">32%</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="drawer" id="drawer">
+        <div class="sheet">
+          <div class="sheet-head">
+            <strong>阅读设置</strong>
+            <button id="btnCloseDrawer">完成</button>
+          </div>
+          <div class="sheet-body">
+            <div class="row">
+              <label>主题</label>
+              <div class="themes">
+                <button class="theme-btn" data-theme-pick="light">
+                  <div class="swatch light"></div>
+                  <span>浅色</span>
+                </button>
+                <button class="theme-btn" data-theme-pick="sepia">
+                  <div class="swatch sepia"></div>
+                  <span>护眼</span>
+                </button>
+                <button class="theme-btn" data-theme-pick="dark">
+                  <div class="swatch dark"></div>
+                  <span>夜间</span>
+                </button>
+              </div>
+            </div>
+            <div class="row">
+              <label>字号</label>
+              <input id="fontRange" type="range" min="15" max="24" value="18" />
+            </div>
+            <div class="row">
+              <label>行距</label>
+              <input id="lineRange" type="range" min="1.6" max="2.2" step="0.05" value="1.95" />
+            </div>
+            <div class="row">
+              <label>进度模拟</label>
+              <input id="progressRange" type="range" min="0" max="100" value="32" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const root = document.getElementById("root");
+
+      const state = {
+        view: "library",
+        nav: "library",
+        aside: "toc",
+        theme: "light",
+        fontSize: 18,
+        lineHeight: 1.95,
+        progress: 32,
+        immersive: false,
+        query: "",
+      };
+
+      const books = [
+        { id: "b1", title: "无职转生 到了异世界就拿出真本事 第一卷", author: "理不尽な孫の手", progress: 32, tag: "最近" },
+        { id: "b2", title: "三体（全集）", author: "刘慈欣", progress: 4, tag: "新导入" },
+        { id: "b3", title: "嫌疑人X的献身", author: "东野圭吾", progress: 78, tag: "读完" },
+        { id: "b4", title: "人类简史", author: "尤瓦尔·赫拉利", progress: 19, tag: "收藏" },
+        { id: "b5", title: "活着", author: "余华", progress: 55, tag: "继续" },
+        { id: "b6", title: "雪国", author: "川端康成", progress: 12, tag: "想读" },
+      ];
+
+      const toc = [
+        { t: "第 1 章：在房间里结束的人生", s: "开始 · 自白" },
+        { t: "第 2 章：卡车与转生", s: "转折 · 觉醒" },
+        { t: "第 3 章：第一次的魔术", s: "练习 · 失败与重复" },
+        { t: "第 4 章：家庭教师", s: "相遇 · 试探" },
+        { t: "第 5 章：旅程开始", s: "走出 · 新世界" },
+      ];
+
+      const marks = [
+        { t: "标注 · 逃避也是一种选择", s: "第 1 章 · 1/3" },
+        { t: "书签 · 第一次真正后悔", s: "第 1 章 · 2/3" },
+        { t: "标注 · 不是天赋，是重复", s: "第 3 章 · 1/2" },
+      ];
+
+      const quotes = [
+        { t: "收藏句子 · “这次一定要认真地活下去……”", s: "第 1 章" },
+        { t: "收藏句子 · “回到过去，也会在类似问题上跌倒。”", s: "第 1 章" },
+      ];
+
+      const el = {
+        bookGrid: document.getElementById("bookGrid"),
+        drawer: document.getElementById("drawer"),
+        paper: document.getElementById("paper"),
+        fontRange: document.getElementById("fontRange"),
+        lineRange: document.getElementById("lineRange"),
+        progressRange: document.getElementById("progressRange"),
+        percentText: document.getElementById("percentText"),
+        progressFill: document.getElementById("progressFill"),
+        hintPercent: document.getElementById("hintPercent"),
+        asideScroll: document.getElementById("asideScroll"),
+        searchInput: document.getElementById("searchInput"),
+      };
+
+      function applyTheme() {
+        root.setAttribute("data-theme", state.theme);
+      }
+
+      function applyTypography() {
+        el.paper.style.setProperty("--font-size", `${state.fontSize}px`);
+        el.paper.style.setProperty("--line-height", `${state.lineHeight}`);
+      }
+
+      function applyProgress() {
+        const p = Math.max(0, Math.min(100, state.progress));
+        root.style.setProperty("--progress", `${p}%`);
+        el.percentText.textContent = `${p}%`;
+        el.hintPercent.textContent = `${p}%`;
+        el.progressFill.style.width = `${p}%`;
+      }
+
+      function setView(view) {
+        state.view = view;
+        document.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("data-active", String(b.dataset.view === view)));
+        document.querySelectorAll("[data-screen]").forEach((s) => s.setAttribute("data-active", String(s.dataset.screen === view)));
+        document.querySelectorAll(".nav button[data-tab]").forEach((b) => b.setAttribute("data-active", String(b.dataset.tab === (view === "reader" ? "reader" : "library"))));
+      }
+
+      function setAside(tab) {
+        state.aside = tab;
+        document.querySelectorAll(".reader-tabs button").forEach((b) => b.setAttribute("data-active", String(b.dataset.aside === tab)));
+        renderAside();
+      }
+
+      function setImmersive(v) {
+        state.immersive = v;
+        const aside = document.querySelector(".reader-aside");
+        const top = document.querySelector(".reader-topbar");
+        if (!aside || !top) return;
+        if (v) {
+          aside.style.display = "none";
+          top.style.opacity = "0.08";
+          top.style.pointerEvents = "none";
+          setTimeout(() => {
+            top.style.display = "none";
+          }, 220);
+        } else {
+          aside.style.display = "";
+          top.style.display = "";
+          requestAnimationFrame(() => {
+            top.style.opacity = "1";
+            top.style.pointerEvents = "auto";
+          });
+        }
+      }
+
+      function openSettings() {
+        el.drawer.setAttribute("data-open", "true");
+      }
+
+      function closeSettings() {
+        el.drawer.setAttribute("data-open", "false");
+      }
+
+      function renderBooks() {
+        const q = state.query.trim().toLowerCase();
+        const list = q
+          ? books.filter((b) => (b.title + " " + b.author).toLowerCase().includes(q))
+          : books;
+        el.bookGrid.innerHTML = "";
+        for (const b of list) {
+          const card = document.createElement("div");
+          card.className = "book";
+          card.tabIndex = 0;
+          card.innerHTML = `
+            <div class="cover">
+              <div class="cover-mark"></div>
+              <div class="cover-letter">${(b.title || "书").trim().slice(0, 1)}</div>
+            </div>
+            <div class="meta">
+              <div class="title">${b.title}</div>
+              <div class="author">${b.author}</div>
+              <div class="stat">
+                <div class="chip"><i></i><span>${b.tag}</span></div>
+                <div class="chip"><span style="font-family: var(--mono)">${b.progress}%</span></div>
+              </div>
+            </div>
+          `;
+          card.addEventListener("click", () => {
+            state.progress = b.progress;
+            applyProgress();
+            setView("reader");
+          });
+          card.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") card.click();
+          });
+          el.bookGrid.appendChild(card);
+        }
+      }
+
+      function renderAside() {
+        const items = state.aside === "toc" ? toc : state.aside === "marks" ? marks : quotes;
+        el.asideScroll.innerHTML = "";
+        for (const it of items) {
+          const div = document.createElement("div");
+          div.className = "toc-item";
+          div.innerHTML = `<strong>${it.t}</strong><span>${it.s}</span>`;
+          div.addEventListener("click", () => {
+            document.getElementById("chapterTitle").textContent = it.t;
+          });
+          el.asideScroll.appendChild(div);
+        }
+      }
+
+      function wire() {
+        document.querySelectorAll("[data-view]").forEach((b) => {
+          b.addEventListener("click", () => setView(b.dataset.view));
+        });
+
+        document.querySelectorAll(".nav button[data-tab]").forEach((b) => {
+          b.addEventListener("click", () => {
+            const tab = b.dataset.tab;
+            if (tab === "reader") setView("reader");
+            else setView("library");
+          });
+        });
+
+        document.getElementById("btnSettings").addEventListener("click", openSettings);
+        document.getElementById("btnCloseDrawer").addEventListener("click", closeSettings);
+        el.drawer.addEventListener("click", (e) => {
+          if (e.target === el.drawer) closeSettings();
+        });
+
+        document.querySelectorAll(".reader-tabs button").forEach((b) => {
+          b.addEventListener("click", () => setAside(b.dataset.aside));
+        });
+
+        document.getElementById("btnBackToShelf").addEventListener("click", () => setView("library"));
+        document.getElementById("btnImmersive").addEventListener("click", () => setImmersive(!state.immersive));
+        document.getElementById("btnTheme").addEventListener("click", openSettings);
+        document.getElementById("btnFont").addEventListener("click", openSettings);
+        document.getElementById("btnPrev").addEventListener("click", () => {
+          state.progress = Math.max(0, state.progress - 2);
+          applyProgress();
+        });
+        document.getElementById("btnNext").addEventListener("click", () => {
+          state.progress = Math.min(100, state.progress + 2);
+          applyProgress();
+        });
+
+        el.searchInput.addEventListener("input", (e) => {
+          state.query = e.target.value;
+          renderBooks();
+        });
+
+        el.fontRange.addEventListener("input", (e) => {
+          state.fontSize = Number(e.target.value);
+          applyTypography();
+        });
+
+        el.lineRange.addEventListener("input", (e) => {
+          state.lineHeight = Number(e.target.value);
+          applyTypography();
+        });
+
+        el.progressRange.addEventListener("input", (e) => {
+          state.progress = Number(e.target.value);
+          applyProgress();
+        });
+
+        document.querySelectorAll("[data-theme-pick]").forEach((b) => {
+          b.addEventListener("click", () => {
+            state.theme = b.getAttribute("data-theme-pick");
+            applyTheme();
+          });
+        });
+
+        document.getElementById("btnImport").addEventListener("click", () => {
+          const old = state.query;
+          state.query = "";
+          el.searchInput.value = "";
+          renderBooks();
+          state.query = old;
+          openSettings();
+        });
+
+        window.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") closeSettings();
+        });
+      }
+
+      applyTheme();
+      applyTypography();
+      applyProgress();
+      renderBooks();
+      renderAside();
+      wire();
+    </script>
+  </body>
+</html>
+
