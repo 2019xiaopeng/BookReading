@@ -12,7 +12,14 @@ export default function SettingsPanel(props: {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div className="wr-muted">主题</div>
-        <select className="wr-select" value={v.theme} onChange={(e) => props.onChange({ ...v, theme: e.currentTarget.value as any })}>
+        <select
+          className="wr-select"
+          value={v.theme}
+          onChange={(e) => {
+            const next = e.currentTarget.value;
+            if (next === "light" || next === "sepia" || next === "dark") props.onChange({ ...v, theme: next });
+          }}
+        >
           <option value="light">浅色</option>
           <option value="sepia">护眼</option>
           <option value="dark">夜间</option>
@@ -41,7 +48,10 @@ export default function SettingsPanel(props: {
         <select
           className="wr-select"
           value={v.pageAnimation}
-          onChange={(e) => props.onChange({ ...v, pageAnimation: e.currentTarget.value as any })}
+          onChange={(e) => {
+            const next = e.currentTarget.value;
+            if (next === "none" || next === "fade" || next === "slide") props.onChange({ ...v, pageAnimation: next });
+          }}
         >
           <option value="none">无</option>
           <option value="fade">淡入淡出</option>
@@ -54,7 +64,10 @@ export default function SettingsPanel(props: {
         <select
           className="wr-select"
           value={v.layoutMode}
-          onChange={(e) => props.onChange({ ...v, layoutMode: e.currentTarget.value as any })}
+          onChange={(e) => {
+            const next = e.currentTarget.value;
+            if (next === "auto" || next === "single" || next === "double") props.onChange({ ...v, layoutMode: next });
+          }}
         >
           <option value="auto">自动</option>
           <option value="single">单栏</option>

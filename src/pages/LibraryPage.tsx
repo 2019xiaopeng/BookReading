@@ -28,12 +28,11 @@ export default function LibraryPage() {
   const coverUrlsRef = useRef<Record<string, string>>({});
   const coverLoadingRef = useRef<Set<string>>(new Set());
 
-  const booksSorted = useMemo(() => books, [books]);
   const booksFiltered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return booksSorted;
-    return booksSorted.filter((b) => `${formatTitle(b)} ${formatAuthor(b)}`.toLowerCase().includes(q));
-  }, [booksSorted, query]);
+    if (!q) return books;
+    return books.filter((b) => `${formatTitle(b)} ${formatAuthor(b)}`.toLowerCase().includes(q));
+  }, [books, query]);
 
   async function refresh() {
     const list = await listBooks();

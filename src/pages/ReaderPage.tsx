@@ -369,7 +369,7 @@ export default function ReaderPage() {
     el.addEventListener("wheel", onWheel, { passive: false });
 
     return () => {
-      el.removeEventListener("wheel", onWheel as any);
+      el.removeEventListener("wheel", onWheel);
     };
   }, [settings.pageAnimation]);
 

@@ -143,7 +143,9 @@ export default function FavoritesPage() {
           { key: "quotes", label: "收藏句子" },
         ],
         active: tab,
-        onChange: (k) => setTab(k as any),
+        onChange: (k) => {
+          if (k === "books" || k === "quotes") setTab(k);
+        },
       }}
       sidebarFooter={
         <>
@@ -214,7 +216,14 @@ export default function FavoritesPage() {
       {tab === "quotes" ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 18 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <select className="wr-select" value={filterBookId} onChange={(e) => setFilterBookId(e.currentTarget.value as any)}>
+            <select
+              className="wr-select"
+              value={filterBookId}
+              onChange={(e) => {
+                const v = e.currentTarget.value;
+                setFilterBookId(v === "all" ? "all" : v);
+              }}
+            >
               <option value="all">全部书籍</option>
               {allBooks.map((b) => (
                 <option key={b.id} value={b.id}>
