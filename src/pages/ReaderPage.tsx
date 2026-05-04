@@ -403,7 +403,14 @@ export default function ReaderPage() {
   return (
     <div
       data-theme={settings.theme}
-      style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--text)", overflow: "hidden" }}
+      style={{
+        height: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        background: "var(--wr-bg)",
+        color: "var(--wr-ink)",
+        overflow: "hidden",
+      }}
     >
       {!isImmersive ? (
         <div className="wr-topbar" style={{ borderBottom: "1px solid var(--wr-hairline)", background: "var(--wr-paper)" }}>
@@ -451,7 +458,18 @@ export default function ReaderPage() {
       )}
 
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-        <div ref={viewerRef} style={{ position: "relative", flex: 1, minWidth: 0, background: "var(--panel-solid)", overflow: "hidden" }}>
+        <div
+          ref={viewerRef}
+          style={{
+            position: "relative",
+            flex: 1,
+            minWidth: 0,
+            background: "var(--wr-bg)",
+            overflow: "hidden",
+            display: "grid",
+            placeItems: "stretch",
+          }}
+        >
           <Drawer
             open={drawerOpen && !isImmersive}
             title={drawerTitle}
@@ -629,7 +647,20 @@ export default function ReaderPage() {
             ) : null}
           </Drawer>
 
-          <div ref={containerRef} style={{ height: "100%", width: "100%", background: "transparent" }} />
+          <div style={{ height: "100%", width: "100%", display: "grid", placeItems: "center", padding: 18 }}>
+            <div
+              ref={containerRef}
+              style={{
+                height: "100%",
+                width: "min(980px, 100%)",
+                background: "var(--wr-paper)",
+                borderRadius: 22,
+                border: "1px solid var(--wr-hairline)",
+                overflow: "hidden",
+                boxShadow: "var(--wr-shadow)",
+              }}
+            />
+          </div>
           <SelectionToolbar
             open={!!selection && !drawerOpen && !readerError}
             text={selection?.text ?? ""}
@@ -703,7 +734,7 @@ export default function ReaderPage() {
             </div>
           ) : null}
           {!drawerOpen ? (
-            <div style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "1fr 1fr", zIndex: 15 }}>
+            <div style={{ position: "absolute", inset: 18, display: "grid", gridTemplateColumns: "1fr 1fr", zIndex: 15 }}>
               <div
                 onClick={() => {
                   void animateTurn("prev");

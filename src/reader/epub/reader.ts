@@ -108,15 +108,15 @@ export async function createReader(opts: {
 
   rendition.themes.register("light", {
     ...common,
-    body: { ...common.body, background: "#ffffff", color: "#111111" },
+    body: { ...common.body, background: "transparent", color: "#16181a" },
   });
   rendition.themes.register("dark", {
     ...common,
-    body: { ...common.body, background: "#0f1115", color: "#e8eaf0" },
+    body: { ...common.body, background: "transparent", color: "rgba(255, 255, 255, 0.92)" },
   });
   rendition.themes.register("sepia", {
     ...common,
-    body: { ...common.body, background: "#f7f1e1", color: "#2b2620" },
+    body: { ...common.body, background: "transparent", color: "rgba(38, 29, 18, 0.9)" },
   });
   rendition.themes.select("light");
   rendition.themes.fontSize("120%");
