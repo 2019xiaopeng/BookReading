@@ -29,6 +29,7 @@ import SettingsPanel from "../reader/components/SettingsPanel";
 import SelectionToolbar from "../reader/components/SelectionToolbar";
 import { defaultSettings } from "../reader/settings/defaults";
 import type { ReaderSettings, Theme } from "../reader/settings/types";
+import { normalizeLayoutMode, resolveSpreadMode } from "../reader/settings/layoutMode";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
 import {
@@ -65,6 +66,7 @@ export default function ReaderPage() {
   const [selection, setSelection] = useState<{ cfiRange: string; text: string } | null>(null);
   const [noteDraft, setNoteDraft] = useState<{ cfiRange: string; text: string } | null>(null);
   const [noteText, setNoteText] = useState("");
+  const [immersiveHudVisible, setImmersiveHudVisible] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<ReaderController | null>(null);
@@ -72,6 +74,7 @@ export default function ReaderPage() {
   const lastCfiRef = useRef<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const wheelCooldownRef = useRef(0);
+  const immersiveHudTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -87,10 +90,12 @@ export default function ReaderPage() {
       const theme = (map.theme as Theme | undefined) ?? defaultSettings.theme;
       const fontSizePercent = Number(map.fontSizePercent ?? defaultSettings.fontSizePercent);
       const pageAnimation = (map.pageAnimation as any) ?? defaultSettings.pageAnimation;
+      const layoutMode = normalizeLayoutMode(map.layoutMode);
       setSettings({
         theme,
         fontSizePercent: Number.isFinite(fontSizePercent) ? fontSizePercent : defaultSettings.fontSizePercent,
         pageAnimation,
+        layoutMode,
       });
     })();
   }, []);
@@ -109,9 +114,11 @@ export default function ReaderPage() {
 
       try {
         logFrontend(`reader: create ${book.id} ${book.library_path}`);
+        const spreadMode = resolveSpreadMode(settings.layoutMode, viewerRef.current?.clientWidth ?? 0);
         controllerRef.current = await createReader({
           container: containerRef.current,
           libraryPath: book.library_path,
+          spreadMode,
           onRelocated: ({ cfi, percent }) => {
             lastCfiRef.current = cfi;
             if (typeof percent === "number") setPercent(percent);
@@ -147,6 +154,7 @@ export default function ReaderPage() {
 
       controllerRef.current.setTheme(settings.theme);
       controllerRef.current.setFontSizePercent(settings.fontSizePercent);
+      controllerRef.current.setSpreadMode(resolveSpreadMode(settings.layoutMode, viewerRef.current?.clientWidth ?? 0));
 
       const [bm, hl, fav] = await Promise.all([
         listBookmarks(book.id),
@@ -180,13 +188,57 @@ export default function ReaderPage() {
       controllerRef.current?.destroy();
       controllerRef.current = null;
     };
-  }, [book, settings.theme, settings.fontSizePercent, location.search]);
+  }, [book, settings.theme, settings.fontSizePercent, settings.layoutMode, location.search]);
 
   useEffect(() => {
     if (!controllerRef.current) return;
     controllerRef.current.setTheme(settings.theme);
     controllerRef.current.setFontSizePercent(settings.fontSizePercent);
-  }, [settings.theme, settings.fontSizePercent]);
+    controllerRef.current.setSpreadMode(resolveSpreadMode(settings.layoutMode, viewerRef.current?.clientWidth ?? 0));
+  }, [settings.theme, settings.fontSizePercent, settings.layoutMode]);
+
+  useEffect(() => {
+    if (settings.layoutMode !== "auto") return;
+    const onResize = () => {
+      controllerRef.current?.setSpreadMode(resolveSpreadMode(settings.layoutMode, viewerRef.current?.clientWidth ?? 0));
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [settings.layoutMode]);
+
+  useEffect(() => {
+    if (!isImmersive) {
+      setImmersiveHudVisible(false);
+      if (immersiveHudTimerRef.current) {
+        window.clearTimeout(immersiveHudTimerRef.current);
+        immersiveHudTimerRef.current = null;
+      }
+      return;
+    }
+
+    const showHud = () => {
+      setImmersiveHudVisible(true);
+      if (immersiveHudTimerRef.current) window.clearTimeout(immersiveHudTimerRef.current);
+      immersiveHudTimerRef.current = window.setTimeout(() => {
+        setImmersiveHudVisible(false);
+        immersiveHudTimerRef.current = null;
+      }, 2500);
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (e.clientY <= 56) showHud();
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    showHud();
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      if (immersiveHudTimerRef.current) {
+        window.clearTimeout(immersiveHudTimerRef.current);
+        immersiveHudTimerRef.current = null;
+      }
+    };
+  }, [isImmersive]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -283,6 +335,7 @@ export default function ReaderPage() {
     await setSetting("theme", next.theme);
     await setSetting("fontSizePercent", String(next.fontSizePercent));
     await setSetting("pageAnimation", next.pageAnimation);
+    await setSetting("layoutMode", next.layoutMode);
   }
 
   async function animateTurn(direction: "next" | "prev") {
@@ -692,15 +745,20 @@ export default function ReaderPage() {
             {typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
           </div>
         </div>
-      ) : (
+      ) : null}
+
+      {isImmersive ? (
         <div
           style={{
             position: "fixed",
             left: 16,
             right: 16,
-            bottom: 16,
+            top: 10,
             zIndex: 60,
-            pointerEvents: "auto",
+            pointerEvents: immersiveHudVisible ? "auto" : "none",
+            opacity: immersiveHudVisible ? 1 : 0,
+            transform: immersiveHudVisible ? "translateY(0)" : "translateY(-6px)",
+            transition: "opacity 160ms ease, transform 160ms ease",
           }}
         >
           <div
@@ -719,6 +777,10 @@ export default function ReaderPage() {
               退出沉浸
             </button>
             <div style={{ display: "flex", gap: 10 }}>
+              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("toc")}>
+                <IconList />
+                目录
+              </button>
               <button className="wr-btn wr-icon-btn" onClick={() => void animateTurn("prev")}>
                 <IconChevronLeft />
                 上一页
@@ -733,7 +795,7 @@ export default function ReaderPage() {
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

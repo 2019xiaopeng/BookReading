@@ -48,6 +48,19 @@ export default function SettingsPanel(props: {
           <option value="slide">滑动</option>
         </select>
       </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div className="wr-muted">版式</div>
+        <select
+          className="wr-select"
+          value={v.layoutMode}
+          onChange={(e) => props.onChange({ ...v, layoutMode: e.currentTarget.value as any })}
+        >
+          <option value="auto">自动</option>
+          <option value="single">单栏</option>
+          <option value="double">双栏</option>
+        </select>
+      </div>
     </div>
   );
 }

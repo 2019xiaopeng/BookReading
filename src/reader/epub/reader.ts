@@ -2,6 +2,7 @@ import ePub from "epubjs";
 
 import type { Theme } from "../settings/types";
 import { readAppDataFile } from "../../tauri/appDataPaths";
+import type { SpreadMode } from "../settings/layoutMode";
 
 export type TocItem = {
   label: string;
@@ -20,6 +21,7 @@ export type ReaderController = {
   display: (target?: string) => Promise<void>;
   setTheme: (theme: Theme) => void;
   setFontSizePercent: (percent: number) => void;
+  setSpreadMode: (mode: SpreadMode) => void;
   addHighlight: (cfiRange: string) => void;
   removeHighlight: (cfiRange: string) => void;
   search: (query: string) => Promise<{ cfi: string; excerpt: string }[]>;
@@ -39,9 +41,18 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+export function applySpreadMode(rendition: any, mode: SpreadMode): void {
+  try {
+    const spreadFn = rendition?.spread;
+    if (typeof spreadFn === "function") spreadFn.call(rendition, mode);
+  } catch {
+  }
+}
+
 export async function createReader(opts: {
   container: HTMLElement;
   libraryPath: string;
+  spreadMode?: SpreadMode;
   onRelocated?: (payload: RelocatedPayload) => void;
   onTocLoaded?: (toc: TocItem[]) => void;
   onSelected?: (payload: { cfiRange: string; text: string }) => void;
@@ -73,7 +84,7 @@ export async function createReader(opts: {
   const rendition: any = book.renderTo(opts.container, {
     width: "100%",
     height: "100%",
-    spread: "none",
+    spread: opts.spreadMode ?? "none",
     flow: "paginated",
   });
 
@@ -178,6 +189,13 @@ export async function createReader(opts: {
     },
     setFontSizePercent: (percent: number) => {
       rendition.themes.fontSize(`${percent}%`);
+    },
+    setSpreadMode: (mode: SpreadMode) => {
+      applySpreadMode(rendition, mode);
+      try {
+        rendition.resize?.();
+      } catch {
+      }
     },
     addHighlight: (cfiRange: string) => {
       rendition.annotations.highlight(cfiRange, {}, () => {});
