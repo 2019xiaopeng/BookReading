@@ -28,8 +28,9 @@ import SearchPanel from "../reader/components/SearchPanel";
 import SettingsPanel from "../reader/components/SettingsPanel";
 import SelectionToolbar from "../reader/components/SelectionToolbar";
 import { defaultSettings } from "../reader/settings/defaults";
-import type { ReaderSettings, Theme } from "../reader/settings/types";
+import type { ReaderSettings } from "../reader/settings/types";
 import { normalizeLayoutMode, resolveSpreadMode } from "../reader/settings/layoutMode";
+import { normalizePageAnimation, normalizeTheme } from "../reader/settings/normalize";
 import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
@@ -141,9 +142,9 @@ export default function ReaderPage() {
   useEffect(() => {
     (async () => {
       const map = await getSettings();
-      const theme = (map.theme as Theme | undefined) ?? defaultSettings.theme;
+      const theme = normalizeTheme(map.theme);
       const fontSizePercent = Number(map.fontSizePercent ?? defaultSettings.fontSizePercent);
-      const pageAnimation = (map.pageAnimation as any) ?? defaultSettings.pageAnimation;
+      const pageAnimation = normalizePageAnimation(map.pageAnimation);
       const layoutMode = normalizeLayoutMode(map.layoutMode);
       setSettings({
         theme,
