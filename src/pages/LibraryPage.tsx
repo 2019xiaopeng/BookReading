@@ -72,25 +72,29 @@ export default function LibraryPage() {
     setLoading(true);
     try {
       const selected = await open({
-        multiple: false,
+        multiple: true,
         filters: [{ name: "EPUB", extensions: ["epub"] }],
       });
-      if (!selected || Array.isArray(selected)) {
-        setLoading(false);
-        return;
+      if (!selected) return;
+
+      const paths = Array.isArray(selected) ? selected : [selected];
+      if (paths.length === 0) return;
+
+      for (const path of paths) {
+        try {
+          await importBook({
+            source_path: path,
+            title: null,
+            author: null,
+            cover_bytes_base64: null,
+            cover_ext: null,
+          });
+        } catch (e) {
+          logFrontend(`ui: import failed ${path} ${String(e)}`);
+        }
       }
 
-      await importBook({
-        source_path: selected,
-        title: null,
-        author: null,
-        cover_bytes_base64: null,
-        cover_ext: null,
-      });
-
       await refresh();
-      setLoading(false);
-      return;
     } finally {
       setLoading(false);
     }
