@@ -126,43 +126,68 @@ export default function FavoritesPage() {
     refreshQuotes().finally(() => setLoading(false));
   }, [tab, filterBookId]);
 
+  const filteredBooks = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return favoriteBooks;
+    return favoriteBooks.filter((b) => `${b.title ?? ""} ${b.author ?? ""}`.toLowerCase().includes(q));
+  }, [favoriteBooks, query]);
+
   return (
     <AppShell
       active="favorites"
       title="收藏"
-      right={
-        <div className="wr-seg" aria-label="收藏" style={{ width: "100%" }}>
-          <button className="wr-btn" data-active={tab === "books"} onClick={() => setTab("books")} style={{ flex: 1 }}>
-            收藏书籍
+      search={{ value: query, placeholder: tab === "books" ? "搜索书名 / 作者" : "搜索收藏句子", onChange: setQuery }}
+      seg={{
+        items: [
+          { key: "books", label: "收藏书籍" },
+          { key: "quotes", label: "收藏句子" },
+        ],
+        active: tab,
+        onChange: (k) => setTab(k as any),
+      }}
+      sidebarFooter={
+        <>
+          <button className="wr-small-btn" onClick={() => navigate("/")}>
+            返回书架
           </button>
-          <button className="wr-btn" data-active={tab === "quotes"} onClick={() => setTab("quotes")} style={{ flex: 1 }}>
-            收藏句子
+          <button
+            className="wr-small-btn wr-primary"
+            disabled={loading}
+            onClick={() => {
+              setLoading(true);
+              refreshBooks().finally(() => setLoading(false));
+            }}
+          >
+            刷新
           </button>
-        </div>
+        </>
       }
     >
-
       {tab === "books" ? (
-        <div className="app-grid" style={{ padding: 18 }}>
-          {favoriteBooks.map((b) => (
-            <div key={b.id} className="app-card">
-              <div className="app-cover">
-                {b.cover_path && coverUrls[b.cover_path] ? (
-                  <img src={coverUrls[b.cover_path]} alt="" />
-                ) : (
-                  <div className="app-cover-fallback">{(b.title?.trim() || "未").slice(0, 1)}</div>
-                )}
+        <div className="wr-book-grid">
+          {filteredBooks.map((b) => (
+            <div key={b.id} className="wr-book-card">
+              <div className="wr-cover">
+                {b.cover_path && coverUrls[b.cover_path] ? <img src={coverUrls[b.cover_path]} alt="" /> : null}
+                {!b.cover_path || !coverUrls[b.cover_path] ? (
+                  <div className="wr-cover-letter">{(b.title?.trim() || "未").slice(0, 1)}</div>
+                ) : null}
               </div>
-
-              <div className="app-meta">
-                <div className="app-meta-title">{b.title?.trim() || "未命名"}</div>
-                <div className="app-meta-sub">{b.author?.trim() || "未知作者"}</div>
-
-                <div className="app-actions">
-                  <button onClick={() => navigate(`/read/${b.id}`)} disabled={loading} className="btn-primary">
+              <div className="wr-meta">
+                <div className="wr-title">{b.title?.trim() || "未命名"}</div>
+                <div className="wr-author">{b.author?.trim() || "未知作者"}</div>
+                <div className="wr-chip-row">
+                  <div className="wr-chip">
+                    <span className="wr-chip-dot" />
+                    <span>收藏</span>
+                  </div>
+                </div>
+                <div className="wr-actions">
+                  <button className="wr-btn wr-btn-primary" onClick={() => navigate(`/read/${b.id}`)} disabled={loading}>
                     打开
                   </button>
                   <button
+                    className="wr-btn"
                     onClick={() => {
                       setLoading(true);
                       setBookFavorite(b.id, false)
@@ -178,7 +203,7 @@ export default function FavoritesPage() {
             </div>
           ))}
 
-          {favoriteBooks.length === 0 ? (
+          {filteredBooks.length === 0 ? (
             <div className="muted" style={{ padding: 16 }}>
               暂无收藏书籍
             </div>
@@ -189,13 +214,7 @@ export default function FavoritesPage() {
       {tab === "quotes" ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 18 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.currentTarget.value)}
-              placeholder="搜索收藏句子"
-              style={{ flex: 1 }}
-            />
-            <select value={filterBookId} onChange={(e) => setFilterBookId(e.currentTarget.value as any)}>
+            <select className="wr-select" value={filterBookId} onChange={(e) => setFilterBookId(e.currentTarget.value as any)}>
               <option value="all">全部书籍</option>
               {allBooks.map((b) => (
                 <option key={b.id} value={b.id}>
@@ -209,7 +228,7 @@ export default function FavoritesPage() {
                 refreshQuotes().finally(() => setLoading(false));
               }}
               disabled={loading}
-              className="btn-primary"
+              className="wr-btn wr-btn-primary"
             >
               搜索
             </button>
@@ -222,21 +241,18 @@ export default function FavoritesPage() {
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {quotes.map((q) => (
-                <div
-                  key={q.id}
-                  className="app-card"
-                >
-                  <div className="app-meta" style={{ gap: 10 }}>
-                    <div className="app-meta-sub" style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                      {bookIdToTitle.get(q.book_id) ?? q.book_id}
-                    </div>
-                    <div style={{ whiteSpace: "pre-wrap" }}>{q.text}</div>
-                    {q.note ? <div className="muted" style={{ whiteSpace: "pre-wrap" }}>{q.note}</div> : null}
-                    <div className="app-actions">
-                      <button onClick={() => navigate(`/read/${q.book_id}?cfi=${encodeURIComponent(q.cfi_range)}`)} className="btn-primary">
+                <div key={q.id} className="wr-card" style={{ padding: 12 }}>
+                  <div className="wr-muted" style={{ fontFamily: "var(--wr-mono)", fontSize: 12, marginBottom: 8 }}>
+                    {bookIdToTitle.get(q.book_id) ?? q.book_id}
+                  </div>
+                  <div style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}>{q.text}</div>
+                  {q.note ? <div className="wr-muted" style={{ whiteSpace: "pre-wrap", marginBottom: 10 }}>{q.note}</div> : null}
+                  <div className="wr-actions">
+                    <button className="wr-btn wr-btn-primary" onClick={() => navigate(`/read/${q.book_id}?cfi=${encodeURIComponent(q.cfi_range)}`)}>
                       打开定位
-                      </button>
-                      <button
+                    </button>
+                    <button
+                      className="wr-btn"
                       onClick={() => {
                         setLoading(true);
                         deleteFavoriteQuote(q.id)
@@ -244,11 +260,9 @@ export default function FavoritesPage() {
                           .finally(() => setLoading(false));
                       }}
                       disabled={loading}
-                      className="btn-danger"
                     >
                       删除
-                      </button>
-                    </div>
+                    </button>
                   </div>
                 </div>
               ))}
