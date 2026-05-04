@@ -30,6 +30,7 @@ import SelectionToolbar from "../reader/components/SelectionToolbar";
 import { defaultSettings } from "../reader/settings/defaults";
 import type { ReaderSettings, Theme } from "../reader/settings/types";
 import { normalizeLayoutMode, resolveSpreadMode } from "../reader/settings/layoutMode";
+import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
 import {
@@ -98,7 +99,8 @@ export default function ReaderPage() {
   }, []);
 
   const spreadMode = resolveSpreadMode(settings.layoutMode, viewerWidth);
-  const paperMaxWidth = spreadMode === "both" ? 1260 : 980;
+  const stage = calcPaperStage({ viewerWidth, viewerHeight: window.innerHeight, margin: 18, edgeRatio: 0.2 });
+  const pagerEnabled = !drawerOpen && !readerError && !selection && !noteDraft;
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -680,8 +682,6 @@ export default function ReaderPage() {
                 flex: 1,
                 height: "100%",
                 width: "100%",
-                maxWidth: paperMaxWidth,
-                margin: "0 auto",
                 background: "var(--wr-paper)",
                 borderRadius: 22,
                 border: "1px solid var(--wr-hairline)",
@@ -690,6 +690,23 @@ export default function ReaderPage() {
               }}
             />
           </div>
+
+          {pagerEnabled ? (
+            <div style={{ position: "absolute", inset: 18, zIndex: 15, pointerEvents: "none", borderRadius: 22 }}>
+              <div
+                onClick={() => {
+                  void animateTurn("prev");
+                }}
+                style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: stage.leftEdgeWidth, cursor: "w-resize", pointerEvents: "auto" }}
+              />
+              <div
+                onClick={() => {
+                  void animateTurn("next");
+                }}
+                style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: stage.rightEdgeWidth, cursor: "e-resize", pointerEvents: "auto" }}
+              />
+            </div>
+          ) : null}
           <SelectionToolbar
             open={!!selection && !drawerOpen && !readerError}
             text={selection?.text ?? ""}
@@ -760,22 +777,6 @@ export default function ReaderPage() {
                   </button>
                 </div>
               </div>
-            </div>
-          ) : null}
-          {!drawerOpen ? (
-            <div style={{ position: "absolute", inset: 18, display: "grid", gridTemplateColumns: "1fr 1fr", zIndex: 15 }}>
-              <div
-                onClick={() => {
-                  void animateTurn("prev");
-                }}
-                style={{ cursor: "w-resize" }}
-              />
-              <div
-                onClick={() => {
-                  void animateTurn("next");
-                }}
-                style={{ cursor: "e-resize" }}
-              />
             </div>
           ) : null}
         </div>
