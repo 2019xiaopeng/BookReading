@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import type { Book, FavoriteQuote } from "../tauri/invoke";
 import { deleteFavoriteQuote, listBooks, listFavoriteBooks, listFavoriteQuotes, setBookFavorite } from "../tauri/invoke";
-import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../tauri/appDataPaths";
-import { logFrontend } from "../tauri/frontendLog";
+import { useCoverUrls } from "../library/useCoverUrls";
 import AppShell from "../ui/AppShell";
 
 export default function FavoritesPage() {
@@ -16,9 +15,7 @@ export default function FavoritesPage() {
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [filterBookId, setFilterBookId] = useState<string | "all">("all");
-  const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
-  const coverUrlsRef = useRef<Record<string, string>>({});
-  const coverLoadingRef = useRef<Set<string>>(new Set());
+  const coverUrls = useCoverUrls(favoriteBooks);
 
   const bookIdToTitle = useMemo(() => {
     const map = new Map<string, string>();
@@ -47,77 +44,6 @@ export default function FavoritesPage() {
   useEffect(() => {
     setLoading(true);
     refreshBooks().finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    coverUrlsRef.current = coverUrls;
-  }, [coverUrls]);
-
-  useEffect(() => {
-    const abort = new AbortController();
-    const pending: Promise<void>[] = [];
-
-    const wanted = new Set<string>();
-    for (const b of favoriteBooks) {
-      if (b.cover_path) wanted.add(b.cover_path);
-    }
-
-    setCoverUrls((prev) => {
-      const next = { ...prev };
-      for (const key of Object.keys(next)) {
-        if (!wanted.has(key)) {
-          revokeObjectUrl(next[key]);
-          delete next[key];
-        }
-      }
-      return next;
-    });
-
-    for (const b of favoriteBooks) {
-      const coverPath = b.cover_path;
-      if (!coverPath) continue;
-      if (coverUrlsRef.current[coverPath]) continue;
-      if (coverLoadingRef.current.has(coverPath)) continue;
-      coverLoadingRef.current.add(coverPath);
-
-      pending.push(
-        (async () => {
-          try {
-            const ext = coverPath.split(".").pop() ?? null;
-            const url = await readAppDataBlobUrl(coverPath, extToMime(ext));
-            if (abort.signal.aborted) {
-              revokeObjectUrl(url);
-              return;
-            }
-            setCoverUrls((prev) => {
-              if (prev[coverPath]) {
-                revokeObjectUrl(url);
-                return prev;
-              }
-              return { ...prev, [coverPath]: url };
-            });
-          } catch (e) {
-            logFrontend(`cover: load failed ${coverPath} ${String(e)}`);
-          } finally {
-            coverLoadingRef.current.delete(coverPath);
-          }
-        })(),
-      );
-    }
-
-    return () => {
-      abort.abort();
-      void Promise.allSettled(pending);
-    };
-  }, [favoriteBooks]);
-
-  useEffect(() => {
-    return () => {
-      setCoverUrls((prev) => {
-        for (const url of Object.values(prev)) revokeObjectUrl(url);
-        return {};
-      });
-    };
   }, []);
 
   useEffect(() => {
