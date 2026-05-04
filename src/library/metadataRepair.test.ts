@@ -26,7 +26,11 @@ describe("needsMetadataRepair", () => {
     expect(needsMetadataRepair(b({ title: "   ", author: "A" }))).toBe(true);
   });
 
+  test("returns true when cover missing", () => {
+    expect(needsMetadataRepair(b({ title: "T", cover_path: null }))).toBe(true);
+  });
+
   test("returns false when title present even without author", () => {
-    expect(needsMetadataRepair(b({ title: "T", author: null }))).toBe(false);
+    expect(needsMetadataRepair(b({ title: "T", author: null, cover_path: "library/covers/b1.jpg" }))).toBe(false);
   });
 });
