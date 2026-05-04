@@ -86,6 +86,7 @@ export default function ReaderPage() {
   const wheelCooldownRef = useRef(0);
   const wheelAccumRef = useRef(0);
   const immersiveHudTimerRef = useRef<number | null>(null);
+  const resizeRafRef = useRef<number | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -96,13 +97,28 @@ export default function ReaderPage() {
   }, [bookId]);
 
   useEffect(() => {
-    const update = () => {
+    const measure = () => {
       setViewerWidth(viewerRef.current?.clientWidth ?? window.innerWidth);
       setViewerHeight(viewerRef.current?.clientHeight ?? window.innerHeight);
     };
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
+
+    const onResize = () => {
+      if (resizeRafRef.current != null) return;
+      resizeRafRef.current = window.requestAnimationFrame(() => {
+        resizeRafRef.current = null;
+        measure();
+      });
+    };
+
+    measure();
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (resizeRafRef.current != null) {
+        window.cancelAnimationFrame(resizeRafRef.current);
+        resizeRafRef.current = null;
+      }
+    };
   }, []);
 
   const spreadMode = resolveSpreadMode(settings.layoutMode, viewerWidth);
