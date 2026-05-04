@@ -95,6 +95,24 @@ fn find_cover_href(doc: &Document) -> Option<(String, Option<String>)> {
         return Some((href, media_type));
     }
 
+    let hinted = doc.descendants().find(|n| {
+        if !n.is_element() || !n.tag_name().name().eq_ignore_ascii_case("item") {
+            return false;
+        }
+        let media = n.attribute("media-type").unwrap_or("").to_lowercase();
+        if !media.starts_with("image/") {
+            return false;
+        }
+        let id = n.attribute("id").unwrap_or("").to_lowercase();
+        let href = n.attribute("href").unwrap_or("").to_lowercase();
+        id.contains("cover") || href.contains("cover")
+    });
+    if let Some(item) = hinted {
+        let href = item.attribute("href").map(|s| s.to_string())?;
+        let media_type = item.attribute("media-type").map(|s| s.to_string());
+        return Some((href, media_type));
+    }
+
     None
 }
 
@@ -177,4 +195,42 @@ pub fn extract_epub_metadata(epub_path: &Path) -> Result<EpubMetadata, String> {
         cover_bytes,
         cover_ext,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cover_fallback_matches_image_item_with_cover_in_id() {
+        let opf = r#"
+        <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
+          <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>t</dc:title>
+          </metadata>
+          <manifest>
+            <item id="cover-image" href="Images/cover.jpg" media-type="image/jpeg" />
+          </manifest>
+        </package>
+        "#;
+        let doc = Document::parse(opf).unwrap();
+        let (href, media) = find_cover_href(&doc).unwrap();
+        assert_eq!(href, "Images/cover.jpg");
+        assert_eq!(media.unwrap(), "image/jpeg");
+    }
+
+    #[test]
+    fn cover_fallback_matches_image_item_with_cover_in_href() {
+        let opf = r#"
+        <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="3.0">
+          <manifest>
+            <item id="img1" href="cover.png" media-type="image/png" />
+          </manifest>
+        </package>
+        "#;
+        let doc = Document::parse(opf).unwrap();
+        let (href, media) = find_cover_href(&doc).unwrap();
+        assert_eq!(href, "cover.png");
+        assert_eq!(media.unwrap(), "image/png");
+    }
 }
