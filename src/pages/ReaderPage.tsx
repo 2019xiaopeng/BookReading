@@ -29,6 +29,7 @@ import SettingsPanel from "../reader/components/SettingsPanel";
 import { defaultSettings } from "../reader/settings/defaults";
 import type { ReaderSettings, Theme } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
+import Drawer from "../ui/Drawer";
 
 export default function ReaderPage() {
   const navigate = useNavigate();
@@ -48,6 +49,7 @@ export default function ReaderPage() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<{ cfi: string; excerpt: string }[]>([]);
   const [isImmersive, setIsImmersive] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<ReaderController | null>(null);
@@ -202,6 +204,7 @@ export default function ReaderPage() {
         e.preventDefault();
         setIsImmersive(false);
         setSideTab("search");
+        setDrawerOpen(true);
         requestAnimationFrame(() => searchInputRef.current?.focus());
         return;
       }
@@ -239,16 +242,22 @@ export default function ReaderPage() {
       }
 
       if (e.key === "Escape") {
+        if (drawerOpen) {
+          e.preventDefault();
+          setDrawerOpen(false);
+          return;
+        }
         if (isImmersive) {
           e.preventDefault();
           setIsImmersive(false);
+          return;
         }
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [book, isImmersive, settings.pageAnimation]);
+  }, [book, drawerOpen, isImmersive, settings.pageAnimation]);
 
   useEffect(() => {
     const el = viewerRef.current;
@@ -314,55 +323,62 @@ export default function ReaderPage() {
     await (direction === "next" ? ctrl.next() : ctrl.prev());
   }
 
+  function openDrawer(tab: typeof sideTab) {
+    setSideTab(tab);
+    setIsImmersive(false);
+    setDrawerOpen(true);
+    if (tab === "search") requestAnimationFrame(() => searchInputRef.current?.focus());
+  }
+
+  const drawerTitle =
+    sideTab === "toc"
+      ? "目录"
+      : sideTab === "bookmarks"
+        ? "书签"
+        : sideTab === "highlights"
+          ? "标注"
+          : sideTab === "favorites"
+            ? "收藏句子"
+            : sideTab === "search"
+              ? "搜索"
+              : "阅读设置";
+
   return (
     <div
       data-theme={settings.theme}
       style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--text)", overflow: "hidden" }}
     >
       {!isImmersive ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: 12, borderBottom: "1px solid var(--border)" }}>
-          <button onClick={() => navigate("/")}>返回书库</button>
+        <div className="wr-topbar" style={{ borderBottom: "1px solid var(--wr-hairline)", background: "var(--wr-paper)" }}>
+          <button className="wr-btn" onClick={() => navigate("/")}>
+            返回书库
+          </button>
           <div style={{ fontSize: 16, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {book?.title ?? "阅读"}
           </div>
           <div style={{ flex: 1 }} />
-          <button
-            onClick={() => {
-              setSideTab("bookmarks");
-            }}
-          >
+          <button className="wr-btn" onClick={() => openDrawer("toc")}>
+            目录
+          </button>
+          <button className="wr-btn" onClick={() => openDrawer("bookmarks")}>
             书签
           </button>
-          <button
-            onClick={() => {
-              setSideTab("highlights");
-            }}
-          >
+          <button className="wr-btn" onClick={() => openDrawer("highlights")}>
             标注
           </button>
-          <button
-            onClick={() => {
-              setSideTab("favorites");
-            }}
-          >
+          <button className="wr-btn" onClick={() => openDrawer("favorites")}>
             收藏
           </button>
-          <button
-            onClick={() => {
-              setSideTab("search");
-            }}
-          >
+          <button className="wr-btn" onClick={() => openDrawer("search")}>
             搜索
           </button>
-          <button
-            onClick={() => {
-              setSideTab("settings");
-            }}
-          >
+          <button className="wr-btn" onClick={() => openDrawer("settings")}>
             设置
           </button>
-          <button onClick={() => setIsImmersive(true)}>沉浸</button>
-          <div style={{ color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>
+          <button className="wr-btn" onClick={() => setIsImmersive(true)}>
+            沉浸
+          </button>
+          <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
             {typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
           </div>
         </div>
@@ -371,29 +387,14 @@ export default function ReaderPage() {
       )}
 
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-        {!isImmersive ? (
-          <div style={{ width: 300, borderRight: "1px solid var(--border)", padding: 12, overflow: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => setSideTab("toc")} disabled={sideTab === "toc"}>
-                目录
-              </button>
-              <button onClick={() => setSideTab("bookmarks")} disabled={sideTab === "bookmarks"}>
-                书签
-              </button>
-              <button onClick={() => setSideTab("highlights")} disabled={sideTab === "highlights"}>
-                标注
-              </button>
-              <button onClick={() => setSideTab("favorites")} disabled={sideTab === "favorites"}>
-                收藏
-              </button>
-              <button onClick={() => setSideTab("search")} disabled={sideTab === "search"}>
-                搜索
-              </button>
-              <button onClick={() => setSideTab("settings")} disabled={sideTab === "settings"}>
-                设置
-              </button>
-            </div>
-
+        <div ref={viewerRef} style={{ position: "relative", flex: 1, minWidth: 0, background: "var(--panel-solid)", overflow: "hidden" }}>
+          <Drawer
+            open={drawerOpen && !isImmersive}
+            title={drawerTitle}
+            onClose={() => {
+              setDrawerOpen(false);
+            }}
+          >
             {sideTab === "settings" ? (
               <SettingsPanel
                 value={settings}
@@ -405,18 +406,18 @@ export default function ReaderPage() {
             ) : null}
 
             {sideTab === "toc" ? (
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>目录</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {tocLoading ? (
-                  <div style={{ color: "var(--text-muted)" }}>加载中…</div>
+                  <div className="wr-muted">加载中…</div>
                 ) : toc.length === 0 ? (
-                  <div style={{ color: "var(--text-muted)" }}>暂无目录</div>
+                  <div className="wr-muted">暂无目录</div>
                 ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {toc.map((item) => (
                       <button
                         key={item.href}
-                        style={{ textAlign: "left" }}
+                        className="wr-card"
+                        style={{ textAlign: "left", cursor: "pointer" }}
                         onClick={() => controllerRef.current?.display(item.href)}
                       >
                         {item.label}
@@ -433,7 +434,7 @@ export default function ReaderPage() {
                 onAdd={() => {
                   const cfi = lastCfiRef.current;
                   if (!book || !cfi) return;
-                  const label = window.prompt("书签名称（可空）", "") ;
+                  const label = window.prompt("书签名称（可空）", "");
                   if (label === null) return;
                   void (async () => {
                     const bm = await addBookmark(book.id, cfi, label.trim() ? label : null);
@@ -467,26 +468,20 @@ export default function ReaderPage() {
 
             {sideTab === "favorites" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <div style={{ fontWeight: 600 }}>收藏句子</div>
                 {favoriteQuotes.length === 0 ? (
-                  <div style={{ color: "rgba(0,0,0,0.6)" }}>暂无收藏</div>
+                  <div className="wr-muted">暂无收藏</div>
                 ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {favoriteQuotes.map((q) => (
-                      <div
-                        key={q.id}
-                        style={{
-                          border: "1px solid rgba(0,0,0,0.12)",
-                          borderRadius: 10,
-                          padding: 10,
-                          background: "white",
-                        }}
-                      >
+                      <div key={q.id} className="wr-card" style={{ padding: 10 }}>
                         <div style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}>{q.text}</div>
-                        {q.note ? <div style={{ whiteSpace: "pre-wrap", color: "rgba(0,0,0,0.7)", marginBottom: 8 }}>{q.note}</div> : null}
+                        {q.note ? <div className="wr-muted" style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}>{q.note}</div> : null}
                         <div style={{ display: "flex", gap: 8 }}>
-                          <button onClick={() => controllerRef.current?.display(q.cfi_range)}>打开定位</button>
+                          <button className="wr-btn" onClick={() => controllerRef.current?.display(q.cfi_range)}>
+                            打开定位
+                          </button>
                           <button
+                            className="wr-btn"
                             onClick={() => {
                               void (async () => {
                                 await deleteFavoriteQuote(q.id);
@@ -527,10 +522,8 @@ export default function ReaderPage() {
                 onOpen={(cfi) => controllerRef.current?.display(cfi)}
               />
             ) : null}
-          </div>
-        ) : null}
+          </Drawer>
 
-        <div ref={viewerRef} style={{ position: "relative", flex: 1, minWidth: 0, background: "var(--panel-solid)", overflow: "hidden" }}>
           <div ref={containerRef} style={{ height: "100%", width: "100%", background: "transparent" }} />
           {readerError ? (
             <div
@@ -571,24 +564,24 @@ export default function ReaderPage() {
               </div>
             </div>
           ) : null}
-          <div
-            style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "1fr 1fr" }}
-          >
-            <div
-              onClick={() => {
-                if (isImmersive) setIsImmersive(false);
-                void animateTurn("prev");
-              }}
-              style={{ cursor: "w-resize" }}
-            />
-            <div
-              onClick={() => {
-                if (isImmersive) setIsImmersive(false);
-                void animateTurn("next");
-              }}
-              style={{ cursor: "e-resize" }}
-            />
-          </div>
+          {!drawerOpen ? (
+            <div style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "1fr 1fr" }}>
+              <div
+                onClick={() => {
+                  if (isImmersive) setIsImmersive(false);
+                  void animateTurn("prev");
+                }}
+                style={{ cursor: "w-resize" }}
+              />
+              <div
+                onClick={() => {
+                  if (isImmersive) setIsImmersive(false);
+                  void animateTurn("next");
+                }}
+                style={{ cursor: "e-resize" }}
+              />
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

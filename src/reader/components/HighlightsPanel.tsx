@@ -10,20 +10,19 @@ export default function HighlightsPanel(props: {
       <div style={{ fontWeight: 600 }}>标注</div>
 
       {props.items.length === 0 ? (
-        <div style={{ color: "rgba(0,0,0,0.6)" }}>暂无标注</div>
+        <div className="wr-muted">暂无标注</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {props.items.map((h) => (
-            <div
-              key={h.id}
-              style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 10, padding: 10, background: "white" }}
-            >
-              <div style={{ color: "rgba(0,0,0,0.8)", marginBottom: 8 }}>
-                {h.note?.trim() || "高亮"}
-              </div>
+            <div key={h.id} className="wr-card" style={{ padding: 10 }}>
+              <div style={{ color: "var(--wr-ink)", marginBottom: 8 }}>{h.note?.trim() || "高亮"}</div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => props.onOpen(h.cfi_range)}>打开</button>
-                <button onClick={() => props.onDelete(h.id)}>删除</button>
+                <button className="wr-btn" onClick={() => props.onOpen(h.cfi_range)}>
+                  打开
+                </button>
+                <button className="wr-btn" onClick={() => props.onDelete(h.id)}>
+                  删除
+                </button>
               </div>
             </div>
           ))}
@@ -32,4 +31,3 @@ export default function HighlightsPanel(props: {
     </div>
   );
 }
-

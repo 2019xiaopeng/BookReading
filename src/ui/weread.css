@@ -57,6 +57,26 @@
   overflow: hidden;
 }
 
+.wr-card {
+  border: 1px solid var(--wr-hairline);
+  border-radius: var(--wr-radius-lg);
+  background: var(--wr-paper);
+  box-shadow: var(--wr-shadow-soft);
+  padding: 12px;
+}
+
+.wr-select {
+  border: 1px solid var(--wr-hairline);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--wr-ink);
+}
+
+[data-theme="dark"] .wr-select {
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .wr-topbar {
   height: 62px;
   display: flex;
