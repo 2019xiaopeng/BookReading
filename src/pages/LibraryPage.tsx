@@ -7,6 +7,7 @@ import { deleteBook, importBook, listBooks, repairBookMetadata, setBookFavorite 
 import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../tauri/appDataPaths";
 import { needsMetadataRepair } from "../library/metadataRepair";
 import { logFrontend } from "../tauri/frontendLog";
+import AppShell from "../ui/AppShell";
 
 function formatTitle(book: Book): string {
   return book.title?.trim() || "未命名";
@@ -180,19 +181,16 @@ export default function LibraryPage() {
   }
 
   return (
-    <div className="app-page" data-theme="light">
-      <div className="app-header">
-        <div className="app-title">BookReading</div>
-        <div className="app-spacer" />
-        <button onClick={() => navigate("/favorites")} disabled={loading}>
-          收藏
-        </button>
-        <button onClick={onImport} disabled={loading} className="btn-primary">
+    <AppShell
+      active="library"
+      title="书架"
+      right={
+        <button onClick={onImport} disabled={loading} className="wr-btn wr-btn-primary" style={{ width: "100%" }}>
           导入 EPUB
         </button>
-      </div>
-
-      <div className="app-grid">
+      }
+    >
+      <div className="app-grid" style={{ padding: 18 }}>
         {booksSorted.map((b) => (
           <div
             key={b.id}
@@ -246,6 +244,6 @@ export default function LibraryPage() {
           暂无书籍，点击右上角导入 EPUB。
         </div>
       ) : null}
-    </div>
+    </AppShell>
   );
 }

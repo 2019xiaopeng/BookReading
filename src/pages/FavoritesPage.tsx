@@ -5,6 +5,7 @@ import type { Book, FavoriteQuote } from "../tauri/invoke";
 import { deleteFavoriteQuote, listBooks, listFavoriteBooks, listFavoriteQuotes, setBookFavorite } from "../tauri/invoke";
 import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../tauri/appDataPaths";
 import { logFrontend } from "../tauri/frontendLog";
+import AppShell from "../ui/AppShell";
 
 export default function FavoritesPage() {
   const navigate = useNavigate();
@@ -126,24 +127,23 @@ export default function FavoritesPage() {
   }, [tab, filterBookId]);
 
   return (
-    <div className="app-page" data-theme="light">
-      <div className="app-header">
-        <button onClick={() => navigate("/")}>返回书库</button>
-        <div className="app-title">收藏</div>
-        <div className="app-spacer" />
-      </div>
-
-      <div className="tabs" role="tablist" aria-label="收藏">
-        <button className="tab" role="tab" aria-selected={tab === "books"} onClick={() => setTab("books")}>
-          收藏书籍
-        </button>
-        <button className="tab" role="tab" aria-selected={tab === "quotes"} onClick={() => setTab("quotes")}>
-          收藏句子
-        </button>
-      </div>
+    <AppShell
+      active="favorites"
+      title="收藏"
+      right={
+        <div className="wr-seg" aria-label="收藏" style={{ width: "100%" }}>
+          <button className="wr-btn" data-active={tab === "books"} onClick={() => setTab("books")} style={{ flex: 1 }}>
+            收藏书籍
+          </button>
+          <button className="wr-btn" data-active={tab === "quotes"} onClick={() => setTab("quotes")} style={{ flex: 1 }}>
+            收藏句子
+          </button>
+        </div>
+      }
+    >
 
       {tab === "books" ? (
-        <div className="app-grid">
+        <div className="app-grid" style={{ padding: 18 }}>
           {favoriteBooks.map((b) => (
             <div key={b.id} className="app-card">
               <div className="app-cover">
@@ -187,7 +187,7 @@ export default function FavoritesPage() {
       ) : null}
 
       {tab === "quotes" ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 18 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <input
               value={query}
@@ -256,6 +256,6 @@ export default function FavoritesPage() {
           )}
         </div>
       ) : null}
-    </div>
+    </AppShell>
   );
 }

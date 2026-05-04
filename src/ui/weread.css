@@ -66,6 +66,19 @@
   border-bottom: 1px solid var(--wr-hairline);
 }
 
+.wr-seg {
+  display: inline-flex;
+  gap: 8px;
+  padding: 4px;
+  border: 1px solid var(--wr-hairline);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="dark"] .wr-seg {
+  background: rgba(255, 255, 255, 0.05);
+}
+
 .wr-input {
   border: 1px solid var(--wr-hairline);
   border-radius: 999px;
@@ -121,7 +134,16 @@
   background: linear-gradient(180deg, rgba(40, 199, 111, 0.94), rgba(40, 199, 111, 0.72));
 }
 
+[data-active="true"].wr-btn {
+  background: rgba(26, 173, 25, 0.12);
+  border-color: rgba(26, 173, 25, 0.22);
+}
+
+[data-theme="dark"] [data-active="true"].wr-btn {
+  background: rgba(40, 199, 111, 0.14);
+  border-color: rgba(40, 199, 111, 0.22);
+}
+
 .wr-muted {
   color: var(--wr-muted);
 }
-
