@@ -77,6 +77,26 @@
   background: rgba(255, 255, 255, 0.06);
 }
 
+.wr-textarea {
+  border: 1px solid var(--wr-hairline);
+  border-radius: 14px;
+  padding: 10px 12px;
+  min-height: 92px;
+  resize: vertical;
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--wr-ink);
+  outline: none;
+}
+
+[data-theme="dark"] .wr-textarea {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.wr-textarea:focus {
+  border-color: rgba(26, 173, 25, 0.35);
+  box-shadow: 0 0 0 4px rgba(26, 173, 25, 0.12);
+}
+
 .wr-topbar {
   height: 62px;
   display: flex;

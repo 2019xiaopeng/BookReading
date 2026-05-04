@@ -26,6 +26,7 @@ import BookmarksPanel from "../reader/components/BookmarksPanel";
 import HighlightsPanel from "../reader/components/HighlightsPanel";
 import SearchPanel from "../reader/components/SearchPanel";
 import SettingsPanel from "../reader/components/SettingsPanel";
+import SelectionToolbar from "../reader/components/SelectionToolbar";
 import { defaultSettings } from "../reader/settings/defaults";
 import type { ReaderSettings, Theme } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
@@ -50,6 +51,9 @@ export default function ReaderPage() {
   const [searchResults, setSearchResults] = useState<{ cfi: string; excerpt: string }[]>([]);
   const [isImmersive, setIsImmersive] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selection, setSelection] = useState<{ cfiRange: string; text: string } | null>(null);
+  const [noteDraft, setNoteDraft] = useState<{ cfiRange: string; text: string } | null>(null);
+  const [noteText, setNoteText] = useState("");
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<ReaderController | null>(null);
@@ -120,28 +124,7 @@ export default function ReaderPage() {
             setTocLoading(false);
           },
           onSelected: ({ cfiRange, text }) => {
-            void (async () => {
-              const useFavorite = window.confirm("是否将选中文本加入收藏？\n确定=收藏句子，取消=高亮标注");
-              if (useFavorite) {
-                const note = window.prompt("收藏备注（可空）", "");
-                if (note === null) return;
-                const q = await addFavoriteQuote(
-                  book.id,
-                  cfiRange,
-                  text.trim() ? text : "",
-                  note.trim() ? note : null,
-                );
-                setFavoriteQuotes((prev) => [q, ...prev]);
-                setSideTab("favorites");
-              } else {
-                const note = window.prompt("添加笔记（可空）", "");
-                if (note === null) return;
-                const h = await addHighlight(book.id, cfiRange, "#ffe600", note.trim() ? note : null);
-                setHighlights((prev) => [h, ...prev]);
-                controllerRef.current?.addHighlight(cfiRange);
-                setSideTab("highlights");
-              }
-            })();
+            setSelection({ cfiRange, text: text.trim() ? text : "" });
           },
         });
       } catch (e) {
@@ -292,6 +275,8 @@ export default function ReaderPage() {
   }
 
   async function animateTurn(direction: "next" | "prev") {
+    setSelection(null);
+    setNoteDraft(null);
     const ctrl = controllerRef.current;
     const el = viewerRef.current;
     if (!ctrl) return;
@@ -522,9 +507,85 @@ export default function ReaderPage() {
                 onOpen={(cfi) => controllerRef.current?.display(cfi)}
               />
             ) : null}
+
+            {sideTab === "highlights" && noteDraft ? (
+              <div className="wr-card" style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ fontWeight: 700 }}>添加笔记</div>
+                <div className="wr-muted" style={{ whiteSpace: "pre-wrap" }}>
+                  {noteDraft.text}
+                </div>
+                <textarea
+                  className="wr-textarea"
+                  value={noteText}
+                  onChange={(e) => setNoteText(e.currentTarget.value)}
+                  placeholder="写下你的想法（可空）"
+                />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    className="wr-btn wr-btn-primary"
+                    onClick={() => {
+                      const d = noteDraft;
+                      if (!book || !d) return;
+                      void (async () => {
+                        const h = await addHighlight(book.id, d.cfiRange, "#ffe600", noteText.trim() ? noteText : null);
+                        setHighlights((prev) => [h, ...prev]);
+                        controllerRef.current?.addHighlight(d.cfiRange);
+                        setNoteDraft(null);
+                        setNoteText("");
+                        setSelection(null);
+                      })();
+                    }}
+                  >
+                    保存
+                  </button>
+                  <button
+                    className="wr-btn"
+                    onClick={() => {
+                      setNoteDraft(null);
+                      setNoteText("");
+                    }}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </Drawer>
 
           <div ref={containerRef} style={{ height: "100%", width: "100%", background: "transparent" }} />
+          <SelectionToolbar
+            open={!!selection && !drawerOpen && !readerError}
+            text={selection?.text ?? ""}
+            onHighlight={() => {
+              const s = selection;
+              if (!book || !s) return;
+              void (async () => {
+                const h = await addHighlight(book.id, s.cfiRange, "#ffe600", null);
+                setHighlights((prev) => [h, ...prev]);
+                controllerRef.current?.addHighlight(s.cfiRange);
+                setSelection(null);
+                openDrawer("highlights");
+              })();
+            }}
+            onFavorite={() => {
+              const s = selection;
+              if (!book || !s) return;
+              void (async () => {
+                const q = await addFavoriteQuote(book.id, s.cfiRange, s.text, null);
+                setFavoriteQuotes((prev) => [q, ...prev]);
+                setSelection(null);
+                openDrawer("favorites");
+              })();
+            }}
+            onNote={() => {
+              const s = selection;
+              if (!s) return;
+              setNoteDraft(s);
+              setNoteText("");
+              openDrawer("highlights");
+            }}
+            onClose={() => setSelection(null)}
+          />
           {readerError ? (
             <div
               style={{
