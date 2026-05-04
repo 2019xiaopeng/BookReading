@@ -44,7 +44,7 @@ export async function updateBookMetadata(req: UpdateBookMetadataRequest): Promis
 }
 
 export async function deleteBook(bookId: string): Promise<void> {
-  return invoke<void>("delete_book", { book_id: bookId });
+  return invoke<void>("delete_book", { bookId });
 }
 
 export async function getSettings(): Promise<Record<string, string>> {
@@ -63,11 +63,11 @@ export type ReadingState = {
 };
 
 export async function getReadingState(bookId: string): Promise<ReadingState | null> {
-  return invoke<ReadingState | null>("get_reading_state", { book_id: bookId });
+  return invoke<ReadingState | null>("get_reading_state", { bookId });
 }
 
 export async function upsertReadingState(bookId: string, cfi: string, percent: number | null): Promise<void> {
-  return invoke<void>("upsert_reading_state", { book_id: bookId, cfi, percent });
+  return invoke<void>("upsert_reading_state", { bookId, cfi, percent });
 }
 
 export type Bookmark = {
@@ -88,19 +88,19 @@ export type Highlight = {
 };
 
 export async function listBookmarks(bookId: string): Promise<Bookmark[]> {
-  return invoke<Bookmark[]>("list_bookmarks", { book_id: bookId });
+  return invoke<Bookmark[]>("list_bookmarks", { bookId });
 }
 
 export async function addBookmark(bookId: string, cfi: string, label: string | null): Promise<Bookmark> {
-  return invoke<Bookmark>("add_bookmark", { book_id: bookId, cfi, label });
+  return invoke<Bookmark>("add_bookmark", { bookId, cfi, label });
 }
 
 export async function deleteBookmark(bookmarkId: string): Promise<void> {
-  return invoke<void>("delete_bookmark", { bookmark_id: bookmarkId });
+  return invoke<void>("delete_bookmark", { bookmarkId });
 }
 
 export async function listHighlights(bookId: string): Promise<Highlight[]> {
-  return invoke<Highlight[]>("list_highlights", { book_id: bookId });
+  return invoke<Highlight[]>("list_highlights", { bookId });
 }
 
 export async function addHighlight(
@@ -109,11 +109,11 @@ export async function addHighlight(
   color: string,
   note: string | null,
 ): Promise<Highlight> {
-  return invoke<Highlight>("add_highlight", { book_id: bookId, cfi_range: cfiRange, color, note });
+  return invoke<Highlight>("add_highlight", { bookId, cfiRange, color, note });
 }
 
 export async function deleteHighlight(highlightId: string): Promise<void> {
-  return invoke<void>("delete_highlight", { highlight_id: highlightId });
+  return invoke<void>("delete_highlight", { highlightId });
 }
 
 export type FavoriteQuote = {
@@ -126,7 +126,7 @@ export type FavoriteQuote = {
 };
 
 export async function setBookFavorite(bookId: string, isFavorite: boolean): Promise<void> {
-  return invoke<void>("set_book_favorite", { book_id: bookId, is_favorite: isFavorite });
+  return invoke<void>("set_book_favorite", { bookId, isFavorite });
 }
 
 export async function listFavoriteBooks(): Promise<Book[]> {
@@ -140,15 +140,15 @@ export async function addFavoriteQuote(
   note: string | null,
 ): Promise<FavoriteQuote> {
   return invoke<FavoriteQuote>("add_favorite_quote", {
-    book_id: bookId,
-    cfi_range: cfiRange,
+    bookId,
+    cfiRange,
     text,
     note,
   });
 }
 
 export async function deleteFavoriteQuote(quoteId: string): Promise<void> {
-  return invoke<void>("delete_favorite_quote", { quote_id: quoteId });
+  return invoke<void>("delete_favorite_quote", { quoteId });
 }
 
 export async function listFavoriteQuotes(params?: {
@@ -156,7 +156,7 @@ export async function listFavoriteQuotes(params?: {
   query?: string | null;
 }): Promise<FavoriteQuote[]> {
   return invoke<FavoriteQuote[]>("list_favorite_quotes", {
-    book_id: params?.bookId ?? null,
+    bookId: params?.bookId ?? null,
     query: params?.query ?? null,
   });
 }
