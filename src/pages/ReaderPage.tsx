@@ -71,6 +71,11 @@ export default function ReaderPage() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<ReaderController | null>(null);
+  const settingsRef = useRef<ReaderSettings>(settings);
+  const spreadModeRef = useRef<"none" | "both">("none");
+  const locationSearchRef = useRef(location.search);
+  const readerCreateCountRef = useRef(0);
+  const lastUrlCfiRef = useRef<string | null>(null);
   const persistTimerRef = useRef<number | null>(null);
   const lastCfiRef = useRef<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -94,6 +99,18 @@ export default function ReaderPage() {
 
   const spreadMode = resolveSpreadMode(settings.layoutMode, viewerWidth);
   const paperMaxWidth = spreadMode === "both" ? 1260 : 980;
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  useEffect(() => {
+    spreadModeRef.current = spreadMode;
+  }, [spreadMode]);
+
+  useEffect(() => {
+    locationSearchRef.current = location.search;
+  }, [location.search]);
 
   useEffect(() => {
     (async () => {
@@ -124,11 +141,12 @@ export default function ReaderPage() {
       setTocLoading(true);
 
       try {
-        logFrontend(`reader: create ${book.id} ${book.library_path}`);
+        readerCreateCountRef.current += 1;
+        logFrontend(`reader: create ${book.id} ${book.library_path} count=${readerCreateCountRef.current}`);
         controllerRef.current = await createReader({
           container: containerRef.current,
           libraryPath: book.library_path,
-          spreadMode,
+          spreadMode: spreadModeRef.current,
           onRelocated: ({ cfi, percent }) => {
             lastCfiRef.current = cfi;
             if (typeof percent === "number") setPercent(percent);
@@ -162,9 +180,9 @@ export default function ReaderPage() {
         return;
       }
 
-      controllerRef.current.setTheme(settings.theme);
-      controllerRef.current.setFontSizePercent(settings.fontSizePercent);
-      controllerRef.current.setSpreadMode(spreadMode);
+      controllerRef.current.setTheme(settingsRef.current.theme);
+      controllerRef.current.setFontSizePercent(settingsRef.current.fontSizePercent);
+      controllerRef.current.setSpreadMode(spreadModeRef.current);
 
       const [bm, hl, fav] = await Promise.all([
         listBookmarks(book.id),
@@ -178,10 +196,8 @@ export default function ReaderPage() {
         controllerRef.current.addHighlight(h.cfi_range);
       }
 
-      const cfiFromUrl = new URLSearchParams(location.search).get("cfi");
-      if (cfiFromUrl) {
-        await controllerRef.current.display(cfiFromUrl);
-      } else {
+      const cfiFromUrl = new URLSearchParams(locationSearchRef.current).get("cfi");
+      if (!cfiFromUrl) {
         const state = await getReadingState(book.id);
         if (state?.cfi) {
           await controllerRef.current.display(state.cfi);
@@ -198,7 +214,16 @@ export default function ReaderPage() {
       controllerRef.current?.destroy();
       controllerRef.current = null;
     };
-  }, [book, settings.theme, settings.fontSizePercent, settings.layoutMode, location.search, spreadMode]);
+  }, [book?.id]);
+
+  useEffect(() => {
+    const cfi = new URLSearchParams(location.search).get("cfi");
+    if (!book || !cfi) return;
+    if (!controllerRef.current) return;
+    if (lastUrlCfiRef.current === cfi) return;
+    lastUrlCfiRef.current = cfi;
+    void controllerRef.current.display(cfi);
+  }, [book?.id, location.search]);
 
   useEffect(() => {
     if (!controllerRef.current) return;
@@ -206,15 +231,6 @@ export default function ReaderPage() {
     controllerRef.current.setFontSizePercent(settings.fontSizePercent);
     controllerRef.current.setSpreadMode(spreadMode);
   }, [settings.theme, settings.fontSizePercent, settings.layoutMode, spreadMode]);
-
-  useEffect(() => {
-    if (settings.layoutMode !== "auto") return;
-    const onResize = () => {
-      controllerRef.current?.setSpreadMode(resolveSpreadMode(settings.layoutMode, viewerRef.current?.clientWidth ?? 0));
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [settings.layoutMode]);
 
   useEffect(() => {
     if (!isImmersive) {
