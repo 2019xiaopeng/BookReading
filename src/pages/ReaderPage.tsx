@@ -419,10 +419,8 @@ export default function ReaderPage() {
                 onAdd={() => {
                   const cfi = lastCfiRef.current;
                   if (!book || !cfi) return;
-                  const label = window.prompt("书签名称（可空）", "");
-                  if (label === null) return;
                   void (async () => {
-                    const bm = await addBookmark(book.id, cfi, label.trim() ? label : null);
+                    const bm = await addBookmark(book.id, cfi, null);
                     setBookmarks((prev) => [bm, ...prev]);
                   })();
                 }}
