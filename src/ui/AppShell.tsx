@@ -1,40 +1,92 @@
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { IconBook, IconStar } from "./icons";
+import type { Theme } from "../reader/settings/types";
 
 export default function AppShell(props: {
   active: "library" | "favorites" | "reader";
+  theme?: Theme;
   title: string;
-  right?: ReactNode;
+  search?: {
+    value: string;
+    placeholder: string;
+    onChange: (v: string) => void;
+  };
+  seg?: {
+    items: { key: string; label: string }[];
+    active: string;
+    onChange: (key: string) => void;
+  };
+  sidebarFooter?: ReactNode;
   children: ReactNode;
 }) {
   const navigate = useNavigate();
+  const theme = props.theme ?? "light";
 
   return (
-    <div className="wr-shell" data-theme="light">
-      <div className="wr-panel" style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <div className="wr-topbar" style={{ borderBottom: "1px solid var(--wr-hairline)" }}>
-          <div style={{ fontWeight: 800, letterSpacing: 0.2 }}>BookReading</div>
+    <div className="wr-shell" data-theme={theme}>
+      <div className="wr-panel wr-side">
+        <div className="wr-side-top">
+          <div className="wr-brand">
+            <div className="wr-brand-name">BookReading</div>
+            <div className="wr-brand-sub">weread-inspired</div>
+          </div>
+          <div className="wr-pill" title="状态">
+            <span className="wr-dot" />
+            <span style={{ fontSize: 12 }}>本地库</span>
+          </div>
         </div>
 
-        <div style={{ padding: 10, display: "grid", gap: 8 }}>
-          <button className="wr-btn wr-icon-btn" data-active={props.active === "library"} onClick={() => navigate("/")}>
-            <IconBook />
-            书架
+        <div className="wr-nav" role="navigation">
+          <button className="wr-nav-btn" data-active={props.active === "library"} onClick={() => navigate("/")}>
+            <div className="wr-nav-title">
+              <IconBook />
+              书架
+            </div>
+            <div className="wr-nav-sub">最近阅读、导入与管理</div>
           </button>
-          <button className="wr-btn wr-icon-btn" data-active={props.active === "favorites"} onClick={() => navigate("/favorites")}>
-            <IconStar />
-            收藏
+          <button className="wr-nav-btn" data-active={props.active === "favorites"} onClick={() => navigate("/favorites")}>
+            <div className="wr-nav-title">
+              <IconStar />
+              收藏
+            </div>
+            <div className="wr-nav-sub">书籍与收藏句子</div>
           </button>
         </div>
 
-        <div style={{ marginTop: "auto", padding: 12, borderTop: "1px solid var(--wr-hairline)" }}>{props.right}</div>
+        <div className="wr-side-bottom">{props.sidebarFooter}</div>
       </div>
 
-      <div className="wr-panel" style={{ display: "grid", gridTemplateRows: "62px 1fr", minWidth: 0, minHeight: 0 }}>
-        <div className="wr-topbar">
-          <div style={{ fontWeight: 750 }}>{props.title}</div>
-          <div style={{ flex: 1 }} />
+      <div className="wr-panel wr-main">
+        <div className="wr-main-topbar">
+          {props.search ? (
+            <div className="wr-search">
+              <span className="wr-search-icon" aria-hidden />
+              <input
+                className="wr-search-input"
+                value={props.search.value}
+                onChange={(e) => props.search?.onChange(e.currentTarget.value)}
+                placeholder={props.search.placeholder}
+              />
+            </div>
+          ) : (
+            <div style={{ fontWeight: 750 }}>{props.title}</div>
+          )}
+
+          {props.seg ? (
+            <div className="wr-seg" aria-label="视图切换">
+              {props.seg.items.map((it) => (
+                <button
+                  key={it.key}
+                  className="wr-seg-btn"
+                  data-active={props.seg?.active === it.key}
+                  onClick={() => props.seg?.onChange(it.key)}
+                >
+                  {it.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div style={{ minHeight: 0, overflow: "auto" }}>{props.children}</div>
       </div>
