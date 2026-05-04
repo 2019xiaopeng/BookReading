@@ -6,6 +6,8 @@
   "permissions": [
     "core:default",
     "dialog:default",
+    "dialog:allow-confirm",
+    "dialog:allow-ask",
     "fs:default",
     {
       "identifier": "fs:allow-read-file",
