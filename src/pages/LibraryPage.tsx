@@ -4,9 +4,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import type { Book } from "../tauri/invoke";
 import { deleteBook, importBook, listBooks, repairBookMetadata, setBookFavorite } from "../tauri/invoke";
-import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../tauri/appDataPaths";
 import { needsMetadataRepair } from "../library/metadataRepair";
+import { useCoverUrls } from "../library/useCoverUrls";
 import { logFrontend } from "../tauri/frontendLog";
+import AppShell from "../ui/AppShell";
 
 function formatTitle(book: Book): string {
   return book.title?.trim() || "未命名";
@@ -20,13 +21,16 @@ export default function LibraryPage() {
   const navigate = useNavigate();
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(false);
-  const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
+  const [query, setQuery] = useState("");
   const repairingRef = useRef<Set<string>>(new Set());
   const attemptedRef = useRef<Set<string>>(new Set());
-  const coverUrlsRef = useRef<Record<string, string>>({});
-  const coverLoadingRef = useRef<Set<string>>(new Set());
+  const coverUrls = useCoverUrls(books);
 
-  const booksSorted = useMemo(() => books, [books]);
+  const booksFiltered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return books;
+    return books.filter((b) => `${formatTitle(b)} ${formatAuthor(b)}`.toLowerCase().includes(q));
+  }, [books, query]);
 
   async function refresh() {
     const list = await listBooks();
@@ -63,101 +67,34 @@ export default function LibraryPage() {
     };
   }, [books]);
 
-  useEffect(() => {
-    coverUrlsRef.current = coverUrls;
-  }, [coverUrls]);
-
-  useEffect(() => {
-    const abort = new AbortController();
-    const pending: Promise<void>[] = [];
-
-    const wanted = new Set<string>();
-    for (const b of books) {
-      if (b.cover_path) wanted.add(b.cover_path);
-    }
-
-    setCoverUrls((prev) => {
-      const next = { ...prev };
-      for (const key of Object.keys(next)) {
-        if (!wanted.has(key)) {
-          revokeObjectUrl(next[key]);
-          delete next[key];
-        }
-      }
-      return next;
-    });
-
-    for (const b of books) {
-      const coverPath = b.cover_path;
-      if (!coverPath) continue;
-      if (coverUrlsRef.current[coverPath]) continue;
-      if (coverLoadingRef.current.has(coverPath)) continue;
-      coverLoadingRef.current.add(coverPath);
-
-      pending.push(
-        (async () => {
-          try {
-            const ext = coverPath.split(".").pop() ?? null;
-            const url = await readAppDataBlobUrl(coverPath, extToMime(ext));
-            if (abort.signal.aborted) {
-              revokeObjectUrl(url);
-              return;
-            }
-            setCoverUrls((prev) => {
-              if (prev[coverPath]) {
-                revokeObjectUrl(url);
-                return prev;
-              }
-              return { ...prev, [coverPath]: url };
-            });
-          } catch (e) {
-            logFrontend(`cover: load failed ${coverPath} ${String(e)}`);
-          } finally {
-            coverLoadingRef.current.delete(coverPath);
-          }
-        })(),
-      );
-    }
-
-    return () => {
-      abort.abort();
-      void Promise.allSettled(pending);
-    };
-  }, [books]);
-
-  useEffect(() => {
-    return () => {
-      setCoverUrls((prev) => {
-        for (const url of Object.values(prev)) revokeObjectUrl(url);
-        return {};
-      });
-    };
-  }, []);
-
   async function onImport() {
     if (loading) return;
     setLoading(true);
     try {
       const selected = await open({
-        multiple: false,
+        multiple: true,
         filters: [{ name: "EPUB", extensions: ["epub"] }],
       });
-      if (!selected || Array.isArray(selected)) {
-        setLoading(false);
-        return;
+      if (!selected) return;
+
+      const paths = Array.isArray(selected) ? selected : [selected];
+      if (paths.length === 0) return;
+
+      for (const path of paths) {
+        try {
+          await importBook({
+            source_path: path,
+            title: null,
+            author: null,
+            cover_bytes_base64: null,
+            cover_ext: null,
+          });
+        } catch (e) {
+          logFrontend(`ui: import failed ${path} ${String(e)}`);
+        }
       }
 
-      await importBook({
-        source_path: selected,
-        title: null,
-        author: null,
-        cover_bytes_base64: null,
-        cover_ext: null,
-      });
-
       await refresh();
-      setLoading(false);
-      return;
     } finally {
       setLoading(false);
     }
@@ -180,59 +117,69 @@ export default function LibraryPage() {
   }
 
   return (
-    <div className="app-page" data-theme="light">
-      <div className="app-header">
-        <div className="app-title">BookReading</div>
-        <div className="app-spacer" />
-        <button onClick={() => navigate("/favorites")} disabled={loading}>
-          收藏
-        </button>
-        <button onClick={onImport} disabled={loading} className="btn-primary">
-          导入 EPUB
-        </button>
-      </div>
-
-      <div className="app-grid">
-        {booksSorted.map((b) => (
-          <div
-            key={b.id}
-            className="app-card"
-          >
-            <div className="app-cover">
-              {b.cover_path && coverUrls[b.cover_path] ? (
-                <img src={coverUrls[b.cover_path]} alt="" />
-              ) : (
-                <div className="app-cover-fallback">{(formatTitle(b).trim() || "未").slice(0, 1)}</div>
-              )}
+    <AppShell
+      active="library"
+      title="书架"
+      search={{ value: query, placeholder: "搜索书名 / 作者", onChange: setQuery }}
+      sidebarFooter={
+        <>
+          <button className="wr-small-btn" disabled={loading} onClick={() => void refresh()}>
+            刷新
+          </button>
+          <button className="wr-small-btn wr-primary" onClick={onImport} disabled={loading}>
+            导入 EPUB
+          </button>
+        </>
+      }
+    >
+      <div className="wr-book-grid">
+        {booksFiltered.map((b) => (
+          <div key={b.id} className="wr-book-card">
+            <div className="wr-cover">
+              {b.cover_path && coverUrls[b.cover_path] ? <img src={coverUrls[b.cover_path]} alt="" /> : null}
+              {!b.cover_path || !coverUrls[b.cover_path] ? (
+                <div className="wr-cover-letter">{(formatTitle(b).trim() || "未").slice(0, 1)}</div>
+              ) : null}
             </div>
 
-            <div className="app-meta">
-              <div className="app-meta-title">{formatTitle(b)}</div>
-              <div className="app-meta-sub">{formatAuthor(b)}</div>
+            <div className="wr-meta">
+              <div className="wr-title">{formatTitle(b)}</div>
+              <div className="wr-author">{formatAuthor(b)}</div>
 
-              <div className="app-actions">
+              <div className="wr-chip-row">
+                <div className="wr-chip">
+                  <span className="wr-chip-dot" />
+                  <span>{b.is_favorite ? "收藏" : "本地"}</span>
+                </div>
+                <div className="wr-chip" style={{ fontFamily: "var(--wr-mono)" }}>
+                  {new Date(b.added_at * 1000).toLocaleDateString()}
+                </div>
+              </div>
+
+              <div className="wr-actions">
                 <button
+                  className="wr-btn wr-btn-primary"
+                  disabled={loading}
                   onClick={() => {
                     logFrontend(`ui: open book ${b.id}`);
                     navigate(`/read/${b.id}`);
                   }}
-                  disabled={loading}
-                  className="btn-primary"
                 >
                   打开
                 </button>
                 <button
+                  className="wr-btn"
+                  disabled={loading}
                   onClick={() => {
                     setLoading(true);
                     setBookFavorite(b.id, !b.is_favorite)
                       .then(() => refresh())
                       .finally(() => setLoading(false));
                   }}
-                  disabled={loading}
                 >
                   {b.is_favorite ? "取消收藏" : "收藏"}
                 </button>
-                <button onClick={() => onDelete(b.id)} disabled={loading} className="btn-danger">
+                <button className="wr-btn" disabled={loading} onClick={() => onDelete(b.id)}>
                   删除
                 </button>
               </div>
@@ -241,11 +188,11 @@ export default function LibraryPage() {
         ))}
       </div>
 
-      {booksSorted.length === 0 ? (
+      {booksFiltered.length === 0 ? (
         <div className="muted" style={{ padding: 16 }}>
           暂无书籍，点击右上角导入 EPUB。
         </div>
       ) : null}
-    </div>
+    </AppShell>
   );
 }

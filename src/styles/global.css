@@ -165,9 +165,11 @@ select:focus {
 
 .app-meta-title {
   font-weight: 650;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
 }
 
 .app-meta-sub {
@@ -181,7 +183,15 @@ select:focus {
   margin-top: auto;
   display: flex;
   gap: var(--space-2);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+.app-actions > button {
+  padding: 8px 10px;
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .btn-primary {

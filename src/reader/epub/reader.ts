@@ -2,6 +2,16 @@ import ePub from "epubjs";
 
 import type { Theme } from "../settings/types";
 import { readAppDataFile } from "../../tauri/appDataPaths";
+import type { SpreadMode } from "../settings/layoutMode";
+import { logFrontend } from "../../tauri/frontendLog";
+
+const loggedKeys = new Set<string>();
+
+function logOnce(key: string, line: string): void {
+  if (loggedKeys.has(key)) return;
+  loggedKeys.add(key);
+  logFrontend(line);
+}
 
 export type TocItem = {
   label: string;
@@ -20,6 +30,7 @@ export type ReaderController = {
   display: (target?: string) => Promise<void>;
   setTheme: (theme: Theme) => void;
   setFontSizePercent: (percent: number) => void;
+  setSpreadMode: (mode: SpreadMode) => void;
   addHighlight: (cfiRange: string) => void;
   removeHighlight: (cfiRange: string) => void;
   search: (query: string) => Promise<{ cfi: string; excerpt: string }[]>;
@@ -39,9 +50,19 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+export function applySpreadMode(rendition: any, mode: SpreadMode): void {
+  try {
+    const spreadFn = rendition?.spread;
+    if (typeof spreadFn === "function") spreadFn.call(rendition, mode);
+  } catch (e) {
+    logOnce("reader.spread", `reader: spread failed ${String(e)}`);
+  }
+}
+
 export async function createReader(opts: {
   container: HTMLElement;
   libraryPath: string;
+  spreadMode?: SpreadMode;
   onRelocated?: (payload: RelocatedPayload) => void;
   onTocLoaded?: (toc: TocItem[]) => void;
   onSelected?: (payload: { cfiRange: string; text: string }) => void;
@@ -66,14 +87,15 @@ export async function createReader(opts: {
   void (async () => {
     try {
       await withTimeout(book.locations.generate(1024), 30_000);
-    } catch {
+    } catch (e) {
+      logOnce("reader.locations", `reader: locations.generate failed ${String(e)}`);
     }
   })();
 
   const rendition: any = book.renderTo(opts.container, {
     width: "100%",
     height: "100%",
-    spread: "none",
+    spread: opts.spreadMode ?? "none",
     flow: "paginated",
   });
 
@@ -97,15 +119,15 @@ export async function createReader(opts: {
 
   rendition.themes.register("light", {
     ...common,
-    body: { ...common.body, background: "#ffffff", color: "#111111" },
+    body: { ...common.body, background: "transparent", color: "#16181a" },
   });
   rendition.themes.register("dark", {
     ...common,
-    body: { ...common.body, background: "#0f1115", color: "#e8eaf0" },
+    body: { ...common.body, background: "transparent", color: "rgba(255, 255, 255, 0.92)" },
   });
   rendition.themes.register("sepia", {
     ...common,
-    body: { ...common.body, background: "#f7f1e1", color: "#2b2620" },
+    body: { ...common.body, background: "transparent", color: "rgba(38, 29, 18, 0.9)" },
   });
   rendition.themes.select("light");
   rendition.themes.fontSize("120%");
@@ -130,7 +152,8 @@ export async function createReader(opts: {
       try {
         const range = await book.getRange(cfiRange);
         text = range?.toString?.() ?? "";
-      } catch {
+      } catch (e) {
+        logOnce("reader.getRange", `reader: getRange failed ${String(e)}`);
       }
 
       opts.onSelected?.({ cfiRange, text });
@@ -179,13 +202,22 @@ export async function createReader(opts: {
     setFontSizePercent: (percent: number) => {
       rendition.themes.fontSize(`${percent}%`);
     },
+    setSpreadMode: (mode: SpreadMode) => {
+      applySpreadMode(rendition, mode);
+      try {
+        rendition.resize?.();
+      } catch (e) {
+        logOnce("reader.resize", `reader: resize failed ${String(e)}`);
+      }
+    },
     addHighlight: (cfiRange: string) => {
       rendition.annotations.highlight(cfiRange, {}, () => {});
     },
     removeHighlight: (cfiRange: string) => {
       try {
         rendition.annotations.remove(cfiRange);
-      } catch {
+      } catch (e) {
+        logOnce("reader.removeHighlight", `reader: removeHighlight failed ${String(e)}`);
       }
     },
     search: async (query: string) => {
@@ -193,6 +225,8 @@ export async function createReader(opts: {
       if (!q) return [];
       const items: any[] = Array.isArray(book.spine?.spineItems) ? book.spine.spineItems : [];
       const matches: { cfi: string; excerpt: string }[] = [];
+      let errors = 0;
+      let lastError: unknown = null;
 
       for (const section of items) {
         try {
@@ -204,7 +238,9 @@ export async function createReader(opts: {
               if (matches.length >= 200) return matches;
             }
           }
-        } catch {
+        } catch (e) {
+          errors += 1;
+          lastError = e;
         } finally {
           try {
             section.unload?.();
@@ -213,16 +249,21 @@ export async function createReader(opts: {
         }
       }
 
+      if (errors && !matches.length) {
+        logOnce("reader.search", `reader: search failed errors=${errors} last=${String(lastError)}`);
+      }
       return matches;
     },
     destroy: () => {
       try {
         rendition.destroy();
-      } catch {
+      } catch (e) {
+        logOnce("reader.rendition.destroy", `reader: rendition.destroy failed ${String(e)}`);
       }
       try {
         book.destroy();
-      } catch {
+      } catch (e) {
+        logOnce("reader.book.destroy", `reader: book.destroy failed ${String(e)}`);
       }
     },
   };

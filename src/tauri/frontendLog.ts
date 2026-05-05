@@ -1,4 +1,5 @@
 import { appendFrontendLog } from "./invoke";
+import { shouldIgnoreWindowErrorMessage } from "./frontendLogFilters";
 
 let queued: string[] = [];
 let flushing = false;
@@ -28,6 +29,7 @@ export function logFrontend(line: string): void {
 
 export function installFrontendLogging(): void {
   window.addEventListener("error", (ev) => {
+    if (shouldIgnoreWindowErrorMessage(String(ev.message))) return;
     const e: any = (ev as any).error;
     logFrontend(`window.error: ${String(ev.message)}\n${String(e?.stack ?? "")}`);
   });
@@ -45,4 +47,3 @@ export function installFrontendLogging(): void {
     orig(...args);
   };
 }
-

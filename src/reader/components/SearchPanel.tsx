@@ -19,32 +19,28 @@ export default function SearchPanel(props: {
           value={props.query}
           onChange={(e) => props.onQueryChange(e.currentTarget.value)}
           placeholder="输入关键词"
+          className="wr-input"
           style={{ flex: 1 }}
         />
-        <button onClick={props.onSearch} disabled={props.loading}>
+        <button className="wr-btn wr-btn-primary" onClick={props.onSearch} disabled={props.loading}>
           搜索
         </button>
       </div>
 
-      {props.loading ? <div style={{ color: "rgba(0,0,0,0.6)" }}>搜索中…</div> : null}
+      {props.loading ? <div className="wr-muted">搜索中…</div> : null}
 
       {props.results.length === 0 && !props.loading ? (
-        <div style={{ color: "rgba(0,0,0,0.6)" }}>暂无结果</div>
+        <div className="wr-muted">暂无结果</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {props.results.map((r) => (
             <button
               key={r.cfi}
               onClick={() => props.onOpen(r.cfi)}
-              style={{
-                textAlign: "left",
-                border: "1px solid rgba(0,0,0,0.12)",
-                borderRadius: 10,
-                padding: 10,
-                background: "white",
-              }}
+              className="wr-card"
+              style={{ textAlign: "left", cursor: "pointer" }}
             >
-              <div style={{ color: "rgba(0,0,0,0.85)" }}>{r.excerpt}</div>
+              <div style={{ color: "var(--wr-ink)" }}>{r.excerpt}</div>
             </button>
           ))}
         </div>
