@@ -71,16 +71,18 @@ export async function createReader(opts: {
   const bytes = await readAppDataFile(opts.libraryPath);
   const book: any = ePub(toArrayBuffer(bytes));
   let openFailed: string | null = null;
+  const onOpenFailed = (e: any) => {
+    openFailed = String(e ?? "openFailed");
+    opts.onError?.(`EPUB 打开失败：${openFailed}`);
+  };
   if (typeof book?.on === "function") {
-    book.on("openFailed", (e: any) => {
-      openFailed = String(e ?? "openFailed");
-      opts.onError?.(`EPUB 打开失败：${openFailed}`);
-    });
+    book.on("openFailed", onOpenFailed);
   }
 
   await withTimeout(book.ready, 60_000).catch((e) => {
     const msg = openFailed ? `EPUB 打开失败：${openFailed}` : `EPUB 解析超时/失败：${String(e)}`;
     opts.onError?.(msg);
+    book.destroy?.();
     throw new Error(msg);
   });
 
@@ -99,9 +101,10 @@ export async function createReader(opts: {
     flow: "paginated",
   });
 
-  rendition.on?.("displayerror", (e: any) => {
+  const onDisplayError = (e: any) => {
     opts.onError?.(`章节渲染失败：${String(e ?? "displayerror")}`);
-  });
+  };
+  rendition.on?.("displayerror", onDisplayError);
 
   const common: Record<string, any> = {
     "*, *::before, *::after": { "box-sizing": "border-box" },
@@ -136,7 +139,7 @@ export async function createReader(opts: {
     ".epubjs-hl": { fill: "rgba(255, 230, 0, 0.35)", "fill-opacity": "0.35", "mix-blend-mode": "multiply" },
   });
 
-  rendition.on("relocated", (location: any) => {
+  const onRelocated = (location: any) => {
     const cfi: string | undefined = location?.start?.cfi;
     if (!cfi) return;
     const percent =
@@ -144,9 +147,10 @@ export async function createReader(opts: {
         ? (book.locations.percentageFromCfi(cfi) as number)
         : null;
     opts.onRelocated?.({ cfi, percent });
-  });
+  };
+  rendition.on("relocated", onRelocated);
 
-  rendition.on("selected", (cfiRange: string, contents: any) => {
+  const onSelected = (cfiRange: string, contents: any) => {
     void (async () => {
       let text = "";
       try {
@@ -162,7 +166,8 @@ export async function createReader(opts: {
       } catch {
       }
     })();
-  });
+  };
+  rendition.on("selected", onSelected);
 
   void (async () => {
     try {
@@ -183,6 +188,8 @@ export async function createReader(opts: {
   await withTimeout(rendition.display(), 30_000).catch((e) => {
     const msg = `首次渲染超时/失败：${String(e)}`;
     opts.onError?.(msg);
+    rendition?.destroy?.();
+    book.destroy?.();
     throw new Error(msg);
   });
 
@@ -194,7 +201,11 @@ export async function createReader(opts: {
       await rendition.prev();
     },
     display: async (target?: string) => {
-      await rendition.display(target);
+      try {
+        await withTimeout(rendition.display(target), 30_000);
+      } catch (e) {
+        logOnce("reader.display", `reader: display failed ${String(e)}`);
+      }
     },
     setTheme: (theme: Theme) => {
       rendition.themes.select(theme);
@@ -211,7 +222,11 @@ export async function createReader(opts: {
       }
     },
     addHighlight: (cfiRange: string) => {
-      rendition.annotations.highlight(cfiRange, {}, () => {});
+      try {
+        rendition.annotations.highlight(cfiRange, {}, () => {});
+      } catch (e) {
+        logOnce("reader.addHighlight", `reader: addHighlight failed ${String(e)}`);
+      }
     },
     removeHighlight: (cfiRange: string) => {
       try {
@@ -255,6 +270,14 @@ export async function createReader(opts: {
       return matches;
     },
     destroy: () => {
+      try {
+        rendition.off?.("displayerror", onDisplayError);
+        rendition.off?.("relocated", onRelocated);
+        rendition.off?.("selected", onSelected);
+        book.off?.("openFailed", onOpenFailed);
+      } catch (e) {
+        logOnce("reader.off", `reader: off failed ${String(e)}`);
+      }
       try {
         rendition.destroy();
       } catch (e) {

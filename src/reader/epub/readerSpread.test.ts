@@ -6,8 +6,8 @@ describe("applySpreadMode", () => {
   test("uses rendition.spread when available", () => {
     const spread = vi.fn();
     const rendition: any = { spread };
-    applySpreadMode(rendition, "both");
-    expect(spread).toHaveBeenCalledWith("both");
+    applySpreadMode(rendition, "always");
+    expect(spread).toHaveBeenCalledWith("always");
   });
 
   test("does nothing when spread is missing", () => {

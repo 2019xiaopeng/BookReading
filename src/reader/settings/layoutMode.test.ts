@@ -17,9 +17,9 @@ describe("layoutMode", () => {
 
   test("resolveSpreadMode maps layout+width to epubjs spread", () => {
     expect(resolveSpreadMode("single", 1600)).toBe("none");
-    expect(resolveSpreadMode("double", 800)).toBe("both");
+    expect(resolveSpreadMode("double", 800)).toBe("always");
     expect(resolveSpreadMode("auto", 800)).toBe("none");
     expect(resolveSpreadMode("auto", 1199)).toBe("none");
-    expect(resolveSpreadMode("auto", 1200)).toBe("both");
+    expect(resolveSpreadMode("auto", 1200)).toBe("always");
   });
 });

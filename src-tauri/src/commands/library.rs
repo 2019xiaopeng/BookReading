@@ -260,8 +260,10 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
             } else {
                 let final_cover_abs = covers_dir.join(format!("{book_id}.{ext}"));
                 let tmp_cover_abs = covers_dir.join(format!("{book_id}.{ext}.part"));
-                atomic_write_to(&tmp_cover_abs, &final_cover_abs, bytes)
-                    .map_err(|e| format!("failed to write cover: {e}"))?;
+                if let Err(e) = atomic_write_to(&tmp_cover_abs, &final_cover_abs, bytes) {
+                    let _ = fs::remove_file(&final_book_abs);
+                    return Err(format!("failed to write cover: {e}"));
+                }
                 Some(final_cover_abs)
             }
         }

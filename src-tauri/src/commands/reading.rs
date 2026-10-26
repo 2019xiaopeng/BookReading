@@ -80,7 +80,7 @@ pub fn upsert_reading_state(
     conn.execute(
         "INSERT INTO reading_state (book_id, cfi, percent, updated_at)
          VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(book_id) DO UPDATE SET cfi = excluded.cfi, percent = excluded.percent, updated_at = excluded.updated_at",
+         ON CONFLICT(book_id) DO UPDATE SET cfi = excluded.cfi, percent = COALESCE(excluded.percent, percent), updated_at = excluded.updated_at",
         params![book_id, cfi, percent, now_ts()],
     )
     .map_err(|e| format!("failed to upsert reading_state: {e}"))?;
@@ -135,7 +135,7 @@ mod tests {
         conn.execute(
             "INSERT INTO reading_state (book_id, cfi, percent, updated_at)
              VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(book_id) DO UPDATE SET cfi = excluded.cfi, percent = excluded.percent, updated_at = excluded.updated_at",
+             ON CONFLICT(book_id) DO UPDATE SET cfi = excluded.cfi, percent = COALESCE(excluded.percent, percent), updated_at = excluded.updated_at",
             params!["b1", "cfi2", 0.2f64, 2i64],
         )
         .unwrap();

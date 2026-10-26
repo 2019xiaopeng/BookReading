@@ -84,22 +84,31 @@ pub fn migrate_book_paths_to_appdata_relative(conn: &Connection, app: &tauri::Ap
         let lib: String = row.get(1).map_err(|e| format!("failed to read library_path: {e}"))?;
         let cover: Option<String> = row.get(2).map_err(|e| format!("failed to read cover_path: {e}"))?;
 
-        let new_lib = normalize_appdata_relative(&lib, &base_str).unwrap_or(lib);
-        let new_cover = cover
+        let new_lib_opt = normalize_appdata_relative(&lib, &base_str);
+        let new_cover_opt = cover
             .as_deref()
-            .and_then(|c| normalize_appdata_relative(c, &base_str))
-            .or(cover);
+            .and_then(|c| normalize_appdata_relative(c, &base_str));
 
-        updates.push((id, Some(new_lib), new_cover));
+        let lib_changed = new_lib_opt.as_deref().map_or(false, |v| v != lib);
+        let cover_changed = new_cover_opt.as_deref().map_or(false, |v| Some(v) != cover.as_deref());
+
+        if lib_changed || cover_changed {
+            updates.push((id, Some(new_lib_opt.unwrap_or(lib)), new_cover_opt.or(cover)));
+        }
     }
 
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("failed to begin migrate transaction: {e}"))?;
     for (id, lib, cover) in updates {
-        conn.execute(
+        tx.execute(
             "UPDATE books SET library_path = ?2, cover_path = ?3 WHERE id = ?1",
             rusqlite::params![id, lib, cover],
         )
         .map_err(|e| format!("failed to update migrated paths: {e}"))?;
     }
+    tx.commit()
+        .map_err(|e| format!("failed to commit migrate transaction: {e}"))?;
 
     Ok(())
 }

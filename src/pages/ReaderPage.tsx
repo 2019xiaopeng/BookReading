@@ -55,6 +55,7 @@ export default function ReaderPage() {
   const [toc, setToc] = useState<TocItem[]>([]);
   const [tocLoading, setTocLoading] = useState(true);
   const [readerError, setReaderError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
   const [percent, setPercent] = useState<number | null>(null);
   const [settings, setSettings] = useState<ReaderSettings>(defaultSettings);
   const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings">("toc");
@@ -76,12 +77,13 @@ export default function ReaderPage() {
   const viewerSize = useElementSize(viewerRef);
   const controllerRef = useRef<ReaderController | null>(null);
   const settingsRef = useRef<ReaderSettings>(settings);
-  const spreadModeRef = useRef<"none" | "both">("none");
+  const spreadModeRef = useRef<"none" | "always">("none");
   const locationSearchRef = useRef(location.search);
-  const lastUrlCfiRef = useRef<string | null>(null);
   const showImmersiveHudRef = useRef<(holdMs?: number) => void>(() => {});
   const persistTimerRef = useRef<number | null>(null);
   const lastCfiRef = useRef<string | null>(null);
+  const restoredRef = useRef(false);
+  const searchSeqRef = useRef(0);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const wheelCooldownRef = useRef(0);
   const wheelAccumRef = useRef(0);
@@ -124,13 +126,16 @@ export default function ReaderPage() {
     (async () => {
       const map = await getSettings();
       if (cancelled) return;
+      if (settingsRef.current !== defaultSettings) return;
       const theme = normalizeTheme(map.theme);
       const fontSizePercent = Number(map.fontSizePercent ?? defaultSettings.fontSizePercent);
       const pageAnimation = normalizePageAnimation(map.pageAnimation);
       const layoutMode = normalizeLayoutMode(map.layoutMode);
       setSettings({
         theme,
-        fontSizePercent: Number.isFinite(fontSizePercent) ? fontSizePercent : defaultSettings.fontSizePercent,
+        fontSizePercent: Number.isFinite(fontSizePercent)
+          ? Math.min(200, Math.max(80, fontSizePercent))
+          : defaultSettings.fontSizePercent,
         pageAnimation,
         layoutMode,
       });
@@ -149,12 +154,15 @@ export default function ReaderPage() {
       const container = containerRef.current;
       container.innerHTML = "";
       setReaderError(null);
+      restoredRef.current = false;
       setToc([]);
       setTocLoading(true);
 
       const onRelocated = ({ cfi, percent }: { cfi: string; percent: number | null }) => {
+        if (cancelled) return;
         lastCfiRef.current = cfi;
         if (typeof percent === "number") setPercent(percent);
+        if (!restoredRef.current) return;
 
         if (persistTimerRef.current) {
           window.clearTimeout(persistTimerRef.current);
@@ -181,7 +189,11 @@ export default function ReaderPage() {
 
       const onSelected = ({ cfiRange, text }: { cfiRange: string; text: string }) => {
         if (cancelled) return;
-        setSelection({ cfiRange, text: text.trim() ? text : "" });
+        if (!text.trim()) {
+          setSelection(null);
+          return;
+        }
+        setSelection({ cfiRange, text });
       };
 
       let ctrl: ReaderController | null = null;
@@ -214,27 +226,36 @@ export default function ReaderPage() {
       ctrl.setFontSizePercent(settingsRef.current.fontSizePercent);
       ctrl.setSpreadMode(spreadModeRef.current);
 
-      const [bm, hl, fav] = await Promise.all([
-        listBookmarks(book.id),
-        listHighlights(book.id),
-        listFavoriteQuotes({ bookId: book.id }),
-      ]);
-      if (cancelled) return;
-      setBookmarks(bm);
-      setHighlights(hl);
-      setFavoriteQuotes(fav);
-      for (const h of hl) {
-        ctrl.addHighlight(h.cfi_range);
+      try {
+        const [bm, hl, fav] = await Promise.all([
+          listBookmarks(book.id),
+          listHighlights(book.id),
+          listFavoriteQuotes({ bookId: book.id }),
+        ]);
+        if (cancelled) return;
+        setBookmarks(bm);
+        setHighlights(hl);
+        setFavoriteQuotes(fav);
+        for (const h of hl) {
+          ctrl.addHighlight(h.cfi_range);
+        }
+      } catch (e) {
+        logFrontend(`reader: annotations load failed ${book.id} ${String(e)}`);
       }
 
       const cfiFromUrl = new URLSearchParams(locationSearchRef.current).get("cfi");
-      if (cfiFromUrl) return;
+      if (cfiFromUrl) {
+        await ctrl.display(cfiFromUrl);
+        restoredRef.current = true;
+        return;
+      }
       const state = await getReadingState(book.id);
       if (cancelled) return;
       if (state?.cfi) {
         await ctrl.display(state.cfi);
         if (typeof state.percent === "number") setPercent(state.percent);
       }
+      restoredRef.current = true;
     })();
 
     return () => {
@@ -246,16 +267,21 @@ export default function ReaderPage() {
       controllerRef.current?.destroy();
       controllerRef.current = null;
     };
-  }, [book?.id]);
+  }, [book?.id, retryKey]);
 
   useEffect(() => {
-    const cfi = new URLSearchParams(location.search).get("cfi");
-    if (!book || !cfi) return;
-    if (!controllerRef.current) return;
-    if (lastUrlCfiRef.current === cfi) return;
-    lastUrlCfiRef.current = cfi;
-    void controllerRef.current.display(cfi);
-  }, [book?.id, location.search]);
+    if (!book) return;
+    const flush = () => {
+      const cfi = lastCfiRef.current;
+      if (!cfi) return;
+      void upsertReadingState(book.id, cfi, null);
+    };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, [book?.id]);
 
   useEffect(() => {
     if (!controllerRef.current) return;
@@ -265,6 +291,7 @@ export default function ReaderPage() {
   }, [settings.theme, settings.fontSizePercent, settings.layoutMode, spreadMode]);
 
   useEffect(() => {
+    if (isImmersive) setDrawerOpen(false);
     if (!isImmersive) {
       showImmersiveHudRef.current = () => {};
       setImmersiveHudVisible(false);
@@ -328,7 +355,7 @@ export default function ReaderPage() {
         if (!book || !cfi) return;
         void (async () => {
           const bm = await addBookmark(book.id, cfi, null);
-          setBookmarks((prev) => [bm, ...prev]);
+          setBookmarks((prev) => (prev.some((x) => x.cfi === bm.cfi) ? prev : [bm, ...prev]));
           setSideTab("bookmarks");
         })();
         return;
@@ -371,6 +398,7 @@ export default function ReaderPage() {
     if (!el) return;
 
     const onWheel = (e: WheelEvent) => {
+      if (drawerOpen) return;
       const now = Date.now();
       if (now - wheelCooldownRef.current < 300) return;
       if (Math.abs(e.deltaY) < Math.abs(e.deltaX) * 1.2) return;
@@ -393,7 +421,7 @@ export default function ReaderPage() {
     return () => {
       el.removeEventListener("wheel", onWheel);
     };
-  }, [settings.pageAnimation]);
+  }, [drawerOpen, settings.pageAnimation]);
 
   async function persistSettings(next: ReaderSettings) {
     await setSetting("theme", next.theme);
@@ -449,6 +477,12 @@ export default function ReaderPage() {
     setIsImmersive(false);
     setDrawerOpen(true);
     if (tab === "search") requestAnimationFrame(() => searchInputRef.current?.focus());
+  }
+
+  function locate(target?: string) {
+    setSelection(null);
+    setNoteDraft(null);
+    void controllerRef.current?.display(target);
   }
 
   const drawerTitle =
@@ -549,7 +583,7 @@ export default function ReaderPage() {
                         key={item.href}
                         className="wr-card"
                         style={{ textAlign: "left", cursor: "pointer" }}
-                        onClick={() => controllerRef.current?.display(item.href)}
+                        onClick={() => locate(item.href)}
                       >
                         {item.label}
                       </button>
@@ -567,10 +601,10 @@ export default function ReaderPage() {
                   if (!book || !cfi) return;
                   void (async () => {
                     const bm = await addBookmark(book.id, cfi, null);
-                    setBookmarks((prev) => [bm, ...prev]);
+                    setBookmarks((prev) => (prev.some((x) => x.cfi === bm.cfi) ? prev : [bm, ...prev]));
                   })();
                 }}
-                onOpen={(cfi) => controllerRef.current?.display(cfi)}
+                onOpen={(cfi) => locate(cfi)}
                 onDelete={(id) => {
                   void (async () => {
                     await deleteBookmark(id);
@@ -583,7 +617,7 @@ export default function ReaderPage() {
             {sideTab === "highlights" ? (
               <HighlightsPanel
                 items={highlights}
-                onOpen={(cfiRange) => controllerRef.current?.display(cfiRange)}
+                onOpen={(cfiRange) => locate(cfiRange)}
                 onDelete={(id) => {
                   const h = highlights.find((x) => x.id === id);
                   void (async () => {
@@ -606,7 +640,7 @@ export default function ReaderPage() {
                         <div style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}>{q.text}</div>
                         {q.note ? <div className="wr-muted" style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}>{q.note}</div> : null}
                         <div style={{ display: "flex", gap: 8 }}>
-                          <button className="wr-btn" onClick={() => controllerRef.current?.display(q.cfi_range)}>
+                          <button className="wr-btn" onClick={() => locate(q.cfi_range)}>
                             打开定位
                           </button>
                           <button
@@ -639,16 +673,18 @@ export default function ReaderPage() {
                   void (async () => {
                     const ctrl = controllerRef.current;
                     if (!ctrl) return;
+                    const seq = ++searchSeqRef.current;
                     setSearchLoading(true);
                     try {
                       const res = await ctrl.search(searchQuery);
+                      if (searchSeqRef.current !== seq) return;
                       setSearchResults(res);
                     } finally {
-                      setSearchLoading(false);
+                      if (searchSeqRef.current === seq) setSearchLoading(false);
                     }
                   })();
                 }}
-                onOpen={(cfi) => controllerRef.current?.display(cfi)}
+                onOpen={(cfi) => locate(cfi)}
               />
             ) : null}
 
@@ -672,7 +708,7 @@ export default function ReaderPage() {
                       if (!book || !d) return;
                       void (async () => {
                         const h = await addHighlight(book.id, d.cfiRange, "#ffe600", noteText.trim() ? noteText : null);
-                        setHighlights((prev) => [h, ...prev]);
+                        setHighlights((prev) => (prev.some((x) => x.cfi_range === h.cfi_range) ? prev : [h, ...prev]));
                         controllerRef.current?.addHighlight(d.cfiRange);
                         setNoteDraft(null);
                         setNoteText("");
@@ -764,7 +800,7 @@ export default function ReaderPage() {
               if (!book || !s) return;
               void (async () => {
                 const h = await addHighlight(book.id, s.cfiRange, "#ffe600", null);
-                setHighlights((prev) => [h, ...prev]);
+                setHighlights((prev) => (prev.some((x) => x.cfi_range === h.cfi_range) ? prev : [h, ...prev]));
                 controllerRef.current?.addHighlight(s.cfiRange);
                 setSelection(null);
                 openDrawer("highlights");
@@ -799,7 +835,7 @@ export default function ReaderPage() {
                 justifyContent: "center",
                 padding: 16,
                 background: "rgba(0,0,0,0.45)",
-                zIndex: 10,
+                zIndex: 30,
               }}
             >
               <div style={{ maxWidth: 720, width: "100%", border: "1px solid var(--border)", borderRadius: 14, padding: 14, background: "var(--panel-solid)", boxShadow: "var(--shadow-sm)" }}>
@@ -818,7 +854,7 @@ export default function ReaderPage() {
                     onClick={() => {
                       setReaderError(null);
                       setTocLoading(true);
-                      controllerRef.current?.display();
+                      setRetryKey((k) => k + 1);
                     }}
                     className="btn-primary"
                   >

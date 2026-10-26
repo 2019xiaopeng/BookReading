@@ -1,6 +1,6 @@
 export type LayoutMode = "single" | "double" | "auto";
 
-export type SpreadMode = "none" | "both";
+export type SpreadMode = "none" | "always";
 
 export function normalizeLayoutMode(v: unknown): LayoutMode {
   const s = String(v ?? "").trim().toLowerCase();
@@ -10,6 +10,6 @@ export function normalizeLayoutMode(v: unknown): LayoutMode {
 
 export function resolveSpreadMode(mode: LayoutMode, containerWidth: number): SpreadMode {
   if (mode === "single") return "none";
-  if (mode === "double") return "both";
-  return containerWidth >= 1200 ? "both" : "none";
+  if (mode === "double") return "always";
+  return containerWidth >= 1200 ? "always" : "none";
 }

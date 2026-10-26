@@ -70,10 +70,8 @@ export function useCoverUrls(items: { cover_path?: string | null }[]): Record<st
 
   useEffect(() => {
     return () => {
-      setCoverUrls((prev) => {
-        for (const url of Object.values(prev)) revokeObjectUrl(url);
-        return {};
-      });
+      for (const url of Object.values(coverUrlsRef.current)) revokeObjectUrl(url);
+      coverUrlsRef.current = {};
     };
   }, []);
 

@@ -83,8 +83,13 @@ fn list_favorite_quotes_db(
     }
 
     if query.is_some() {
-        where_parts.push("text LIKE '%' || ? || '%'".to_string());
-        values.push(Box::new(query.unwrap().to_string()));
+        where_parts.push("text LIKE '%' || ? || '%' ESCAPE '\\'".to_string());
+        let escaped = query
+            .unwrap()
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        values.push(Box::new(escaped));
     }
 
     if !where_parts.is_empty() {

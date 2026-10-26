@@ -18,8 +18,7 @@ export function normalizeAppDataRelPath(rel: string): string {
 
 export function isSafeRelPath(rel: string): boolean {
   const v = normalizeAppDataRelPath(rel);
-  if (v.includes("..")) return false;
-  if (v.startsWith("//")) return false;
+  if (v.split("/").some((seg) => seg === "..")) return false;
   if (/^[a-zA-Z]:/.test(v)) return false;
   return v.length > 0;
 }

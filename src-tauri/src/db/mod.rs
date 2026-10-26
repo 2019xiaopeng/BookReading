@@ -16,7 +16,7 @@ pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
     }
 
     let conn = Connection::open(db_path).map_err(|e| format!("failed to open sqlite: {e}"))?;
-    conn.execute_batch("PRAGMA foreign_keys = ON;")
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
         .map_err(|e| format!("failed to set sqlite foreign_keys pragma: {e}"))?;
     conn.execute_batch(SCHEMA_SQL)
         .map_err(|e| format!("failed to init sqlite schema: {e}"))?;
@@ -30,7 +30,7 @@ pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
 pub fn open_db(app: &tauri::AppHandle) -> Result<Connection, String> {
     let db_path = app_paths::db_path(app)?;
     let conn = Connection::open(db_path).map_err(|e| format!("failed to open sqlite: {e}"))?;
-    conn.execute_batch("PRAGMA foreign_keys = ON;")
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
         .map_err(|e| format!("failed to set sqlite foreign_keys pragma: {e}"))?;
     Ok(conn)
 }

@@ -18,6 +18,9 @@ export default function SearchPanel(props: {
           ref={props.inputRef}
           value={props.query}
           onChange={(e) => props.onQueryChange(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") props.onSearch();
+          }}
           placeholder="输入关键词"
           className="wr-input"
           style={{ flex: 1 }}
