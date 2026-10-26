@@ -31,5 +31,4 @@ windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
 zip = "2"
 roxmltree = "0.20"
 regex = "1"
-# shortcut: encoding_rs not in Cargo.lock yet (builds forbidden here); next cargo build will add it.
 encoding_rs = "0.8"

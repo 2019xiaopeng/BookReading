@@ -29,7 +29,7 @@ pub fn decode_txt(bytes: &[u8]) -> Result<String, String> {
             .map_err(|_| DECODE_ERR.to_string());
     }
     if bytes.starts_with(&[0xFF, 0xFE]) {
-        let (text, _, had_errors) = encoding_rs::UTF_16LE.decode_with_bom_removal(bytes);
+        let (text, had_errors) = encoding_rs::UTF_16LE.decode_with_bom_removal(bytes);
         return if had_errors {
             Err(DECODE_ERR.to_string())
         } else {
@@ -37,7 +37,7 @@ pub fn decode_txt(bytes: &[u8]) -> Result<String, String> {
         };
     }
     if bytes.starts_with(&[0xFE, 0xFF]) {
-        let (text, _, had_errors) = encoding_rs::UTF_16BE.decode_with_bom_removal(bytes);
+        let (text, had_errors) = encoding_rs::UTF_16BE.decode_with_bom_removal(bytes);
         return if had_errors {
             Err(DECODE_ERR.to_string())
         } else {
@@ -48,7 +48,7 @@ pub fn decode_txt(bytes: &[u8]) -> Result<String, String> {
         return Ok(text.to_string());
     }
     // WHATWG "gbk" label is the gb18030 decoder, a superset of GBK
-    let (text, _, had_errors) = encoding_rs::GBK.decode_with_bom_removal(bytes);
+    let (text, had_errors) = encoding_rs::GBK.decode_with_bom_removal(bytes);
     if had_errors {
         Err(DECODE_ERR.to_string())
     } else {
