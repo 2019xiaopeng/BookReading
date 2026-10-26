@@ -1,6 +1,6 @@
 import ePub from "epubjs";
 
-import type { Theme } from "../settings/types";
+import type { ReadingMode, Theme } from "../settings/types";
 import { readAppDataFile } from "../../tauri/appDataPaths";
 import type { SpreadMode } from "../settings/layoutMode";
 import { logFrontend } from "../../tauri/frontendLog";
@@ -40,6 +40,7 @@ export type ReaderController = {
   setFontSizePercent: (percent: number) => void;
   setLineHeight: (lineHeight: number) => void;
   setSpreadMode: (mode: SpreadMode) => void;
+  setReadingMode: (mode: ReadingMode) => void;
   addHighlight: (cfiRange: string) => void;
   removeHighlight: (cfiRange: string) => void;
   search: (query: string) => Promise<SearchResult[]>;
@@ -84,6 +85,7 @@ export async function createReader(opts: {
   container: HTMLElement;
   libraryPath: string;
   spreadMode?: SpreadMode;
+  readingMode?: ReadingMode;
   lineHeight?: number;
   onRelocated?: (payload: RelocatedPayload) => void;
   onTocLoaded?: (toc: TocItem[]) => void;
@@ -116,11 +118,14 @@ export async function createReader(opts: {
     }
   })();
 
+  const flow: ReadingMode = opts.readingMode === "scrolled" ? "scrolled" : "paginated";
+  let currentFlow: ReadingMode = flow;
+  let lastSpreadMode: SpreadMode = opts.spreadMode ?? "none";
   const rendition: any = book.renderTo(opts.container, {
     width: "100%",
     height: "100%",
-    spread: opts.spreadMode ?? "none",
-    flow: "paginated",
+    spread: flow === "scrolled" ? "none" : opts.spreadMode ?? "none",
+    flow,
   });
 
   const onDisplayError = (e: any) => {
@@ -155,6 +160,19 @@ export async function createReader(opts: {
     rendition.themes.register("sepia", {
       ...common,
       body: { ...common.body, background: "transparent", color: "rgba(38, 29, 18, 0.9)" },
+    });
+    // 新增三主题正文色与 tokens.css [data-theme] 值同步（批次3 spec §2.2）
+    rendition.themes.register("green", {
+      ...common,
+      body: { ...common.body, background: "transparent", color: "#223325" },
+    });
+    rendition.themes.register("gray", {
+      ...common,
+      body: { ...common.body, background: "transparent", color: "#2b2b28" },
+    });
+    rendition.themes.register("darkcontrast", {
+      ...common,
+      body: { ...common.body, background: "transparent", color: "#f5f5f5" },
     });
     rendition.themes.select(currentTheme);
   };
@@ -245,11 +263,24 @@ export async function createReader(opts: {
       registerThemes(lineHeight);
     },
     setSpreadMode: (mode: SpreadMode) => {
+      lastSpreadMode = mode;
       applySpreadMode(rendition, mode);
       try {
         rendition.resize?.();
       } catch (e) {
         logOnce("reader.resize", `reader: resize failed ${String(e)}`);
+      }
+    },
+    setReadingMode: (mode: ReadingMode) => {
+      if (mode === currentFlow) return;
+      currentFlow = mode;
+      try {
+        // epubjs 0.3.93 rendition.flow() 为运行时切换 API：内部自动 clear + display(当前 CFI)
+        rendition.flow(mode);
+        applySpreadMode(rendition, mode === "scrolled" ? "none" : lastSpreadMode);
+        if (mode === "paginated") rendition.resize?.();
+      } catch (e) {
+        logOnce("reader.flow", `reader: flow switch failed ${String(e)}`);
       }
     },
     addHighlight: (cfiRange: string) => {

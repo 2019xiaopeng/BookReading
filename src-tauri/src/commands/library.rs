@@ -453,6 +453,51 @@ pub fn delete_book(app: tauri::AppHandle, book_id: String) -> Result<(), String>
     Ok(())
 }
 
+fn validate_reader_background(source_path: &str) -> Result<String, String> {
+    let ext = Path::new(source_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+        return Err("不支持的图片格式，仅支持 PNG/JPG/WebP".to_string());
+    }
+    let meta = fs::metadata(source_path).map_err(|e| format!("failed to read {source_path}: {e}"))?;
+    if meta.len() > 8 * 1024 * 1024 {
+        return Err("图片超过 8MB 限制".to_string());
+    }
+    Ok(ext)
+}
+
+// core takes bg_dir so tests can run against a tempdir instead of real appdata
+fn store_reader_background(bg_dir: &Path, source_path: &str) -> Result<String, String> {
+    let ext = validate_reader_background(source_path)?;
+    fs::create_dir_all(bg_dir).map_err(|e| format!("failed to create bg dir: {e}"))?;
+    let final_bg = bg_dir.join(format!("bg.{ext}"));
+    let tmp_bg = bg_dir.join(format!("bg.{ext}.part"));
+    atomic_copy_to(source_path, &tmp_bg, &final_bg)
+        .map_err(|e| format!("failed to save background: {e}"))?;
+    // single slot: drop stale bg.* of other extensions, best-effort
+    let keep = format!("bg.{ext}");
+    if let Ok(entries) = fs::read_dir(bg_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("bg.") && name.as_ref() != keep.as_str() {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(keep)
+}
+
+#[tauri::command]
+pub fn save_reader_background(app: tauri::AppHandle, source_path: String) -> Result<String, String> {
+    let bg_dir = app_paths::library_dir(&app)?.join("bg");
+    let name = store_reader_background(&bg_dir, &source_path)?;
+    Ok(format!("library/bg/{name}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,5 +676,46 @@ mod tests {
             pinned: Some(false),
         };
         assert_eq!(merge_metadata(&existing, &unpin, 42).pinned_at, None);
+    }
+
+    fn temp_bg_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bookreading-bg-{tag}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn reader_background_rejects_bad_extension() {
+        let dir = temp_bg_dir("ext");
+        let src = dir.join("bg.txt");
+        fs::write(&src, b"x").unwrap();
+        let err = store_reader_background(&dir, src.to_str().unwrap()).unwrap_err();
+        assert_eq!(err, "不支持的图片格式，仅支持 PNG/JPG/WebP");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reader_background_rejects_oversize() {
+        let dir = temp_bg_dir("size");
+        let src = dir.join("big.png");
+        fs::write(&src, vec![0u8; 8 * 1024 * 1024 + 1]).unwrap();
+        let err = store_reader_background(&dir, src.to_str().unwrap()).unwrap_err();
+        assert_eq!(err, "图片超过 8MB 限制");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reader_background_overwrites_single_slot() {
+        let dir = temp_bg_dir("slot");
+        let png = dir.join("in.png");
+        fs::write(&png, b"png").unwrap();
+        assert_eq!(store_reader_background(&dir, png.to_str().unwrap()).unwrap(), "bg.png");
+        // uppercase extension must pass too, and replace the png slot
+        let jpg = dir.join("in.JPG");
+        fs::write(&jpg, b"jpeg").unwrap();
+        assert_eq!(store_reader_background(&dir, jpg.to_str().unwrap()).unwrap(), "bg.jpg");
+        assert_eq!(fs::read(dir.join("bg.jpg")).unwrap(), b"jpeg");
+        assert!(!dir.join("bg.png").exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

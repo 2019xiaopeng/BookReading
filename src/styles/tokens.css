@@ -33,3 +33,37 @@
   --border: rgba(38, 29, 18, 0.14);
   --shadow-sm: 0 10px 30px rgba(38, 29, 18, 0.12);
 }
+
+/* green/gray/darkcontrast per batch3 spec §2.2; accent role has no token here (weread.css owns it) */
+[data-theme="green"] {
+  color-scheme: light;
+  --bg: #eef3ec;
+  --panel: rgba(255, 255, 255, 0.7);
+  --panel-solid: #c8e6c4;
+  --text: #223325;
+  --text-muted: #4d6052;
+  --border: #b7d4b3;
+  --shadow-sm: 0 10px 30px rgba(34, 51, 37, 0.12);
+}
+
+[data-theme="gray"] {
+  color-scheme: light;
+  --bg: #e3e3e0;
+  --panel: rgba(255, 255, 255, 0.7);
+  --panel-solid: #d9d9d6;
+  --text: #2b2b28;
+  --text-muted: #5b5b54;
+  --border: #c4c4bf;
+  --shadow-sm: 0 10px 30px rgba(43, 43, 40, 0.12);
+}
+
+[data-theme="darkcontrast"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --panel: rgba(255, 255, 255, 0.06);
+  --panel-solid: #050505;
+  --text: #f5f5f5;
+  --text-muted: #bdbdbd;
+  --border: #2e2e2e;
+  --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.28);
+}

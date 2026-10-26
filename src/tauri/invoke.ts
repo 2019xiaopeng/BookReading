@@ -63,6 +63,10 @@ export async function setSetting(key: string, value: string): Promise<void> {
   return invoke<void>("set_setting", { key, value });
 }
 
+export async function saveReaderBackground(sourcePath: string): Promise<string> {
+  return invoke<string>("save_reader_background", { sourcePath });
+}
+
 export type ReadingState = {
   book_id: string;
   cfi: string;

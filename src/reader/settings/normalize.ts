@@ -1,9 +1,36 @@
-import type { PageAnimation, Theme } from "./types";
+import type { PageAnimation, ReaderBackground, ReadingMode, Theme } from "./types";
 
 export function normalizeTheme(v: unknown): Theme {
   const s = String(v ?? "").trim().toLowerCase();
-  if (s === "light" || s === "dark" || s === "sepia") return s;
+  if (s === "light" || s === "dark" || s === "sepia" || s === "green" || s === "gray" || s === "darkcontrast") {
+    return s;
+  }
   return "light";
+}
+
+export function normalizeReadingMode(v: unknown): ReadingMode {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "paginated" || s === "scrolled") return s;
+  return "paginated";
+}
+
+export function normalizeReaderBackground(v: unknown): ReaderBackground {
+  let parsed: unknown = v;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return { type: "preset" };
+    }
+  }
+  if (parsed && typeof parsed === "object") {
+    const o = parsed as { type?: unknown; path?: unknown };
+    if (o.type === "preset") return { type: "preset" };
+    if (o.type === "image" && typeof o.path === "string" && o.path.length > 0) {
+      return { type: "image", path: o.path };
+    }
+  }
+  return { type: "preset" };
 }
 
 export function normalizePageAnimation(v: unknown): PageAnimation {

@@ -41,9 +41,16 @@ import {
 import { defaultSettings, HIGHLIGHT_COLOR } from "../reader/settings/defaults";
 import type { ReaderSettings } from "../reader/settings/types";
 import { normalizeLayoutMode, resolveSpreadMode } from "../reader/settings/layoutMode";
-import { normalizeLineHeight, normalizePageAnimation, normalizeTheme } from "../reader/settings/normalize";
+import {
+  normalizeLineHeight,
+  normalizePageAnimation,
+  normalizeReaderBackground,
+  normalizeReadingMode,
+  normalizeTheme,
+} from "../reader/settings/normalize";
 import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
+import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../tauri/appDataPaths";
 import Drawer from "../ui/Drawer";
 import { useElementSize } from "../ui/useElementSize";
 import {
@@ -57,6 +64,9 @@ import {
   IconSearch,
   IconSettings,
 } from "../ui/icons";
+
+// single-slot blob URL cache for the custom reader background (revoked on swap or unmount)
+let readerBgCache: { path: string; url: string } | null = null;
 
 export default function ReaderPage() {
   const navigate = useNavigate();
@@ -75,6 +85,7 @@ export default function ReaderPage() {
     theme: normalizeTheme(localStorage.getItem("wr-theme")),
   }));
   const [imageSettings, setImageSettings] = useState<ImageReaderSettings>(defaultImageReaderSettings);
+  const [bgUrl, setBgUrl] = useState<string | null>(null);
   const [pageLabel, setPageLabel] = useState<string | null>(null);
   const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings">("toc");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -133,7 +144,12 @@ export default function ReaderPage() {
   const isImageBook = book?.format === "images";
   const imageEdgeSwap = isImageBook && imageSettings.rtl;
   const pagerEnabled =
-    !drawerOpen && !readerError && !selection && !noteDraft && !(isImageBook && imageSettings.mode === "webtoon");
+    !drawerOpen &&
+    !readerError &&
+    !selection &&
+    !noteDraft &&
+    (isImageBook || settings.readingMode === "paginated") &&
+    !(isImageBook && imageSettings.mode === "webtoon");
 
   const flatToc = useMemo(() => {
     const out: TocItem[] = [];
@@ -193,6 +209,8 @@ export default function ReaderPage() {
         pageAnimation,
         layoutMode,
         lineHeight,
+        readingMode: normalizeReadingMode(map.readingMode),
+        reader_bg: normalizeReaderBackground(map.reader_bg),
       });
       setImageSettings(normalizeImageReaderSettings(map.image_reader_settings));
     })();
@@ -266,6 +284,7 @@ export default function ReaderPage() {
           container,
           libraryPath: book.library_path,
           spreadMode: spreadModeRef.current,
+          readingMode: settingsRef.current.readingMode,
           onRelocated,
           onTocLoaded,
           onSelected,
@@ -288,7 +307,7 @@ export default function ReaderPage() {
       ctrl.setTheme(settingsRef.current.theme);
       ctrl.setFontSizePercent(settingsRef.current.fontSizePercent);
       ctrl.setLineHeight(settingsRef.current.lineHeight);
-      ctrl.setSpreadMode(spreadModeRef.current);
+      if (settingsRef.current.readingMode !== "scrolled") ctrl.setSpreadMode(spreadModeRef.current);
 
       try {
         const [bm, hl, fav] = await Promise.all([
@@ -353,8 +372,50 @@ export default function ReaderPage() {
     controllerRef.current.setTheme(settings.theme);
     controllerRef.current.setFontSizePercent(settings.fontSizePercent);
     controllerRef.current.setLineHeight(settings.lineHeight);
-    controllerRef.current.setSpreadMode(spreadMode);
-  }, [settings.theme, settings.fontSizePercent, settings.lineHeight, settings.layoutMode, spreadMode]);
+    // scrolled 模式下分栏失效，跳过 spread 以免与 epubjs scrolled 冲突
+    if (settings.readingMode !== "scrolled") controllerRef.current.setSpreadMode(spreadMode);
+  }, [settings.theme, settings.fontSizePercent, settings.lineHeight, settings.layoutMode, spreadMode, settings.readingMode]);
+
+  useEffect(() => {
+    controllerRef.current?.setReadingMode(settings.readingMode);
+  }, [settings.readingMode]);
+
+  useEffect(() => {
+    const bg = settings.reader_bg;
+    if (isImageBook || bg.type !== "image") {
+      setBgUrl(null);
+      return;
+    }
+    if (readerBgCache?.path === bg.path) {
+      setBgUrl(readerBgCache.url);
+      return;
+    }
+    let cancelled = false;
+    const ext = bg.path.split(".").pop() ?? "";
+    void readAppDataBlobUrl(bg.path, extToMime(ext))
+      .then((url) => {
+        if (cancelled) {
+          revokeObjectUrl(url);
+          return;
+        }
+        if (readerBgCache) revokeObjectUrl(readerBgCache.url);
+        readerBgCache = { path: bg.path, url };
+        setBgUrl(url);
+      })
+      .catch((e) => {
+        logFrontend(`reader: bg load failed ${String(e)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.reader_bg, isImageBook]);
+
+  useEffect(() => {
+    return () => {
+      revokeObjectUrl(readerBgCache?.url ?? null);
+      readerBgCache = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (isImmersive) setDrawerOpen(false);
@@ -436,11 +497,11 @@ export default function ReaderPage() {
           void animateTurn(imageDir);
           return;
         }
-      } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
+      } else if (settings.readingMode === "paginated" && (e.key === "ArrowLeft" || e.key === "PageUp")) {
         e.preventDefault();
         void animateTurn("prev");
         return;
-      } else if (e.key === "ArrowRight" || e.key === "PageDown") {
+      } else if (settings.readingMode === "paginated" && (e.key === "ArrowRight" || e.key === "PageDown")) {
         e.preventDefault();
         void animateTurn("next");
         return;
@@ -462,7 +523,7 @@ export default function ReaderPage() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [book, drawerOpen, isImmersive, settings.pageAnimation, toc]);
+  }, [book, drawerOpen, isImmersive, settings.pageAnimation, settings.readingMode, toc]);
 
   useEffect(() => {
     const el = viewerRef.current;
@@ -470,6 +531,8 @@ export default function ReaderPage() {
 
     const onWheel = (e: WheelEvent) => {
       if (drawerOpen) return;
+      // epub 滚动模式下 wheel 交给 iframe 原生滚动
+      if (!imageCtxRef.current.active && settingsRef.current.readingMode !== "paginated") return;
       if (imageCtxRef.current.active && imageCtxRef.current.webtoon) return;
       const now = Date.now();
       if (now - wheelCooldownRef.current < 300) return;
@@ -502,6 +565,8 @@ export default function ReaderPage() {
     await setSetting("pageAnimation", next.pageAnimation);
     await setSetting("layoutMode", next.layoutMode);
     await setSetting("lineHeight", String(next.lineHeight));
+    await setSetting("readingMode", next.readingMode);
+    await setSetting("reader_bg", JSON.stringify(next.reader_bg));
   }
 
   function handleImageRelocated(page: number, pageCount: number) {
@@ -526,6 +591,8 @@ export default function ReaderPage() {
       imageApiRef.current?.turn(direction);
       return;
     }
+    // epub 滚动模式下翻页与动画一律关闭（wheel/键盘/热区已在各自入口拦截，此处兜底 footer/HUD 按钮）
+    if (settingsRef.current.readingMode !== "paginated") return;
     const ctrl = controllerRef.current;
     const el = viewerRef.current;
     if (!ctrl) return;
@@ -873,9 +940,20 @@ export default function ReaderPage() {
                   </div>
                 ) : null}
                 <div
-                  ref={containerRef}
-                  className={spreadMode === "always" ? "wr-reader-paper wr-reader-paper--wide" : "wr-reader-paper"}
-                />
+                  className={
+                    settings.readingMode === "paginated" && spreadMode === "always"
+                      ? "wr-reader-paper wr-reader-paper--wide"
+                      : "wr-reader-paper"
+                  }
+                  style={
+                    bgUrl
+                      ? { backgroundImage: `url("${bgUrl}")`, backgroundSize: "cover", backgroundPosition: "center" }
+                      : undefined
+                  }
+                >
+                  {bgUrl ? <div className="wr-reader-bg-veil" aria-hidden="true" /> : null}
+                  <div ref={containerRef} style={{ height: "100%", position: "relative" }} />
+                </div>
               </>
             )}
           </div>

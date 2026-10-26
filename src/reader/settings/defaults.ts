@@ -6,6 +6,8 @@ export const defaultSettings: ReaderSettings = {
   pageAnimation: "none",
   layoutMode: "auto",
   lineHeight: 1.9,
+  readingMode: "paginated",
+  reader_bg: { type: "preset" },
 };
 
 export const HIGHLIGHT_COLOR = "#ffe600";
