@@ -13,6 +13,7 @@ export type Book = {
   pinned_at: number | null;
   reading_percent: number | null;
   is_favorite: boolean;
+  format: string | null;
 };
 
 export type ImportBookRequest = {

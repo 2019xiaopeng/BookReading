@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS books (
   note TEXT,
   group_name TEXT,
   pinned_at INTEGER,
-  is_favorite INTEGER NOT NULL DEFAULT 0
+  is_favorite INTEGER NOT NULL DEFAULT 0,
+  format TEXT,
+  page_count INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS reading_state (

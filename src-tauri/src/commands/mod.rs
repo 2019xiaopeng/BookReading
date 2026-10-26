@@ -1,4 +1,5 @@
 pub mod library;
+pub mod images;
 pub mod annotations;
 pub mod favorites;
 pub mod reading;

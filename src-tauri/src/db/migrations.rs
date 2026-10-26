@@ -71,6 +71,8 @@ pub fn ensure_book_columns(conn: &Connection) -> Result<(), String> {
         "ALTER TABLE books ADD COLUMN note TEXT",
         "ALTER TABLE books ADD COLUMN group_name TEXT",
         "ALTER TABLE books ADD COLUMN pinned_at INTEGER",
+        "ALTER TABLE books ADD COLUMN format TEXT",
+        "ALTER TABLE books ADD COLUMN page_count INTEGER",
     ] {
         if let Err(e) = conn.execute(ddl, []) {
             if !e.to_string().contains("duplicate column name") {
@@ -86,7 +88,7 @@ pub fn migrate_book_paths_to_appdata_relative(conn: &Connection, app: &tauri::Ap
     let base_str = base.to_string_lossy().to_string();
 
     let mut stmt = conn
-        .prepare("SELECT id, library_path, cover_path FROM books")
+        .prepare("SELECT id, library_path, cover_path, format FROM books")
         .map_err(|e| format!("failed to prepare migrate select: {e}"))?;
 
     let mut rows = stmt
@@ -98,6 +100,12 @@ pub fn migrate_book_paths_to_appdata_relative(conn: &Connection, app: &tauri::Ap
         let id: String = row.get(0).map_err(|e| format!("failed to read id: {e}"))?;
         let lib: String = row.get(1).map_err(|e| format!("failed to read library_path: {e}"))?;
         let cover: Option<String> = row.get(2).map_err(|e| format!("failed to read cover_path: {e}"))?;
+        let format: Option<String> = row.get(3).map_err(|e| format!("failed to read format: {e}"))?;
+
+        // 图片书可能是原地引用的绝对路径（即使含 library/ 也不是 appdata 相对路径），跳过不改写
+        if format.as_deref() == Some("images") {
+            continue;
+        }
 
         let new_lib_opt = normalize_appdata_relative(&lib, &base_str);
         let new_cover_opt = cover
@@ -160,6 +168,8 @@ mod tests {
         assert!(cols.contains(&"note".to_string()));
         assert!(cols.contains(&"group_name".to_string()));
         assert!(cols.contains(&"pinned_at".to_string()));
+        assert!(cols.contains(&"format".to_string()));
+        assert!(cols.contains(&"page_count".to_string()));
 
         ensure_book_columns(&conn).unwrap();
     }

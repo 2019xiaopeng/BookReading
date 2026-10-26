@@ -11,6 +11,7 @@ import {
   setBookFavorite,
   updateBookMetadata,
 } from "../tauri/invoke";
+import { importImageFolder } from "../reader/image/api";
 import { needsMetadataRepair } from "../library/metadataRepair";
 import { useCoverUrls } from "../library/useCoverUrls";
 import { logFrontend } from "../tauri/frontendLog";
@@ -99,7 +100,7 @@ export default function LibraryPage() {
     try {
       const selected = await open({
         multiple: true,
-        filters: [{ name: "EPUB / TXT", extensions: ["epub", "txt"] }],
+        filters: [{ name: "EPUB / TXT / CBZ", extensions: ["epub", "txt", "cbz"] }],
       });
       if (!selected) return;
 
@@ -109,13 +110,17 @@ export default function LibraryPage() {
       const failed: string[] = [];
       for (const path of paths) {
         try {
-          await importBook({
-            source_path: path,
-            title: null,
-            author: null,
-            cover_bytes_base64: null,
-            cover_ext: null,
-          });
+          if (path.toLowerCase().endsWith(".cbz")) {
+            await importImageFolder(path, null);
+          } else {
+            await importBook({
+              source_path: path,
+              title: null,
+              author: null,
+              cover_bytes_base64: null,
+              cover_ext: null,
+            });
+          }
         } catch (e) {
           failed.push(path);
           logFrontend(`ui: import failed ${path} ${String(e)}`);
@@ -123,7 +128,7 @@ export default function LibraryPage() {
       }
 
       if (failed.length) {
-        window.alert(`部分文件导入失败（${failed.length} 个）：\n${failed.join("\n")}\n仅支持 EPUB 与 UTF-8/GBK 编码的 TXT`);
+        window.alert(`部分文件导入失败（${failed.length} 个）：\n${failed.join("\n")}\n仅支持 EPUB、TXT（UTF-8/GBK）与 CBZ 漫画`);
       }
 
       await refresh();
@@ -132,9 +137,31 @@ export default function LibraryPage() {
     }
   }
 
+  async function onImportImages() {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const dir = await open({ directory: true, multiple: false, title: "选择漫画文件夹" });
+      if (!dir || Array.isArray(dir)) return;
+      try {
+        await importImageFolder(dir, null);
+      } catch (e) {
+        window.alert(`导入失败：${String(e)}`);
+        logFrontend(`ui: import image folder failed ${dir} ${String(e)}`);
+      }
+      await refresh();
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function onDelete(book: Book) {
     if (loading) return;
-    const ok = window.confirm(`确定删除《${formatTitle(book)}》吗？阅读进度、书签与标注将一并删除，且不可恢复。`);
+    const isFolderComic = book.format === "images" && !book.library_path.toLowerCase().endsWith(".cbz");
+    const ok = window.confirm(
+      `确定删除《${formatTitle(book)}》吗？阅读进度、书签与标注将一并删除，且不可恢复。` +
+        (isFolderComic ? "源文件夹不会被改动，仅移除本书记录与封面。" : ""),
+    );
     if (!ok) return;
 
     setLoading(true);
@@ -170,6 +197,9 @@ export default function LibraryPage() {
         <>
           <button className="wr-small-btn" disabled={loading} onClick={() => void refresh()}>
             刷新
+          </button>
+          <button className="wr-small-btn" onClick={onImportImages} disabled={loading}>
+            导入漫画
           </button>
           <button className="wr-small-btn wr-primary" onClick={onImport} disabled={loading}>
             {loading ? "导入中…" : "导入图书"}
@@ -225,7 +255,7 @@ export default function LibraryPage() {
               <div className="wr-chip-row">
                 <div className="wr-chip">
                   <span className="wr-chip-dot" />
-                  <span>{b.is_favorite ? "收藏" : "本地"}</span>
+                  <span>{b.is_favorite ? "收藏" : b.format === "images" ? "漫画" : "本地"}</span>
                 </div>
                 <div className="wr-chip" style={{ fontFamily: "var(--wr-mono)" }}>
                   {new Date(b.added_at * 1000).toLocaleDateString()}
@@ -303,7 +333,7 @@ export default function LibraryPage() {
 
       {booksFiltered.length === 0 ? (
         <div className="wr-muted" style={{ padding: 16, gridColumn: "1 / -1" }}>
-          {query.trim() ? "没有匹配的书籍" : "书架还是空的，从左下角导入第一本 EPUB 或 TXT 试试"}
+          {query.trim() ? "没有匹配的书籍" : "书架还是空的，从左下角导入第一本书试试"}
         </div>
       ) : null}
     </AppShell>

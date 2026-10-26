@@ -486,6 +486,9 @@
   display: flex;
   padding: 18px;
 }
+.wr-reader-paper-wrap.wr-paper-image {
+  padding: 0;
+}
 
 .wr-reader-paper {
   position: relative;
@@ -900,4 +903,126 @@ input[type="range"] {
     animation: none !important;
     transition: none !important;
   }
+}
+
+.wr-seg-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+  transform: none;
+}
+
+.wr-image-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--wr-bg);
+}
+
+[data-theme="dark"] .wr-image-stage {
+  background: #0a0a0a;
+}
+
+[data-theme="sepia"] .wr-image-stage {
+  background: linear-gradient(180deg, rgba(255, 250, 240, 0.96), rgba(255, 248, 235, 0.84));
+}
+
+.wr-image-stage img {
+  user-select: none;
+}
+
+.wr-image-fit {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.wr-image-fit[data-fit="height"] {
+  justify-content: center;
+}
+
+.wr-image-fit[data-fit="width"],
+.wr-image-fit[data-fit="original"] {
+  align-items: flex-start;
+}
+
+.wr-image-fit[data-fit="width"] {
+  overflow-y: auto;
+}
+
+.wr-image-fit[data-fit="original"] {
+  overflow: auto;
+}
+
+.wr-image-fit[data-fit="height"] img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+}
+
+.wr-image-fit[data-fit="width"] img {
+  width: 100%;
+  height: auto;
+}
+
+.wr-image-fit[data-fit="original"] img {
+  max-width: none;
+  max-height: none;
+  /* auto margins: oversized scans stay centered yet scrollable to both edges */
+  margin: auto;
+}
+
+.wr-image-webtoon {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.wr-image-webtoon > div {
+  width: 100%;
+}
+
+.wr-image-webtoon img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.wr-image-loading {
+  width: 100%;
+  min-height: 50vh;
+}
+.wr-image-webtoon:focus-visible {
+  outline: 2px solid var(--wr-ink);
+  outline-offset: -2px;
+}
+.wr-image-failed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--wr-muted);
+  background: transparent;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+.wr-image-failed:hover {
+  opacity: 0.75;
+}
+.wr-image-failed:focus-visible {
+  outline: 2px solid var(--wr-ink);
+  outline-offset: 2px;
 }

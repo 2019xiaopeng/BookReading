@@ -28,6 +28,16 @@ import HighlightsPanel from "../reader/components/HighlightsPanel";
 import SearchPanel from "../reader/components/SearchPanel";
 import SettingsPanel from "../reader/components/SettingsPanel";
 import SelectionToolbar from "../reader/components/SelectionToolbar";
+import ImageReader, { type ImageReaderApi } from "../reader/image/ImageReader";
+import ImageSettingsPanel from "../reader/image/ImageSettingsPanel";
+import {
+  defaultImageReaderSettings,
+  imageCfi,
+  normalizeImageReaderSettings,
+  pagePercent,
+  turnKeyDirection,
+  type ImageReaderSettings,
+} from "../reader/image/layout";
 import { defaultSettings, HIGHLIGHT_COLOR } from "../reader/settings/defaults";
 import type { ReaderSettings } from "../reader/settings/types";
 import { normalizeLayoutMode, resolveSpreadMode } from "../reader/settings/layoutMode";
@@ -64,6 +74,8 @@ export default function ReaderPage() {
     ...defaultSettings,
     theme: normalizeTheme(localStorage.getItem("wr-theme")),
   }));
+  const [imageSettings, setImageSettings] = useState<ImageReaderSettings>(defaultImageReaderSettings);
+  const [pageLabel, setPageLabel] = useState<string | null>(null);
   const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings">("toc");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
@@ -97,6 +109,8 @@ export default function ReaderPage() {
   const wheelCooldownRef = useRef(0);
   const wheelAccumRef = useRef(0);
   const immersiveHudTimerRef = useRef<number | null>(null);
+  const imageApiRef = useRef<ImageReaderApi | null>(null);
+  const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false });
 
   useEffect(() => {
     let cancelled = false;
@@ -116,7 +130,10 @@ export default function ReaderPage() {
   const spreadMode = resolveSpreadMode(settings.layoutMode, viewerWidth);
   const edgeRatio = viewerWidth >= 1400 ? 0.2 : viewerWidth >= 1100 ? 0.18 : 0.16;
   const stage = calcPaperStage({ viewerWidth, viewerHeight, margin: 18, edgeRatio });
-  const pagerEnabled = !drawerOpen && !readerError && !selection && !noteDraft;
+  const isImageBook = book?.format === "images";
+  const imageEdgeSwap = isImageBook && imageSettings.rtl;
+  const pagerEnabled =
+    !drawerOpen && !readerError && !selection && !noteDraft && !(isImageBook && imageSettings.mode === "webtoon");
 
   const flatToc = useMemo(() => {
     const out: TocItem[] = [];
@@ -150,6 +167,10 @@ export default function ReaderPage() {
   }, [spreadMode]);
 
   useEffect(() => {
+    imageCtxRef.current = { active: isImageBook, rtl: imageSettings.rtl, webtoon: imageSettings.mode === "webtoon" };
+  }, [isImageBook, imageSettings]);
+
+  useEffect(() => {
     locationSearchRef.current = location.search;
   }, [location.search]);
 
@@ -173,6 +194,7 @@ export default function ReaderPage() {
         layoutMode,
         lineHeight,
       });
+      setImageSettings(normalizeImageReaderSettings(map.image_reader_settings));
     })();
     return () => {
       cancelled = true;
@@ -183,6 +205,11 @@ export default function ReaderPage() {
     let cancelled = false;
     (async () => {
       if (!book) return;
+      if (book.format === "images") {
+        setPageLabel(null);
+        setTocLoading(false);
+        return;
+      }
       if (!containerRef.current) return;
 
       const container = containerRef.current;
@@ -373,7 +400,7 @@ export default function ReaderPage() {
       const tag = active?.tagName?.toLowerCase();
       const isTyping = tag === "input" || tag === "textarea" || active?.isContentEditable;
 
-      if (e.ctrlKey && e.key.toLowerCase() === "f") {
+      if (e.ctrlKey && e.key.toLowerCase() === "f" && !imageCtxRef.current.active) {
         e.preventDefault();
         setIsImmersive(false);
         setSideTab("search");
@@ -388,7 +415,7 @@ export default function ReaderPage() {
         return;
       }
 
-      if (e.ctrlKey && e.key.toLowerCase() === "b") {
+      if (e.ctrlKey && e.key.toLowerCase() === "b" && !imageCtxRef.current.active) {
         e.preventDefault();
         const cfi = lastCfiRef.current;
         if (!book || !cfi) return;
@@ -402,13 +429,18 @@ export default function ReaderPage() {
 
       if (isTyping) return;
 
-      if (e.key === "ArrowLeft" || e.key === "PageUp") {
+      if (imageCtxRef.current.active) {
+        const imageDir = turnKeyDirection(e.key, imageCtxRef.current.rtl);
+        if (imageDir) {
+          e.preventDefault();
+          void animateTurn(imageDir);
+          return;
+        }
+      } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
         e.preventDefault();
         void animateTurn("prev");
         return;
-      }
-
-      if (e.key === "ArrowRight" || e.key === "PageDown") {
+      } else if (e.key === "ArrowRight" || e.key === "PageDown") {
         e.preventDefault();
         void animateTurn("next");
         return;
@@ -438,6 +470,7 @@ export default function ReaderPage() {
 
     const onWheel = (e: WheelEvent) => {
       if (drawerOpen) return;
+      if (imageCtxRef.current.active && imageCtxRef.current.webtoon) return;
       const now = Date.now();
       if (now - wheelCooldownRef.current < 300) return;
       if (Math.abs(e.deltaY) < Math.abs(e.deltaX) * 1.2) return;
@@ -471,9 +504,28 @@ export default function ReaderPage() {
     await setSetting("lineHeight", String(next.lineHeight));
   }
 
+  function handleImageRelocated(page: number, pageCount: number) {
+    if (!book) return;
+    const cfi = imageCfi(page);
+    const pct = pagePercent(page, pageCount);
+    lastCfiRef.current = cfi;
+    setPercent(pct);
+    setPageLabel(`${page + 1} / ${pageCount}`);
+    if (persistTimerRef.current) {
+      window.clearTimeout(persistTimerRef.current);
+    }
+    persistTimerRef.current = window.setTimeout(() => {
+      void upsertReadingState(book.id, cfi, pct);
+    }, 1500);
+  }
+
   async function animateTurn(direction: "next" | "prev") {
     setSelection(null);
     setNoteDraft(null);
+    if (imageCtxRef.current.active) {
+      imageApiRef.current?.turn(direction);
+      return;
+    }
     const ctrl = controllerRef.current;
     const el = viewerRef.current;
     if (!ctrl) return;
@@ -557,26 +609,30 @@ export default function ReaderPage() {
             {book?.title ?? "阅读"}
           </div>
           <div style={{ flex: 1 }} />
-          <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("toc")}>
-            <IconList />
-            目录
-          </button>
-          <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("bookmarks")}>
-            <IconBookmark />
-            书签
-          </button>
-          <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("highlights")}>
-            <IconHighlight />
-            标注
-          </button>
-          <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("favorites")}>
-            <IconQuote />
-            收藏
-          </button>
-          <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("search")}>
-            <IconSearch />
-            搜索
-          </button>
+          {!isImageBook ? (
+            <>
+              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("toc")}>
+                <IconList />
+                目录
+              </button>
+              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("bookmarks")}>
+                <IconBookmark />
+                书签
+              </button>
+              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("highlights")}>
+                <IconHighlight />
+                标注
+              </button>
+              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("favorites")}>
+                <IconQuote />
+                收藏
+              </button>
+              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("search")}>
+                <IconSearch />
+                搜索
+              </button>
+            </>
+          ) : null}
           <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("settings")}>
             <IconSettings />
             设置
@@ -605,7 +661,24 @@ export default function ReaderPage() {
               setDrawerOpen(false);
             }}
           >
-            {sideTab === "settings" ? (
+            {sideTab === "settings" && isImageBook ? (
+              <ImageSettingsPanel
+                theme={settings.theme}
+                onThemeChange={(t) => {
+                  setSettings((prev) => ({ ...prev, theme: t }));
+                  settingsTouchedRef.current = true;
+                  void setSetting("theme", t);
+                }}
+                value={imageSettings}
+                onChange={(next) => {
+                  setImageSettings(next);
+                  settingsTouchedRef.current = true;
+                  void setSetting("image_reader_settings", JSON.stringify(next));
+                }}
+              />
+            ) : null}
+
+            {sideTab === "settings" && !isImageBook ? (
               <SettingsPanel
                 value={settings}
                 onChange={(next) => {
@@ -781,16 +854,30 @@ export default function ReaderPage() {
             ) : null}
           </Drawer>
 
-          <div className="wr-reader-paper-wrap">
-            {!readerError && (!book || tocLoading) ? (
-              <div className="wr-muted" style={{ padding: 16, margin: "auto" }}>
-                加载中…
-              </div>
-            ) : null}
-            <div
-              ref={containerRef}
-              className={spreadMode === "always" ? "wr-reader-paper wr-reader-paper--wide" : "wr-reader-paper"}
-            />
+          <div className={isImageBook ? "wr-reader-paper-wrap wr-paper-image" : "wr-reader-paper-wrap"}>
+            {isImageBook && book ? (
+              <ImageReader
+                key={book.id}
+                book={book}
+                settings={imageSettings}
+                onRelocated={handleImageRelocated}
+                onApi={(api) => {
+                  imageApiRef.current = api;
+                }}
+              />
+            ) : (
+              <>
+                {!readerError && (!book || tocLoading) ? (
+                  <div className="wr-muted" style={{ padding: 16, margin: "auto" }}>
+                    加载中…
+                  </div>
+                ) : null}
+                <div
+                  ref={containerRef}
+                  className={spreadMode === "always" ? "wr-reader-paper wr-reader-paper--wide" : "wr-reader-paper"}
+                />
+              </>
+            )}
           </div>
 
           {pagerEnabled ? (
@@ -814,7 +901,7 @@ export default function ReaderPage() {
               ) : null}
               <div
                 onClick={() => {
-                  void animateTurn("prev");
+                  void animateTurn(imageEdgeSwap ? "next" : "prev");
                 }}
                 onMouseEnter={() => setPagerHover("left")}
                 onMouseLeave={() => setPagerHover(null)}
@@ -830,7 +917,7 @@ export default function ReaderPage() {
               />
               <div
                 onClick={() => {
-                  void animateTurn("next");
+                  void animateTurn(imageEdgeSwap ? "prev" : "next");
                 }}
                 onMouseEnter={() => setPagerHover("right")}
                 onMouseLeave={() => setPagerHover(null)}
@@ -950,7 +1037,11 @@ export default function ReaderPage() {
             <div style={{ width: `${Math.round((percent ?? 0) * 100)}%` }} />
           </div>
           <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
-            {typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
+            {isImageBook && pageLabel !== null
+              ? pageLabel
+              : typeof percent === "number"
+                ? `${Math.round(percent * 100)}%`
+                : ""}
           </div>
         </div>
       ) : null}
@@ -981,16 +1072,18 @@ export default function ReaderPage() {
               退出沉浸
             </button>
             <div style={{ display: "flex", gap: 10 }}>
-              <button
-                className="wr-btn wr-icon-btn"
-                onClick={() => {
-                  showImmersiveHudRef.current();
-                  openDrawer("toc");
-                }}
-              >
-                <IconList />
-                目录
-              </button>
+              {!isImageBook ? (
+                <button
+                  className="wr-btn wr-icon-btn"
+                  onClick={() => {
+                    showImmersiveHudRef.current();
+                    openDrawer("toc");
+                  }}
+                >
+                  <IconList />
+                  目录
+                </button>
+              ) : null}
               <button
                 className="wr-btn wr-icon-btn"
                 onClick={() => {

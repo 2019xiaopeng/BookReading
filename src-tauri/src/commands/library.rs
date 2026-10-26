@@ -13,7 +13,7 @@ use crate::epub;
 use crate::models::{Book, ImportBookRequest, UpdateBookMetadataRequest};
 use crate::txt;
 
-fn now_ts() -> i64 {
+pub(crate) fn now_ts() -> i64 {
     OffsetDateTime::now_utc().unix_timestamp()
 }
 
@@ -33,7 +33,7 @@ fn is_safe_rel_path(p: &str) -> bool {
     true
 }
 
-fn require_library_rel(p: &str) -> Result<&str, String> {
+pub(crate) fn require_library_rel(p: &str) -> Result<&str, String> {
     let v = p.replace('\\', "/");
     if !v.starts_with("library/") {
         return Err(format!("invalid library path: {p}"));
@@ -50,7 +50,7 @@ fn abs_from_appdata_rel(app: &tauri::AppHandle, rel: &str) -> Result<PathBuf, St
     Ok(app_paths::app_data_dir(app)?.join(rel))
 }
 
-fn atomic_copy_to(src: &str, tmp: &Path, final_path: &Path) -> Result<(), String> {
+pub(crate) fn atomic_copy_to(src: &str, tmp: &Path, final_path: &Path) -> Result<(), String> {
     fs::copy(src, tmp).map_err(|e| format!("failed to copy file: {e}"))?;
     if let Err(e) = fs::rename(tmp, final_path) {
         let _ = fs::remove_file(tmp);
@@ -59,7 +59,7 @@ fn atomic_copy_to(src: &str, tmp: &Path, final_path: &Path) -> Result<(), String
     Ok(())
 }
 
-fn atomic_write_to(tmp: &Path, final_path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn atomic_write_to(tmp: &Path, final_path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::write(tmp, bytes).map_err(|e| format!("failed to write file: {e}"))?;
     if let Err(e) = fs::rename(tmp, final_path) {
         let _ = fs::remove_file(tmp);
@@ -68,10 +68,10 @@ fn atomic_write_to(tmp: &Path, final_path: &Path, bytes: &[u8]) -> Result<(), St
     Ok(())
 }
 
-fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite::Error> {
+pub(crate) fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO books (id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO books (id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite, format, page_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             book.id,
             book.title,
@@ -80,7 +80,9 @@ fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite::Error> {
             book.library_path,
             book.added_at,
             book.last_opened_at,
-            book.is_favorite
+            book.is_favorite,
+            book.format,
+            book.page_count
         ],
     )?;
     Ok(())
@@ -89,7 +91,7 @@ fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite::Error> {
 fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT b.id, b.title, b.author, b.cover_path, b.library_path, b.added_at, b.last_opened_at,
-               b.is_favorite, b.note, b.group_name, b.pinned_at, r.percent
+               b.is_favorite, b.note, b.group_name, b.pinned_at, b.format, b.page_count, r.percent
          FROM books b LEFT JOIN reading_state r ON r.book_id = b.id
          ORDER BY (b.pinned_at IS NULL) ASC, COALESCE(b.pinned_at, 0) DESC, COALESCE(b.last_opened_at, b.added_at) DESC",
     )?;
@@ -108,7 +110,9 @@ fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
                 note: row.get(8)?,
                 group_name: row.get(9)?,
                 pinned_at: row.get(10)?,
-                reading_percent: row.get(11)?,
+                format: row.get(11)?,
+                page_count: row.get(12)?,
+                reading_percent: row.get(13)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -129,10 +133,10 @@ fn delete_book_by_id(conn: &Connection, book_id: &str) -> Result<(Option<String>
     Ok((library_path, cover_path))
 }
 
-fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book, rusqlite::Error> {
+pub(crate) fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book, rusqlite::Error> {
     conn.query_row(
         "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at,
-               is_favorite, note, group_name, pinned_at
+               is_favorite, note, group_name, pinned_at, format, page_count
          FROM books
          WHERE id = ?1",
         [book_id],
@@ -149,6 +153,8 @@ fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book, rusqlite::
                 note: row.get(8)?,
                 group_name: row.get(9)?,
                 pinned_at: row.get(10)?,
+                format: row.get(11)?,
+                page_count: row.get(12)?,
                 reading_percent: None,
             })
         },
@@ -329,6 +335,8 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         note: None,
         group_name: None,
         pinned_at: None,
+        format: None,
+        page_count: None,
         reading_percent: None,
         is_favorite: false,
     };
@@ -465,6 +473,8 @@ mod tests {
             note: None,
             group_name: None,
             pinned_at: None,
+            format: None,
+            page_count: None,
             reading_percent: None,
             is_favorite: false,
         };
@@ -479,6 +489,11 @@ mod tests {
         assert_eq!(books.len(), 1);
         assert_eq!(books[0].id, "b1");
         assert_eq!(books[0].reading_percent, Some(0.25));
+
+        conn.execute("UPDATE books SET format = 'images', page_count = 9 WHERE id = 'b1'", []).unwrap();
+        let books = fetch_books(&conn).unwrap();
+        assert_eq!(books[0].format.as_deref(), Some("images"));
+        assert_eq!(books[0].page_count, Some(9));
     }
 
     #[test]
@@ -497,6 +512,8 @@ mod tests {
             note: None,
             group_name: None,
             pinned_at: None,
+            format: None,
+            page_count: None,
             reading_percent: None,
             is_favorite: false,
         };
@@ -540,6 +557,8 @@ mod tests {
             note: None,
             group_name: None,
             pinned_at: None,
+            format: None,
+            page_count: None,
             reading_percent: None,
             is_favorite: false,
         }

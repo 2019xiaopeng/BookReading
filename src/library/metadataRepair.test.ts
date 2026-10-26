@@ -17,6 +17,7 @@ function b(partial: Partial<Book>): Book {
     pinned_at: null,
     reading_percent: null,
     is_favorite: false,
+    format: null,
     ...partial,
   };
 }

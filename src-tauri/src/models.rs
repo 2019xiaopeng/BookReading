@@ -12,6 +12,8 @@ pub struct Book {
     pub note: Option<String>,
     pub group_name: Option<String>,
     pub pinned_at: Option<i64>,
+    pub format: Option<String>,
+    pub page_count: Option<i64>,
     pub reading_percent: Option<f64>,
     pub is_favorite: bool,
 }
