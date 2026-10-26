@@ -109,7 +109,10 @@ export default function FavoritesPage() {
               <div className="wr-cover">
                 {b.cover_path && coverUrls[b.cover_path] ? <img src={coverUrls[b.cover_path]} alt="" /> : null}
                 {!b.cover_path || !coverUrls[b.cover_path] ? (
-                  <div className="wr-cover-letter">{(b.title?.trim() || "未").slice(0, 1)}</div>
+                  <div className="wr-cover-text">
+                    <div className="wr-cover-title">{b.title?.trim() || "未命名"}</div>
+                    <div className="wr-cover-author">{b.author?.trim() || "未知作者"}</div>
+                  </div>
                 ) : null}
               </div>
               <div className="wr-meta">

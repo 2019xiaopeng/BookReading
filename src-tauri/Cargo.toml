@@ -27,7 +27,9 @@ serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 time = { version = "0.3", features = ["serde"] }
-base64 = "0.22"
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
 zip = "2"
 roxmltree = "0.20"
+regex = "1"
+# shortcut: encoding_rs not in Cargo.lock yet (builds forbidden here); next cargo build will add it.
+encoding_rs = "0.8"

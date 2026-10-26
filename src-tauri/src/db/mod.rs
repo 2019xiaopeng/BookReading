@@ -22,6 +22,7 @@ pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("failed to init sqlite schema: {e}"))?;
 
     ensure_books_is_favorite_column(&conn)?;
+    migrations::ensure_book_columns(&conn)?;
     migrations::migrate_book_paths_to_appdata_relative(&conn, app)?;
 
     Ok(())

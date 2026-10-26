@@ -9,6 +9,9 @@ pub struct Book {
     pub library_path: String,
     pub added_at: i64,
     pub last_opened_at: Option<i64>,
+    pub note: Option<String>,
+    pub group_name: Option<String>,
+    pub pinned_at: Option<i64>,
     pub reading_percent: Option<f64>,
     pub is_favorite: bool,
 }
@@ -25,10 +28,9 @@ pub struct ImportBookRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateBookMetadataRequest {
     pub book_id: String,
-    pub title: Option<String>,
-    pub author: Option<String>,
-    pub cover_bytes_base64: Option<String>,
-    pub cover_ext: Option<String>,
+    pub note: Option<String>,
+    pub group_name: Option<String>,
+    pub pinned: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

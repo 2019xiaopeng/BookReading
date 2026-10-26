@@ -36,6 +36,9 @@ fn list_favorite_books_db(conn: &Connection) -> Result<Vec<Book>, rusqlite::Erro
             added_at: row.get(5)?,
             last_opened_at: row.get(6)?,
             is_favorite: row.get(7)?,
+            note: None,
+            group_name: None,
+            pinned_at: None,
             reading_percent: None,
         })
     })?;

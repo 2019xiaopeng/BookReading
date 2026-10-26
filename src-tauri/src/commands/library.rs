@@ -1,8 +1,8 @@
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 
-use base64::Engine;
 use rusqlite::{params, Connection};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -11,6 +11,7 @@ use crate::app_paths;
 use crate::db;
 use crate::epub;
 use crate::models::{Book, ImportBookRequest, UpdateBookMetadataRequest};
+use crate::txt;
 
 fn now_ts() -> i64 {
     OffsetDateTime::now_utc().unix_timestamp()
@@ -87,9 +88,10 @@ fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite::Error> {
 
 fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT b.id, b.title, b.author, b.cover_path, b.library_path, b.added_at, b.last_opened_at, b.is_favorite, r.percent
+        "SELECT b.id, b.title, b.author, b.cover_path, b.library_path, b.added_at, b.last_opened_at,
+               b.is_favorite, b.note, b.group_name, b.pinned_at, r.percent
          FROM books b LEFT JOIN reading_state r ON r.book_id = b.id
-         ORDER BY COALESCE(b.last_opened_at, b.added_at) DESC",
+         ORDER BY (b.pinned_at IS NULL) ASC, COALESCE(b.pinned_at, 0) DESC, COALESCE(b.last_opened_at, b.added_at) DESC",
     )?;
 
     let books = stmt
@@ -103,7 +105,10 @@ fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
                 added_at: row.get(5)?,
                 last_opened_at: row.get(6)?,
                 is_favorite: row.get(7)?,
-                reading_percent: row.get(8)?,
+                note: row.get(8)?,
+                group_name: row.get(9)?,
+                pinned_at: row.get(10)?,
+                reading_percent: row.get(11)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -126,7 +131,8 @@ fn delete_book_by_id(conn: &Connection, book_id: &str) -> Result<(Option<String>
 
 fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book, rusqlite::Error> {
     conn.query_row(
-        "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite
+        "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at,
+               is_favorite, note, group_name, pinned_at
          FROM books
          WHERE id = ?1",
         [book_id],
@@ -140,6 +146,9 @@ fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book, rusqlite::
                 added_at: row.get(5)?,
                 last_opened_at: row.get(6)?,
                 is_favorite: row.get(7)?,
+                note: row.get(8)?,
+                group_name: row.get(9)?,
+                pinned_at: row.get(10)?,
                 reading_percent: None,
             })
         },
@@ -233,18 +242,49 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
     fs::create_dir_all(&books_dir).map_err(|e| format!("failed to create books dir: {e}"))?;
     fs::create_dir_all(&covers_dir).map_err(|e| format!("failed to create covers dir: {e}"))?;
 
-    let final_book_abs: PathBuf = books_dir.join(format!("{book_id}.epub"));
-    let tmp_book_abs: PathBuf = books_dir.join(format!("{book_id}.epub.part"));
-    atomic_copy_to(&req.source_path, &tmp_book_abs, &final_book_abs)
-        .map_err(|e| format!("failed to copy epub into library: {e}"))?;
-
-    let extracted = epub::extract_epub_metadata(&final_book_abs).ok();
-
     let fallback_title = Path::new(&req.source_path)
         .file_stem()
         .and_then(|s| s.to_str())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+
+    // sniff before touching the library: magic bytes first, then extension
+    let mut head = [0u8; 5];
+    fs::File::open(&req.source_path)
+        .and_then(|mut f| f.read(&mut head))
+        .map_err(|e| format!("failed to read {}: {e}", req.source_path))?;
+    if head.starts_with(b"%PDF-") {
+        return Err(format!("{}: 暂不支持该格式（PDF 见路线图批次4）", req.source_path));
+    }
+
+    let ext = Path::new(&req.source_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+    let is_txt = ext.as_deref() == Some("txt");
+
+    let final_book_abs: PathBuf = books_dir.join(format!("{book_id}.epub"));
+    let tmp_book_abs: PathBuf = books_dir.join(format!("{book_id}.epub.part"));
+    if is_txt {
+        let bytes = fs::read(&req.source_path)
+            .map_err(|e| format!("failed to read {}: {e}", req.source_path))?;
+        let text = txt::decode_txt(&bytes).map_err(|e| format!("{}: {e}", req.source_path))?;
+        let epub_bytes = txt::txt_to_epub(fallback_title.as_deref().unwrap_or("未命名"), &text)
+            .map_err(|e| format!("{}: {e}", req.source_path))?;
+        atomic_write_to(&tmp_book_abs, &final_book_abs, &epub_bytes)
+            .map_err(|e| format!("failed to write book into library: {e}"))?;
+    } else if ext.as_deref() == Some("epub") {
+        atomic_copy_to(&req.source_path, &tmp_book_abs, &final_book_abs)
+            .map_err(|e| format!("failed to copy epub into library: {e}"))?;
+    } else {
+        return Err(format!("{}: 暂不支持该格式（PDF 见路线图批次4）", req.source_path));
+    }
+
+    let extracted = if is_txt {
+        None
+    } else {
+        epub::extract_epub_metadata(&final_book_abs).ok()
+    };
 
     let title = merge_optional_text(
         req.title.clone().or_else(|| extracted.as_ref().and_then(|m| m.title.clone())),
@@ -286,6 +326,9 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         library_path,
         added_at: now_ts(),
         last_opened_at: None,
+        note: None,
+        group_name: None,
+        pinned_at: None,
         reading_percent: None,
         is_favorite: false,
     };
@@ -302,57 +345,43 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
     Ok(book)
 }
 
+fn merge_metadata(existing: &Book, req: &UpdateBookMetadataRequest, now: i64) -> Book {
+    let apply = |update: &Option<String>, current: &Option<String>| -> Option<String> {
+        match update {
+            Some(v) => {
+                let t = v.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            }
+            None => current.clone(),
+        }
+    };
+    Book {
+        note: apply(&req.note, &existing.note),
+        group_name: apply(&req.group_name, &existing.group_name),
+        pinned_at: match req.pinned {
+            Some(true) => Some(now),
+            Some(false) => None,
+            None => existing.pinned_at,
+        },
+        ..existing.clone()
+    }
+}
+
 #[tauri::command]
 pub fn update_book_metadata(app: tauri::AppHandle, req: UpdateBookMetadataRequest) -> Result<Book, String> {
     let conn = db::open_db(&app)?;
 
     let existing =
         fetch_book_by_id(&conn, &req.book_id).map_err(|e| format!("failed to fetch book: {e}"))?;
-
-    let title = merge_optional_text(req.title.clone(), existing.title.clone());
-    let author = merge_optional_text(req.author.clone(), existing.author.clone());
-
-    let cover_path: Option<String> =
-        match (req.cover_bytes_base64.as_deref(), req.cover_ext.as_deref()) {
-            (Some(b64), Some(ext)) if !b64.is_empty() && !ext.is_empty() => {
-                let ext = ext
-                    .trim()
-                    .trim_start_matches('.')
-                    .to_lowercase();
-                let allowed = ["png", "jpg", "jpeg", "webp"];
-                if !allowed.contains(&ext.as_str()) {
-                    existing.cover_path.clone()
-                } else {
-                    let covers_dir = app_paths::covers_dir(&app)?;
-                    fs::create_dir_all(&covers_dir)
-                        .map_err(|e| format!("failed to create covers dir: {e}"))?;
-
-                    let b64 = b64.split(',').last().unwrap_or(b64);
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(b64)
-                        .map_err(|e| format!("failed to decode cover base64: {e}"))?;
-                    let final_cover_abs = covers_dir.join(format!("{}.{}", req.book_id, ext));
-                    let tmp_cover_abs = covers_dir.join(format!("{}.{}.part", req.book_id, ext));
-                    atomic_write_to(&tmp_cover_abs, &final_cover_abs, &bytes)
-                        .map_err(|e| format!("failed to write cover: {e}"))?;
-
-                    if let Some(old) = existing.cover_path.as_ref() {
-                        if old.replace('\\', "/").starts_with("library/covers/") && old != &format!("library/covers/{}.{}", req.book_id, ext) {
-                            if let Ok(old_abs) = abs_from_appdata_rel(&app, old) {
-                                let _ = fs::remove_file(old_abs);
-                            }
-                        }
-                    }
-
-                    Some(format!("library/covers/{}.{}", req.book_id, ext))
-                }
-            }
-            _ => existing.cover_path.clone(),
-        };
+    let merged = merge_metadata(&existing, &req, now_ts());
 
     conn.execute(
-        "UPDATE books SET title = ?2, author = ?3, cover_path = ?4 WHERE id = ?1",
-        params![req.book_id, title, author, cover_path],
+        "UPDATE books SET note = ?2, group_name = ?3, pinned_at = ?4 WHERE id = ?1",
+        params![req.book_id, merged.note, merged.group_name, merged.pinned_at],
     )
     .map_err(|e| format!("failed to update book: {e}"))?;
 
@@ -433,6 +462,9 @@ mod tests {
             library_path: "library/books/b1.epub".to_string(),
             added_at: 1,
             last_opened_at: None,
+            note: None,
+            group_name: None,
+            pinned_at: None,
             reading_percent: None,
             is_favorite: false,
         };
@@ -462,6 +494,9 @@ mod tests {
             library_path: "library/books/b2.epub".to_string(),
             added_at: 1,
             last_opened_at: None,
+            note: None,
+            group_name: None,
+            pinned_at: None,
             reading_percent: None,
             is_favorite: false,
         };
@@ -491,5 +526,91 @@ mod tests {
             merge_optional_text(Some("   ".to_string()), Some("Old".to_string())),
             Some("Old".to_string())
         );
+    }
+
+    fn test_book(id: &str, added_at: i64) -> Book {
+        Book {
+            id: id.to_string(),
+            title: Some("t".to_string()),
+            author: None,
+            cover_path: None,
+            library_path: format!("library/books/{id}.epub"),
+            added_at,
+            last_opened_at: None,
+            note: None,
+            group_name: None,
+            pinned_at: None,
+            reading_percent: None,
+            is_favorite: false,
+        }
+    }
+
+    #[test]
+    fn fetch_books_orders_pinned_first() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(db::SCHEMA_SQL).unwrap();
+        insert_book(&conn, &test_book("b1", 1)).unwrap();
+        insert_book(&conn, &test_book("b2", 2)).unwrap();
+
+        let ids: Vec<String> = fetch_books(&conn).unwrap().into_iter().map(|b| b.id).collect();
+        assert_eq!(ids, vec!["b2".to_string(), "b1".to_string()]);
+
+        conn.execute("UPDATE books SET pinned_at = 100 WHERE id = 'b1'", []).unwrap();
+        let ids: Vec<String> = fetch_books(&conn).unwrap().into_iter().map(|b| b.id).collect();
+        assert_eq!(ids, vec!["b1".to_string(), "b2".to_string()]);
+    }
+
+    #[test]
+    fn merge_metadata_keeps_existing_when_request_none() {
+        let mut existing = test_book("b1", 1);
+        existing.note = Some("备注".to_string());
+        existing.group_name = Some("分组".to_string());
+        existing.pinned_at = Some(7);
+        let req = UpdateBookMetadataRequest {
+            book_id: "b1".to_string(),
+            note: None,
+            group_name: None,
+            pinned: None,
+        };
+        let merged = merge_metadata(&existing, &req, 42);
+        assert_eq!(merged.note, existing.note);
+        assert_eq!(merged.group_name, existing.group_name);
+        assert_eq!(merged.pinned_at, existing.pinned_at);
+    }
+
+    #[test]
+    fn merge_metadata_blank_request_clears_value() {
+        let mut existing = test_book("b1", 1);
+        existing.note = Some("旧备注".to_string());
+        existing.group_name = Some("旧分组".to_string());
+        let req = UpdateBookMetadataRequest {
+            book_id: "b1".to_string(),
+            note: Some("   ".to_string()),
+            group_name: Some("".to_string()),
+            pinned: None,
+        };
+        let merged = merge_metadata(&existing, &req, 42);
+        assert_eq!(merged.note, None);
+        assert_eq!(merged.group_name, None);
+    }
+
+    #[test]
+    fn merge_metadata_pinned_sets_and_clears_timestamp() {
+        let mut existing = test_book("b1", 1);
+        existing.pinned_at = Some(7);
+        let pin = UpdateBookMetadataRequest {
+            book_id: "b1".to_string(),
+            note: None,
+            group_name: None,
+            pinned: Some(true),
+        };
+        assert_eq!(merge_metadata(&existing, &pin, 42).pinned_at, Some(42));
+        let unpin = UpdateBookMetadataRequest {
+            book_id: "b1".to_string(),
+            note: None,
+            group_name: None,
+            pinned: Some(false),
+        };
+        assert_eq!(merge_metadata(&existing, &unpin, 42).pinned_at, None);
     }
 }

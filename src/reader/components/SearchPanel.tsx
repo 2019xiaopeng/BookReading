@@ -6,7 +6,7 @@ export default function SearchPanel(props: {
   onSearch: () => void;
   loading: boolean;
   searched?: boolean;
-  results: { cfi: string; excerpt: string }[];
+  results: { cfi: string; excerpt: string; chapter: string; percent?: number }[];
   onOpen: (cfi: string) => void;
   inputRef?: RefObject<HTMLInputElement | null>;
 }) {
@@ -46,6 +46,15 @@ export default function SearchPanel(props: {
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {props.results.map((r) => (
             <button key={r.cfi} onClick={() => props.onOpen(r.cfi)} className="wr-toc-item">
+              <div
+                className="wr-muted"
+                style={{ fontSize: 12, display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 2 }}
+              >
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.chapter}</span>
+                {typeof r.percent === "number" ? (
+                  <span style={{ fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{Math.round(r.percent * 100)}%</span>
+                ) : null}
+              </div>
               <div style={{ color: "var(--wr-ink)" }}>{r.excerpt}</div>
             </button>
           ))}

@@ -20,6 +20,7 @@ import {
   listHighlights,
   repairBookMetadata,
   setBookFavorite,
+  updateBookMetadata,
   upsertReadingState,
 } from "./invoke";
 
@@ -34,6 +35,12 @@ describe("tauri invoke arg casing", () => {
     hoisted.invokeMock.mockResolvedValueOnce(null);
     await repairBookMetadata("b1");
     expect(hoisted.invokeMock).toHaveBeenLastCalledWith("repair_book_metadata", { bookId: "b1" });
+  });
+
+  test("updateBookMetadata wraps req", async () => {
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await updateBookMetadata({ book_id: "b1", pinned: true });
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("update_book_metadata", { req: { book_id: "b1", pinned: true } });
   });
 
   test("reading state uses bookId", async () => {

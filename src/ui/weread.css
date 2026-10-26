@@ -414,6 +414,7 @@
 .wr-seg-btn:focus-visible,
 .wr-small-btn:focus-visible,
 .wr-search-input:focus-visible,
+.wr-chip-btn:focus-visible,
 .wr-toc-item:focus-visible {
   outline: 2px solid var(--wr-ink);
   outline-offset: 2px;
@@ -698,16 +699,54 @@
   pointer-events: none;
 }
 
-.wr-cover-letter {
-  font-family: var(--wr-serif);
+.wr-cover-text {
   position: absolute;
-  inset: auto 0 12px 0;
-  text-align: center;
-  font-weight: 800;
-  letter-spacing: 0.18em;
-  color: rgba(255, 255, 255, 0.88);
-  pointer-events: none;
+  inset: 0;
   z-index: 1;
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.wr-cover-title {
+  font-family: var(--wr-serif);
+  font-weight: 750;
+  font-size: 12px;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.94);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.wr-cover-author {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.72);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wr-note {
+  font-size: 12px;
+  color: var(--wr-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wr-chip-btn {
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.wr-chip-btn[data-pinned="true"] {
+  border-color: rgba(var(--wr-accent-rgb), 0.5);
 }
 
 .wr-meta {

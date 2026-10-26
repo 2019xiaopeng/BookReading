@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod models;
 mod epub;
+mod txt;
 
 use std::fs;
 use std::io::Write;

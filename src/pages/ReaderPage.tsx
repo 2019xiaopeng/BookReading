@@ -21,7 +21,8 @@ import {
   type FavoriteQuote,
   type Highlight,
 } from "../tauri/invoke";
-import { createReader, type ReaderController, type TocItem } from "../reader/epub/reader";
+import { createReader, type ReaderController, type SearchResult, type TocItem } from "../reader/epub/reader";
+import { tocLabelFor } from "../reader/epub/tocLabel";
 import BookmarksPanel from "../reader/components/BookmarksPanel";
 import HighlightsPanel from "../reader/components/HighlightsPanel";
 import SearchPanel from "../reader/components/SearchPanel";
@@ -69,7 +70,7 @@ export default function ReaderPage() {
   const [favoriteQuotes, setFavoriteQuotes] = useState<FavoriteQuote[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
-  const [searchResults, setSearchResults] = useState<{ cfi: string; excerpt: string }[]>([]);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searched, setSearched] = useState(false);
   const [isImmersive, setIsImmersive] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -129,11 +130,12 @@ export default function ReaderPage() {
     return out;
   }, [toc]);
 
-  const chapterLabel = () => {
-    const href = chapterRef.current.split("#")[0];
-    if (!href) return null;
-    return flatToc.find((t) => t.href.split("#")[0] === href)?.label?.trim() || null;
-  };
+  const chapterLabel = () => tocLabelFor(flatToc, chapterRef.current);
+
+  const searchRows = useMemo(
+    () => searchResults.map((r) => ({ ...r, chapter: tocLabelFor(flatToc, r.sectionHref) ?? "正文" })),
+    [searchResults, flatToc],
+  );
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -714,7 +716,7 @@ export default function ReaderPage() {
                 onQueryChange={setSearchQuery}
                 loading={searchLoading}
                 searched={searched}
-                results={searchResults}
+                results={searchRows}
                 onSearch={() => {
                   void (async () => {
                     const ctrl = controllerRef.current;

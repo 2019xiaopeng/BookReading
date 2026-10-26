@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS books (
   library_path TEXT NOT NULL,
   added_at INTEGER NOT NULL,
   last_opened_at INTEGER,
+  note TEXT,
+  group_name TEXT,
+  pinned_at INTEGER,
   is_favorite INTEGER NOT NULL DEFAULT 0
 );
 

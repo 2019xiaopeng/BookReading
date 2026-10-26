@@ -8,6 +8,9 @@ export type Book = {
   library_path: string;
   added_at: number;
   last_opened_at: number | null;
+  note: string | null;
+  group_name: string | null;
+  pinned_at: number | null;
   reading_percent: number | null;
   is_favorite: boolean;
 };
@@ -22,10 +25,9 @@ export type ImportBookRequest = {
 
 export type UpdateBookMetadataRequest = {
   book_id: string;
-  title: string | null;
-  author: string | null;
-  cover_bytes_base64: string | null;
-  cover_ext: string | null;
+  note?: string;
+  group_name?: string;
+  pinned?: boolean;
 };
 
 export async function listBooks(): Promise<Book[]> {

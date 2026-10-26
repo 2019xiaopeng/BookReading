@@ -66,6 +66,21 @@ fn normalize_appdata_relative(value: &str, app_data_dir: &str) -> Option<String>
     None
 }
 
+pub fn ensure_book_columns(conn: &Connection) -> Result<(), String> {
+    for ddl in [
+        "ALTER TABLE books ADD COLUMN note TEXT",
+        "ALTER TABLE books ADD COLUMN group_name TEXT",
+        "ALTER TABLE books ADD COLUMN pinned_at INTEGER",
+    ] {
+        if let Err(e) = conn.execute(ddl, []) {
+            if !e.to_string().contains("duplicate column name") {
+                return Err(format!("failed to migrate book column: {e}"));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn migrate_book_paths_to_appdata_relative(conn: &Connection, app: &tauri::AppHandle) -> Result<(), String> {
     let base = app_paths::app_data_dir(app)?;
     let base_str = base.to_string_lossy().to_string();
@@ -116,6 +131,38 @@ pub fn migrate_book_paths_to_appdata_relative(conn: &Connection, app: &tauri::Ap
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ensure_book_columns_adds_missing_columns_and_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE books (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                author TEXT,
+                cover_path TEXT,
+                library_path TEXT NOT NULL,
+                added_at INTEGER NOT NULL,
+                last_opened_at INTEGER,
+                is_favorite INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+
+        ensure_book_columns(&conn).unwrap();
+
+        let mut stmt = conn.prepare("PRAGMA table_info(books)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert!(cols.contains(&"note".to_string()));
+        assert!(cols.contains(&"group_name".to_string()));
+        assert!(cols.contains(&"pinned_at".to_string()));
+
+        ensure_book_columns(&conn).unwrap();
+    }
 
     #[test]
     fn normalize_absolute_to_appdata_relative() {

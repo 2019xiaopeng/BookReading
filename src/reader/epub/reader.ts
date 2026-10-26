@@ -19,6 +19,13 @@ export type TocItem = {
   subitems?: TocItem[];
 };
 
+export type SearchResult = {
+  cfi: string;
+  excerpt: string;
+  sectionHref: string;
+  percent?: number;
+};
+
 export type RelocatedPayload = {
   cfi: string;
   percent: number | null;
@@ -35,7 +42,7 @@ export type ReaderController = {
   setSpreadMode: (mode: SpreadMode) => void;
   addHighlight: (cfiRange: string) => void;
   removeHighlight: (cfiRange: string) => void;
-  search: (query: string) => Promise<{ cfi: string; excerpt: string }[]>;
+  search: (query: string) => Promise<SearchResult[]>;
   destroy: () => void;
 };
 
@@ -59,6 +66,18 @@ export function applySpreadMode(rendition: any, mode: SpreadMode): void {
   } catch (e) {
     logOnce("reader.spread", `reader: spread failed ${String(e)}`);
   }
+}
+
+function percentFromCfi(book: any, cfi: string): number | undefined {
+  try {
+    const locs = book?.locations;
+    if (typeof locs?.length === "function" && locs.length() > 0 && typeof locs.percentageFromCfi === "function") {
+      const p = locs.percentageFromCfi(cfi);
+      if (typeof p === "number" && Number.isFinite(p)) return p;
+    }
+  } catch {
+  }
+  return undefined;
 }
 
 export async function createReader(opts: {
@@ -251,17 +270,18 @@ export async function createReader(opts: {
       const q = query.trim();
       if (!q) return [];
       const items: any[] = Array.isArray(book.spine?.spineItems) ? book.spine.spineItems : [];
-      const matches: { cfi: string; excerpt: string }[] = [];
+      const matches: SearchResult[] = [];
       let errors = 0;
       let lastError: unknown = null;
 
       for (const section of items) {
         try {
+          const sectionHref = String(section.href ?? "").split("#")[0];
           await section.load(book.load.bind(book));
           const found: any[] = section.find(q) || [];
           for (const m of found) {
             if (m?.cfi && m?.excerpt) {
-              matches.push({ cfi: String(m.cfi), excerpt: String(m.excerpt) });
+              matches.push({ cfi: String(m.cfi), excerpt: String(m.excerpt), sectionHref, percent: percentFromCfi(book, String(m.cfi)) });
               if (matches.length >= 200) return matches;
             }
           }
