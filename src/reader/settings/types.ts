@@ -8,4 +8,5 @@ export type ReaderSettings = {
   fontSizePercent: number;
   pageAnimation: PageAnimation;
   layoutMode: LayoutMode;
+  lineHeight: number;
 };

@@ -12,11 +12,14 @@ export default function Drawer(props: { open: boolean; title: string; onClose: (
     >
       <div
         className="wr-panel wr-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label={props.title}
       >
         <div className="wr-topbar wr-reader-topbar">
           <div style={{ fontWeight: 800 }}>{props.title}</div>
           <div style={{ flex: 1 }} />
-          <button className="wr-btn" onClick={props.onClose}>
+          <button className="wr-btn" autoFocus onClick={props.onClose}>
             关闭
           </button>
         </div>

@@ -12,6 +12,7 @@ function b(partial: Partial<Book>): Book {
     library_path: "library/books/b1.epub",
     added_at: 0,
     last_opened_at: null,
+    reading_percent: null,
     is_favorite: false,
     ...partial,
   };

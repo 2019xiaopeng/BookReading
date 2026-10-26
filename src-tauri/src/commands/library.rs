@@ -87,9 +87,9 @@ fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite::Error> {
 
 fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite
-         FROM books
-         ORDER BY COALESCE(last_opened_at, added_at) DESC",
+        "SELECT b.id, b.title, b.author, b.cover_path, b.library_path, b.added_at, b.last_opened_at, b.is_favorite, r.percent
+         FROM books b LEFT JOIN reading_state r ON r.book_id = b.id
+         ORDER BY COALESCE(b.last_opened_at, b.added_at) DESC",
     )?;
 
     let books = stmt
@@ -103,6 +103,7 @@ fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
                 added_at: row.get(5)?,
                 last_opened_at: row.get(6)?,
                 is_favorite: row.get(7)?,
+                reading_percent: row.get(8)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -139,6 +140,7 @@ fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book, rusqlite::
                 added_at: row.get(5)?,
                 last_opened_at: row.get(6)?,
                 is_favorite: row.get(7)?,
+                reading_percent: None,
             })
         },
     )
@@ -284,6 +286,7 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         library_path,
         added_at: now_ts(),
         last_opened_at: None,
+        reading_percent: None,
         is_favorite: false,
     };
 
@@ -430,13 +433,20 @@ mod tests {
             library_path: "library/books/b1.epub".to_string(),
             added_at: 1,
             last_opened_at: None,
+            reading_percent: None,
             is_favorite: false,
         };
 
         insert_book(&conn, &book).unwrap();
+        conn.execute(
+            "INSERT INTO reading_state (book_id, cfi, percent, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params!["b1", "cfi", 0.25f64, 1i64],
+        )
+        .unwrap();
         let books = fetch_books(&conn).unwrap();
         assert_eq!(books.len(), 1);
         assert_eq!(books[0].id, "b1");
+        assert_eq!(books[0].reading_percent, Some(0.25));
     }
 
     #[test]
@@ -452,6 +462,7 @@ mod tests {
             library_path: "library/books/b2.epub".to_string(),
             added_at: 1,
             last_opened_at: None,
+            reading_percent: None,
             is_favorite: false,
         };
 

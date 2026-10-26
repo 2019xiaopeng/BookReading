@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { IconBook, IconStar } from "./icons";
+import { IconBook, IconSearch, IconStar } from "./icons";
 import type { Theme } from "../reader/settings/types";
 
 export default function AppShell(props: {
@@ -11,6 +11,7 @@ export default function AppShell(props: {
     value: string;
     placeholder: string;
     onChange: (v: string) => void;
+    onSubmit?: () => void;
   };
   seg?: {
     items: { key: string; label: string }[];
@@ -38,14 +39,14 @@ export default function AppShell(props: {
         </div>
 
         <div className="wr-nav" role="navigation">
-          <button className="wr-nav-btn" data-active={props.active === "library"} onClick={() => navigate("/")}>
+          <button className="wr-nav-btn" data-active={props.active === "library"} aria-current={props.active === "library" ? "page" : undefined} onClick={() => navigate("/")}>
             <div className="wr-nav-title">
               <IconBook />
               书架
             </div>
             <div className="wr-nav-sub">最近阅读、导入与管理</div>
           </button>
-          <button className="wr-nav-btn" data-active={props.active === "favorites"} onClick={() => navigate("/favorites")}>
+          <button className="wr-nav-btn" data-active={props.active === "favorites"} aria-current={props.active === "favorites" ? "page" : undefined} onClick={() => navigate("/favorites")}>
             <div className="wr-nav-title">
               <IconStar />
               收藏
@@ -61,16 +62,22 @@ export default function AppShell(props: {
         <div className="wr-main-topbar">
           {props.search ? (
             <div className="wr-search">
-              <span className="wr-search-icon" aria-hidden />
+              <span className="wr-search-icon" aria-hidden>
+              <IconSearch />
+            </span>
               <input
                 className="wr-search-input"
                 value={props.search.value}
                 onChange={(e) => props.search?.onChange(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") props.search?.onSubmit?.();
+                }}
                 placeholder={props.search.placeholder}
+                aria-label={props.search.placeholder}
               />
             </div>
           ) : (
-            <div style={{ fontWeight: 750 }}>{props.title}</div>
+            <h1 style={{ fontWeight: 750, margin: 0, fontSize: "inherit" }}>{props.title}</h1>
           )}
 
           {props.seg ? (
@@ -80,6 +87,7 @@ export default function AppShell(props: {
                   key={it.key}
                   className="wr-seg-btn"
                   data-active={props.seg?.active === it.key}
+                  aria-pressed={props.seg?.active === it.key}
                   onClick={() => props.seg?.onChange(it.key)}
                 >
                   {it.label}

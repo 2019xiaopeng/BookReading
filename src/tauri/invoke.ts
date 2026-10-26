@@ -8,6 +8,7 @@ export type Book = {
   library_path: string;
   added_at: number;
   last_opened_at: number | null;
+  reading_percent: number | null;
   is_favorite: boolean;
 };
 

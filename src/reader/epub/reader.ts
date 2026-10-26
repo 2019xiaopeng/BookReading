@@ -22,6 +22,7 @@ export type TocItem = {
 export type RelocatedPayload = {
   cfi: string;
   percent: number | null;
+  href: string;
 };
 
 export type ReaderController = {
@@ -30,6 +31,7 @@ export type ReaderController = {
   display: (target?: string) => Promise<void>;
   setTheme: (theme: Theme) => void;
   setFontSizePercent: (percent: number) => void;
+  setLineHeight: (lineHeight: number) => void;
   setSpreadMode: (mode: SpreadMode) => void;
   addHighlight: (cfiRange: string) => void;
   removeHighlight: (cfiRange: string) => void;
@@ -63,6 +65,7 @@ export async function createReader(opts: {
   container: HTMLElement;
   libraryPath: string;
   spreadMode?: SpreadMode;
+  lineHeight?: number;
   onRelocated?: (payload: RelocatedPayload) => void;
   onTocLoaded?: (toc: TocItem[]) => void;
   onSelected?: (payload: { cfiRange: string; text: string }) => void;
@@ -106,33 +109,37 @@ export async function createReader(opts: {
   };
   rendition.on?.("displayerror", onDisplayError);
 
-  const common: Record<string, any> = {
-    "*, *::before, *::after": { "box-sizing": "border-box" },
-    img: { "max-width": "100%", height: "auto" },
-    svg: { "max-width": "100%" },
-    table: { "max-width": "100%", width: "100%" },
-    body: {
-      margin: "0 auto",
-      padding: "24px 20px",
-      "line-height": "1.85",
-      "word-break": "break-word",
-      "overflow-wrap": "anywhere",
-    },
-  };
+  let currentTheme: Theme = "light";
+  const registerThemes = (lineHeight: number) => {
+    const common: Record<string, any> = {
+      "*, *::before, *::after": { "box-sizing": "border-box" },
+      img: { "max-width": "100%", height: "auto" },
+      svg: { "max-width": "100%" },
+      table: { "max-width": "100%", width: "100%" },
+      body: {
+        margin: "0 auto",
+        padding: "24px 20px",
+        "line-height": String(lineHeight),
+        "word-break": "break-word",
+        "overflow-wrap": "anywhere",
+      },
+    };
 
-  rendition.themes.register("light", {
-    ...common,
-    body: { ...common.body, background: "transparent", color: "#16181a" },
-  });
-  rendition.themes.register("dark", {
-    ...common,
-    body: { ...common.body, background: "transparent", color: "rgba(255, 255, 255, 0.92)" },
-  });
-  rendition.themes.register("sepia", {
-    ...common,
-    body: { ...common.body, background: "transparent", color: "rgba(38, 29, 18, 0.9)" },
-  });
-  rendition.themes.select("light");
+    rendition.themes.register("light", {
+      ...common,
+      body: { ...common.body, background: "transparent", color: "#16181a" },
+    });
+    rendition.themes.register("dark", {
+      ...common,
+      body: { ...common.body, background: "transparent", color: "rgba(255, 255, 255, 0.92)" },
+    });
+    rendition.themes.register("sepia", {
+      ...common,
+      body: { ...common.body, background: "transparent", color: "rgba(38, 29, 18, 0.9)" },
+    });
+    rendition.themes.select(currentTheme);
+  };
+  registerThemes(opts.lineHeight ?? 1.9);
   rendition.themes.fontSize("120%");
   rendition.themes.default({
     "::selection": { background: "rgba(255, 230, 0, 0.35)" },
@@ -146,7 +153,8 @@ export async function createReader(opts: {
       typeof book.locations?.percentageFromCfi === "function"
         ? (book.locations.percentageFromCfi(cfi) as number)
         : null;
-    opts.onRelocated?.({ cfi, percent });
+    const href = String(location?.start?.href ?? "").split("#")[0];
+    opts.onRelocated?.({ cfi, percent, href });
   };
   rendition.on("relocated", onRelocated);
 
@@ -208,10 +216,14 @@ export async function createReader(opts: {
       }
     },
     setTheme: (theme: Theme) => {
+      currentTheme = theme;
       rendition.themes.select(theme);
     },
     setFontSizePercent: (percent: number) => {
       rendition.themes.fontSize(`${percent}%`);
+    },
+    setLineHeight: (lineHeight: number) => {
+      registerThemes(lineHeight);
     },
     setSpreadMode: (mode: SpreadMode) => {
       applySpreadMode(rendition, mode);

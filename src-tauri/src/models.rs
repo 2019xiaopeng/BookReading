@@ -9,6 +9,7 @@ pub struct Book {
     pub library_path: String,
     pub added_at: i64,
     pub last_opened_at: Option<i64>,
+    pub reading_percent: Option<f64>,
     pub is_favorite: bool,
 }
 

@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 export default function SelectionToolbar(props: {
   open: boolean;
   text: string;
@@ -6,12 +8,28 @@ export default function SelectionToolbar(props: {
   onNote: () => void;
   onClose: () => void;
 }) {
+  const [copied, setCopied] = useState(false);
+
   if (!props.open) return null;
 
   return (
-    <div className="wr-selection">
+    <div className="wr-selection" role="toolbar" aria-label="划选操作">
       <div className="wr-panel wr-selection-bar">
         <div className="wr-selection-text">{props.text}</div>
+        <button
+          className="wr-btn"
+          onClick={() => {
+            navigator.clipboard
+              ?.writeText(props.text)
+              .then(() => {
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 1500);
+              })
+              .catch(() => {});
+          }}
+        >
+          {copied ? "已复制" : "复制"}
+        </button>
         <button className="wr-btn" onClick={props.onHighlight}>
           高亮
         </button>

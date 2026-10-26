@@ -14,6 +14,7 @@ export default function SettingsPanel(props: {
         <div className="wr-muted">主题</div>
         <select
           className="wr-select"
+          aria-label="主题"
           value={v.theme}
           onChange={(e) => {
             const next = e.currentTarget.value;
@@ -35,6 +36,8 @@ export default function SettingsPanel(props: {
         </div>
         <input
           type="range"
+          aria-label="字号"
+          aria-valuetext={`${v.fontSizePercent}%`}
           min={80}
           max={200}
           step={5}
@@ -44,9 +47,28 @@ export default function SettingsPanel(props: {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="wr-muted">行距</div>
+          <div style={{ marginLeft: "auto", color: "var(--wr-muted)", fontVariantNumeric: "tabular-nums" }}>
+            {v.lineHeight.toFixed(1)}
+          </div>
+        </div>
+        <input
+          type="range"
+          aria-label="行距"
+          min={1.5}
+          max={2.2}
+          step={0.1}
+          value={v.lineHeight}
+          onChange={(e) => props.onChange({ ...v, lineHeight: Number(e.currentTarget.value) })}
+        />
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div className="wr-muted">翻页动画</div>
         <select
           className="wr-select"
+          aria-label="翻页动画"
           value={v.pageAnimation}
           onChange={(e) => {
             const next = e.currentTarget.value;
@@ -63,6 +85,7 @@ export default function SettingsPanel(props: {
         <div className="wr-muted">版式</div>
         <select
           className="wr-select"
+          aria-label="版式"
           value={v.layoutMode}
           onChange={(e) => {
             const next = e.currentTarget.value;

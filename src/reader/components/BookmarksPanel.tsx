@@ -2,6 +2,7 @@ import type { Bookmark } from "../../tauri/invoke";
 
 export default function BookmarksPanel(props: {
   items: Bookmark[];
+  loaded?: boolean;
   onAdd: () => void;
   onOpen: (cfi: string) => void;
   onDelete: (id: string) => void;
@@ -16,8 +17,10 @@ export default function BookmarksPanel(props: {
         </button>
       </div>
 
-      {props.items.length === 0 ? (
-        <div className="wr-muted">暂无书签</div>
+      {props.loaded === false ? (
+        <div className="wr-muted">加载中…</div>
+      ) : props.items.length === 0 ? (
+        <div className="wr-muted">还没有书签，按 Ctrl+B 或点上方添加</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {props.items.map((b) => (

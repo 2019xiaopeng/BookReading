@@ -2,6 +2,7 @@ import type { Highlight } from "../../tauri/invoke";
 
 export default function HighlightsPanel(props: {
   items: Highlight[];
+  loaded?: boolean;
   onOpen: (cfiRange: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -9,8 +10,10 @@ export default function HighlightsPanel(props: {
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ fontWeight: 600 }}>标注</div>
 
-      {props.items.length === 0 ? (
-        <div className="wr-muted">暂无标注</div>
+      {props.loaded === false ? (
+        <div className="wr-muted">加载中…</div>
+      ) : props.items.length === 0 ? (
+        <div className="wr-muted">还没有标注，选中正文一段文字试试</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {props.items.map((h) => (

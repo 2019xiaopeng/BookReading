@@ -12,3 +12,8 @@ export function normalizePageAnimation(v: unknown): PageAnimation {
   return "none";
 }
 
+export function normalizeLineHeight(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 1.9;
+  return Math.min(2.2, Math.max(1.5, Math.round(n * 10) / 10));
+}

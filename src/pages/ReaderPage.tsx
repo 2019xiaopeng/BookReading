@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import type { Book } from "../tauri/invoke";
@@ -27,10 +27,10 @@ import HighlightsPanel from "../reader/components/HighlightsPanel";
 import SearchPanel from "../reader/components/SearchPanel";
 import SettingsPanel from "../reader/components/SettingsPanel";
 import SelectionToolbar from "../reader/components/SelectionToolbar";
-import { defaultSettings } from "../reader/settings/defaults";
+import { defaultSettings, HIGHLIGHT_COLOR } from "../reader/settings/defaults";
 import type { ReaderSettings } from "../reader/settings/types";
 import { normalizeLayoutMode, resolveSpreadMode } from "../reader/settings/layoutMode";
-import { normalizePageAnimation, normalizeTheme } from "../reader/settings/normalize";
+import { normalizeLineHeight, normalizePageAnimation, normalizeTheme } from "../reader/settings/normalize";
 import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
@@ -55,9 +55,14 @@ export default function ReaderPage() {
   const [toc, setToc] = useState<TocItem[]>([]);
   const [tocLoading, setTocLoading] = useState(true);
   const [readerError, setReaderError] = useState<string | null>(null);
+  const [errorCopied, setErrorCopied] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
+  const [annotationsLoaded, setAnnotationsLoaded] = useState(false);
   const [percent, setPercent] = useState<number | null>(null);
-  const [settings, setSettings] = useState<ReaderSettings>(defaultSettings);
+  const [settings, setSettings] = useState<ReaderSettings>(() => ({
+    ...defaultSettings,
+    theme: normalizeTheme(localStorage.getItem("wr-theme")),
+  }));
   const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings">("toc");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
@@ -65,6 +70,7 @@ export default function ReaderPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<{ cfi: string; excerpt: string }[]>([]);
+  const [searched, setSearched] = useState(false);
   const [isImmersive, setIsImmersive] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selection, setSelection] = useState<{ cfiRange: string; text: string } | null>(null);
@@ -83,6 +89,8 @@ export default function ReaderPage() {
   const persistTimerRef = useRef<number | null>(null);
   const lastCfiRef = useRef<string | null>(null);
   const restoredRef = useRef(false);
+  const chapterRef = useRef("");
+  const settingsTouchedRef = useRef(false);
   const searchSeqRef = useRef(0);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const wheelCooldownRef = useRef(0);
@@ -109,9 +117,31 @@ export default function ReaderPage() {
   const stage = calcPaperStage({ viewerWidth, viewerHeight, margin: 18, edgeRatio });
   const pagerEnabled = !drawerOpen && !readerError && !selection && !noteDraft;
 
+  const flatToc = useMemo(() => {
+    const out: TocItem[] = [];
+    const walk = (xs: TocItem[]) => {
+      for (const x of xs) {
+        out.push(x);
+        if (x.subitems?.length) walk(x.subitems);
+      }
+    };
+    walk(toc);
+    return out;
+  }, [toc]);
+
+  const chapterLabel = () => {
+    const href = chapterRef.current.split("#")[0];
+    if (!href) return null;
+    return flatToc.find((t) => t.href.split("#")[0] === href)?.label?.trim() || null;
+  };
+
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+
+  useEffect(() => {
+    localStorage.setItem("wr-theme", settings.theme);
+  }, [settings.theme]);
 
   useEffect(() => {
     spreadModeRef.current = spreadMode;
@@ -126,11 +156,12 @@ export default function ReaderPage() {
     (async () => {
       const map = await getSettings();
       if (cancelled) return;
-      if (settingsRef.current !== defaultSettings) return;
+      if (settingsTouchedRef.current) return;
       const theme = normalizeTheme(map.theme);
       const fontSizePercent = Number(map.fontSizePercent ?? defaultSettings.fontSizePercent);
       const pageAnimation = normalizePageAnimation(map.pageAnimation);
       const layoutMode = normalizeLayoutMode(map.layoutMode);
+      const lineHeight = normalizeLineHeight(map.lineHeight);
       setSettings({
         theme,
         fontSizePercent: Number.isFinite(fontSizePercent)
@@ -138,6 +169,7 @@ export default function ReaderPage() {
           : defaultSettings.fontSizePercent,
         pageAnimation,
         layoutMode,
+        lineHeight,
       });
     })();
     return () => {
@@ -155,12 +187,14 @@ export default function ReaderPage() {
       container.innerHTML = "";
       setReaderError(null);
       restoredRef.current = false;
+      setAnnotationsLoaded(false);
       setToc([]);
       setTocLoading(true);
 
-      const onRelocated = ({ cfi, percent }: { cfi: string; percent: number | null }) => {
+      const onRelocated = ({ cfi, percent, href }: { cfi: string; percent: number | null; href: string }) => {
         if (cancelled) return;
         lastCfiRef.current = cfi;
+        chapterRef.current = href;
         if (typeof percent === "number") setPercent(percent);
         if (!restoredRef.current) return;
 
@@ -224,6 +258,7 @@ export default function ReaderPage() {
       controllerRef.current = ctrl;
       ctrl.setTheme(settingsRef.current.theme);
       ctrl.setFontSizePercent(settingsRef.current.fontSizePercent);
+      ctrl.setLineHeight(settingsRef.current.lineHeight);
       ctrl.setSpreadMode(spreadModeRef.current);
 
       try {
@@ -242,6 +277,7 @@ export default function ReaderPage() {
       } catch (e) {
         logFrontend(`reader: annotations load failed ${book.id} ${String(e)}`);
       }
+      setAnnotationsLoaded(true);
 
       const cfiFromUrl = new URLSearchParams(locationSearchRef.current).get("cfi");
       if (cfiFromUrl) {
@@ -287,8 +323,9 @@ export default function ReaderPage() {
     if (!controllerRef.current) return;
     controllerRef.current.setTheme(settings.theme);
     controllerRef.current.setFontSizePercent(settings.fontSizePercent);
+    controllerRef.current.setLineHeight(settings.lineHeight);
     controllerRef.current.setSpreadMode(spreadMode);
-  }, [settings.theme, settings.fontSizePercent, settings.layoutMode, spreadMode]);
+  }, [settings.theme, settings.fontSizePercent, settings.lineHeight, settings.layoutMode, spreadMode]);
 
   useEffect(() => {
     if (isImmersive) setDrawerOpen(false);
@@ -354,7 +391,7 @@ export default function ReaderPage() {
         const cfi = lastCfiRef.current;
         if (!book || !cfi) return;
         void (async () => {
-          const bm = await addBookmark(book.id, cfi, null);
+          const bm = await addBookmark(book.id, cfi, chapterLabel());
           setBookmarks((prev) => (prev.some((x) => x.cfi === bm.cfi) ? prev : [bm, ...prev]));
           setSideTab("bookmarks");
         })();
@@ -363,13 +400,13 @@ export default function ReaderPage() {
 
       if (isTyping) return;
 
-      if (e.key === "ArrowLeft") {
+      if (e.key === "ArrowLeft" || e.key === "PageUp") {
         e.preventDefault();
         void animateTurn("prev");
         return;
       }
 
-      if (e.key === "ArrowRight") {
+      if (e.key === "ArrowRight" || e.key === "PageDown") {
         e.preventDefault();
         void animateTurn("next");
         return;
@@ -391,7 +428,7 @@ export default function ReaderPage() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [book, drawerOpen, isImmersive, settings.pageAnimation]);
+  }, [book, drawerOpen, isImmersive, settings.pageAnimation, toc]);
 
   useEffect(() => {
     const el = viewerRef.current;
@@ -424,10 +461,12 @@ export default function ReaderPage() {
   }, [drawerOpen, settings.pageAnimation]);
 
   async function persistSettings(next: ReaderSettings) {
+    settingsTouchedRef.current = true;
     await setSetting("theme", next.theme);
     await setSetting("fontSizePercent", String(next.fontSizePercent));
     await setSetting("pageAnimation", next.pageAnimation);
     await setSetting("layoutMode", next.layoutMode);
+    await setSetting("lineHeight", String(next.lineHeight));
   }
 
   async function animateTurn(direction: "next" | "prev") {
@@ -444,7 +483,11 @@ export default function ReaderPage() {
       }
     };
 
-    if (!el || settings.pageAnimation === "none") {
+    if (
+      !el ||
+      settings.pageAnimation === "none" ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
       await run();
       return;
     }
@@ -579,12 +622,7 @@ export default function ReaderPage() {
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {toc.map((item) => (
-                      <button
-                        key={item.href}
-                        className="wr-card"
-                        style={{ textAlign: "left", cursor: "pointer" }}
-                        onClick={() => locate(item.href)}
-                      >
+                      <button key={item.href} className="wr-toc-item" onClick={() => locate(item.href)}>
                         {item.label}
                       </button>
                     ))}
@@ -596,16 +634,18 @@ export default function ReaderPage() {
             {sideTab === "bookmarks" ? (
               <BookmarksPanel
                 items={bookmarks}
+                loaded={annotationsLoaded}
                 onAdd={() => {
                   const cfi = lastCfiRef.current;
                   if (!book || !cfi) return;
                   void (async () => {
-                    const bm = await addBookmark(book.id, cfi, null);
+                    const bm = await addBookmark(book.id, cfi, chapterLabel());
                     setBookmarks((prev) => (prev.some((x) => x.cfi === bm.cfi) ? prev : [bm, ...prev]));
                   })();
                 }}
                 onOpen={(cfi) => locate(cfi)}
                 onDelete={(id) => {
+                  if (!window.confirm("确定删除该书签吗？")) return;
                   void (async () => {
                     await deleteBookmark(id);
                     setBookmarks((prev) => prev.filter((b) => b.id !== id));
@@ -617,8 +657,10 @@ export default function ReaderPage() {
             {sideTab === "highlights" ? (
               <HighlightsPanel
                 items={highlights}
+                loaded={annotationsLoaded}
                 onOpen={(cfiRange) => locate(cfiRange)}
                 onDelete={(id) => {
+                  if (!window.confirm("确定删除该标注吗？笔记将一并删除")) return;
                   const h = highlights.find((x) => x.id === id);
                   void (async () => {
                     await deleteHighlight(id);
@@ -631,8 +673,10 @@ export default function ReaderPage() {
 
             {sideTab === "favorites" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {favoriteQuotes.length === 0 ? (
-                  <div className="wr-muted">暂无收藏</div>
+                {!annotationsLoaded ? (
+                  <div className="wr-muted">加载中…</div>
+                ) : favoriteQuotes.length === 0 ? (
+                  <div className="wr-muted">还没有收藏，选中正文一段文字试试</div>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {favoriteQuotes.map((q) => (
@@ -646,6 +690,7 @@ export default function ReaderPage() {
                           <button
                             className="wr-btn"
                             onClick={() => {
+                              if (!window.confirm("确定删除这条收藏吗？")) return;
                               void (async () => {
                                 await deleteFavoriteQuote(q.id);
                                 setFavoriteQuotes((prev) => prev.filter((x) => x.id !== q.id));
@@ -668,6 +713,7 @@ export default function ReaderPage() {
                 query={searchQuery}
                 onQueryChange={setSearchQuery}
                 loading={searchLoading}
+                searched={searched}
                 results={searchResults}
                 onSearch={() => {
                   void (async () => {
@@ -675,6 +721,7 @@ export default function ReaderPage() {
                     if (!ctrl) return;
                     const seq = ++searchSeqRef.current;
                     setSearchLoading(true);
+                    setSearched(true);
                     try {
                       const res = await ctrl.search(searchQuery);
                       if (searchSeqRef.current !== seq) return;
@@ -707,7 +754,7 @@ export default function ReaderPage() {
                       const d = noteDraft;
                       if (!book || !d) return;
                       void (async () => {
-                        const h = await addHighlight(book.id, d.cfiRange, "#ffe600", noteText.trim() ? noteText : null);
+                        const h = await addHighlight(book.id, d.cfiRange, HIGHLIGHT_COLOR, noteText.trim() ? noteText : null);
                         setHighlights((prev) => (prev.some((x) => x.cfi_range === h.cfi_range) ? prev : [h, ...prev]));
                         controllerRef.current?.addHighlight(d.cfiRange);
                         setNoteDraft(null);
@@ -733,14 +780,19 @@ export default function ReaderPage() {
           </Drawer>
 
           <div className="wr-reader-paper-wrap">
+            {!readerError && (!book || tocLoading) ? (
+              <div className="wr-muted" style={{ padding: 16, margin: "auto" }}>
+                加载中…
+              </div>
+            ) : null}
             <div
               ref={containerRef}
-              className="wr-reader-paper"
+              className={spreadMode === "always" ? "wr-reader-paper wr-reader-paper--wide" : "wr-reader-paper"}
             />
           </div>
 
           {pagerEnabled ? (
-            <div style={{ position: "absolute", inset: 18, zIndex: 15, pointerEvents: "none", borderRadius: 22 }}>
+            <div style={{ position: "absolute", inset: 18, zIndex: "var(--wr-z-pager)", pointerEvents: "none", borderRadius: 22 }}>
               {pagerHover ? (
                 <div
                   style={{
@@ -770,7 +822,7 @@ export default function ReaderPage() {
                   top: 0,
                   bottom: 0,
                   width: stage.leftEdgeWidth,
-                  cursor: "w-resize",
+                  cursor: "pointer",
                   pointerEvents: "auto",
                 }}
               />
@@ -786,7 +838,7 @@ export default function ReaderPage() {
                   top: 0,
                   bottom: 0,
                   width: stage.rightEdgeWidth,
-                  cursor: "e-resize",
+                  cursor: "pointer",
                   pointerEvents: "auto",
                 }}
               />
@@ -799,7 +851,7 @@ export default function ReaderPage() {
               const s = selection;
               if (!book || !s) return;
               void (async () => {
-                const h = await addHighlight(book.id, s.cfiRange, "#ffe600", null);
+                const h = await addHighlight(book.id, s.cfiRange, HIGHLIGHT_COLOR, s.text);
                 setHighlights((prev) => (prev.some((x) => x.cfi_range === h.cfi_range) ? prev : [h, ...prev]));
                 controllerRef.current?.addHighlight(s.cfiRange);
                 setSelection(null);
@@ -835,20 +887,26 @@ export default function ReaderPage() {
                 justifyContent: "center",
                 padding: 16,
                 background: "rgba(0,0,0,0.45)",
-                zIndex: 30,
+                zIndex: "var(--wr-z-overlay)",
               }}
             >
-              <div style={{ maxWidth: 720, width: "100%", border: "1px solid var(--border)", borderRadius: 14, padding: 14, background: "var(--panel-solid)", boxShadow: "var(--shadow-sm)" }}>
+              <div role="alert" style={{ maxWidth: 720, width: "100%", border: "1px solid var(--border)", borderRadius: "var(--wr-radius-lg)", padding: 14, background: "var(--panel-solid)", boxShadow: "var(--shadow-sm)" }}>
                 <div style={{ fontWeight: 600, marginBottom: 8 }}>加载失败</div>
                 <div style={{ whiteSpace: "pre-wrap", color: "var(--text-muted)", marginBottom: 12 }}>{readerError}</div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button
                     onClick={() => {
-                      void navigator.clipboard?.writeText(readerError);
+                      navigator.clipboard
+                        ?.writeText(readerError)
+                        .then(() => {
+                          setErrorCopied(true);
+                          window.setTimeout(() => setErrorCopied(false), 1500);
+                        })
+                        .catch(() => {});
                     }}
-                    className="btn-primary"
+                    className="wr-btn wr-btn-primary"
                   >
-                    复制错误
+                    {errorCopied ? "已复制" : "复制错误"}
                   </button>
                   <button
                     onClick={() => {
@@ -856,7 +914,7 @@ export default function ReaderPage() {
                       setTocLoading(true);
                       setRetryKey((k) => k + 1);
                     }}
-                    className="btn-primary"
+                    className="wr-btn wr-btn-primary"
                   >
                     重试
                   </button>
@@ -886,7 +944,9 @@ export default function ReaderPage() {
             <IconChevronRight />
             下一页
           </button>
-          <div style={{ flex: 1 }} />
+          <div className="wr-progress" aria-hidden="true">
+            <div style={{ width: `${Math.round((percent ?? 0) * 100)}%` }} />
+          </div>
           <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
             {typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
           </div>
@@ -902,9 +962,13 @@ export default function ReaderPage() {
             pointerEvents: immersiveHudVisible ? "auto" : "none",
             opacity: immersiveHudVisible ? 1 : 0,
             transform: immersiveHudVisible ? "translateY(0)" : "translateY(-6px)",
+            visibility: immersiveHudVisible ? "visible" : "hidden",
           }}
         >
           <div className="wr-immersive-hud-card">
+            <div className="wr-muted" style={{ fontSize: 12, padding: "0 6px" }}>
+              Esc 退出 · 移到顶部唤出
+            </div>
             <button
               className="wr-btn"
               onClick={() => {

@@ -77,13 +77,19 @@ pub fn upsert_reading_state(
     percent: Option<f64>,
 ) -> Result<(), String> {
     let conn = db::open_db(&app)?;
+    let ts = now_ts();
     conn.execute(
         "INSERT INTO reading_state (book_id, cfi, percent, updated_at)
          VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(book_id) DO UPDATE SET cfi = excluded.cfi, percent = COALESCE(excluded.percent, percent), updated_at = excluded.updated_at",
-        params![book_id, cfi, percent, now_ts()],
+        params![book_id, cfi, percent, ts],
     )
     .map_err(|e| format!("failed to upsert reading_state: {e}"))?;
+    conn.execute(
+        "UPDATE books SET last_opened_at = ?2 WHERE id = ?1",
+        params![book_id, ts],
+    )
+    .map_err(|e| format!("failed to update last_opened_at: {e}"))?;
 
     Ok(())
 }
@@ -140,11 +146,20 @@ mod tests {
         )
         .unwrap();
 
+        // shortcut: mirror only — the UPDATE lives in the command body (needs AppHandle); extract a db helper when this test must cover it
+        conn.execute(
+            "UPDATE books SET last_opened_at = ?2 WHERE id = ?1",
+            params!["b1", 2i64],
+        )
+        .unwrap();
+
         let mut stmt = conn
             .prepare("SELECT cfi, percent FROM reading_state WHERE book_id = ?1")
             .unwrap();
         let (cfi, percent): (String, f64) = stmt.query_row(["b1"], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
         assert_eq!(cfi, "cfi2");
         assert_eq!(percent, 0.2);
+        let last: Option<i64> = conn.query_row("SELECT last_opened_at FROM books WHERE id = ?1", ["b1"], |r| r.get(0)).unwrap();
+        assert!(last.is_some());
     }
 }

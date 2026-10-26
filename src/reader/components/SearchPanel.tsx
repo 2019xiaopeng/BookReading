@@ -5,6 +5,7 @@ export default function SearchPanel(props: {
   onQueryChange: (q: string) => void;
   onSearch: () => void;
   loading: boolean;
+  searched?: boolean;
   results: { cfi: string; excerpt: string }[];
   onOpen: (cfi: string) => void;
   inputRef?: RefObject<HTMLInputElement | null>;
@@ -16,6 +17,7 @@ export default function SearchPanel(props: {
       <div style={{ display: "flex", gap: 8 }}>
         <input
           ref={props.inputRef}
+          aria-label="搜索关键词"
           value={props.query}
           onChange={(e) => props.onQueryChange(e.currentTarget.value)}
           onKeyDown={(e) => {
@@ -30,19 +32,20 @@ export default function SearchPanel(props: {
         </button>
       </div>
 
-      {props.loading ? <div className="wr-muted">搜索中…</div> : null}
+      {props.loading ? (
+        <div className="wr-muted" role="status">
+          搜索中…
+        </div>
+      ) : null}
 
       {props.results.length === 0 && !props.loading ? (
-        <div className="wr-muted">暂无结果</div>
+        <div className="wr-muted" role="status">
+          {props.searched ? "没有找到匹配内容" : "输入关键词，回车搜索"}
+        </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {props.results.map((r) => (
-            <button
-              key={r.cfi}
-              onClick={() => props.onOpen(r.cfi)}
-              className="wr-card"
-              style={{ textAlign: "left", cursor: "pointer" }}
-            >
+            <button key={r.cfi} onClick={() => props.onOpen(r.cfi)} className="wr-toc-item">
               <div style={{ color: "var(--wr-ink)" }}>{r.excerpt}</div>
             </button>
           ))}

@@ -100,14 +100,14 @@ export default function LibraryPage() {
     }
   }
 
-  async function onDelete(bookId: string) {
+  async function onDelete(book: Book) {
     if (loading) return;
-    const ok = window.confirm("确定删除这本书吗？");
+    const ok = window.confirm(`确定删除《${formatTitle(book)}》吗？阅读进度、书签与标注将一并删除，且不可恢复。`);
     if (!ok) return;
 
     setLoading(true);
     try {
-      await deleteBook(bookId);
+      await deleteBook(book.id);
       await refresh();
     } catch (e) {
       window.alert(String(e));
@@ -127,14 +127,14 @@ export default function LibraryPage() {
             刷新
           </button>
           <button className="wr-small-btn wr-primary" onClick={onImport} disabled={loading}>
-            导入 EPUB
+            {loading ? "导入中…" : "导入 EPUB"}
           </button>
         </>
       }
     >
       <div className="wr-book-grid">
         {booksFiltered.map((b) => (
-          <div key={b.id} className="wr-book-card">
+          <div key={b.id} className="wr-book-card" onClick={(e) => { if ((e.target as HTMLElement).closest("button")) return; navigate(`/read/${b.id}`); }}>
             <div className="wr-cover">
               {b.cover_path && coverUrls[b.cover_path] ? <img src={coverUrls[b.cover_path]} alt="" /> : null}
               {!b.cover_path || !coverUrls[b.cover_path] ? (
@@ -154,6 +154,12 @@ export default function LibraryPage() {
                 <div className="wr-chip" style={{ fontFamily: "var(--wr-mono)" }}>
                   {new Date(b.added_at * 1000).toLocaleDateString()}
                 </div>
+                {typeof b.reading_percent === "number" ? (
+                  <div className="wr-chip">
+                    <span className="wr-chip-dot" />
+                    <span>读到 {Math.round(b.reading_percent * 100)}%</span>
+                  </div>
+                ) : null}
               </div>
 
               <div className="wr-actions">
@@ -179,7 +185,7 @@ export default function LibraryPage() {
                 >
                   {b.is_favorite ? "取消收藏" : "收藏"}
                 </button>
-                <button className="wr-btn" disabled={loading} onClick={() => onDelete(b.id)}>
+                <button className="wr-btn" disabled={loading} onClick={() => onDelete(b)}>
                   删除
                 </button>
               </div>
@@ -189,8 +195,8 @@ export default function LibraryPage() {
       </div>
 
       {booksFiltered.length === 0 ? (
-        <div className="muted" style={{ padding: 16 }}>
-          暂无书籍，点击右上角导入 EPUB。
+        <div className="wr-muted" style={{ padding: 16, gridColumn: "1 / -1" }}>
+          {query.trim() ? "没有匹配的书籍" : "书架还是空的，从左下角导入第一本 EPUB 试试"}
         </div>
       ) : null}
     </AppShell>

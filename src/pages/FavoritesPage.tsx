@@ -62,7 +62,18 @@ export default function FavoritesPage() {
     <AppShell
       active="favorites"
       title="收藏"
-      search={{ value: query, placeholder: tab === "books" ? "搜索书名 / 作者" : "搜索收藏句子", onChange: setQuery }}
+      search={{
+        value: query,
+        placeholder: tab === "books" ? "搜索书名 / 作者" : "搜索收藏句子",
+        onChange: setQuery,
+        onSubmit:
+          tab === "quotes"
+            ? () => {
+                setLoading(true);
+                refreshQuotes().finally(() => setLoading(false));
+              }
+            : undefined,
+      }}
       seg={{
         items: [
           { key: "books", label: "收藏书籍" },
@@ -94,7 +105,7 @@ export default function FavoritesPage() {
       {tab === "books" ? (
         <div className="wr-book-grid">
           {filteredBooks.map((b) => (
-            <div key={b.id} className="wr-book-card">
+            <div key={b.id} className="wr-book-card" onClick={(e) => { if ((e.target as HTMLElement).closest("button")) return; navigate(`/read/${b.id}`); }}>
               <div className="wr-cover">
                 {b.cover_path && coverUrls[b.cover_path] ? <img src={coverUrls[b.cover_path]} alt="" /> : null}
                 {!b.cover_path || !coverUrls[b.cover_path] ? (
@@ -132,8 +143,8 @@ export default function FavoritesPage() {
           ))}
 
           {filteredBooks.length === 0 ? (
-            <div className="muted" style={{ padding: 16 }}>
-              暂无收藏书籍
+            <div className="wr-muted" style={{ padding: 16 }}>
+              {query.trim() ? "没有匹配的收藏" : "还没有收藏书籍，去书架点一本书的“收藏”试试"}
             </div>
           ) : null}
         </div>
@@ -143,6 +154,7 @@ export default function FavoritesPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 18 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <select
+              aria-label="按书籍筛选"
               className="wr-select"
               value={filterBookId}
               onChange={(e) => {
@@ -170,8 +182,8 @@ export default function FavoritesPage() {
           </div>
 
           {quotes.length === 0 ? (
-            <div className="muted" style={{ padding: 16 }}>
-              暂无收藏句子
+            <div className="wr-muted" style={{ padding: 16 }}>
+              {query.trim() || filterBookId !== "all" ? "没有匹配的收藏句子" : "还没有收藏句子，阅读时选中一段文字试试"}
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -189,6 +201,7 @@ export default function FavoritesPage() {
                     <button
                       className="wr-btn"
                       onClick={() => {
+                        if (!window.confirm("确定删除这条收藏吗？")) return;
                         setLoading(true);
                         deleteFavoriteQuote(q.id)
                           .then(() => refreshQuotes())
