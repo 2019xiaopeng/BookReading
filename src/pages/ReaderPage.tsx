@@ -62,6 +62,7 @@ import {
 import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
+import { showConfirm } from "../ui/dialog";
 import { useElementSize } from "../ui/useElementSize";
 import { useImmersiveChrome } from "../ui/useImmersiveChrome";
 import { getBackgroundUrl } from "../ui/appBackground";
@@ -77,6 +78,7 @@ import {
   IconLock,
   IconLockOpen,
   IconQuote,
+  IconRefresh,
   IconSearch,
   IconSettings,
 } from "../ui/icons";
@@ -935,9 +937,19 @@ export default function ReaderPage() {
             {sideTab === "toc" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {tocLoading ? (
-                  <div className="wr-muted">加载中…</div>
+                  <div className="wr-state wr-state-loading">
+                    <span className="wr-state-icon" aria-hidden="true">
+                      <IconRefresh />
+                    </span>
+                    <div className="wr-state-title">加载中</div>
+                  </div>
                 ) : toc.length === 0 ? (
-                  <div className="wr-muted">暂无目录</div>
+                  <div className="wr-state">
+                    <span className="wr-state-icon" aria-hidden="true">
+                      <IconList />
+                    </span>
+                    <div className="wr-state-title">暂无目录</div>
+                  </div>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {toc.map((item) => (
@@ -957,8 +969,9 @@ export default function ReaderPage() {
                 onAdd={addBookmarkHere}
                 onOpen={(cfi) => locate(cfi)}
                 onDelete={(id) => {
-                  if (!window.confirm("确定删除该书签吗？")) return;
                   void (async () => {
+                    const ok = await showConfirm("删除书签", "确定删除该书签吗？", { danger: true, confirmText: "删除" });
+                    if (!ok) return;
                     await deleteBookmark(id);
                     setBookmarks((prev) => prev.filter((b) => b.id !== id));
                   })();
@@ -972,9 +985,13 @@ export default function ReaderPage() {
                 loaded={annotationsLoaded}
                 onOpen={(cfiRange) => locate(cfiRange)}
                 onDelete={(id) => {
-                  if (!window.confirm("确定删除该标注吗？笔记将一并删除")) return;
-                  const h = highlights.find((x) => x.id === id);
                   void (async () => {
+                    const ok = await showConfirm("删除标注", "确定删除该标注吗？笔记将一并删除。", {
+                      danger: true,
+                      confirmText: "删除",
+                    });
+                    if (!ok) return;
+                    const h = highlights.find((x) => x.id === id);
                     await deleteHighlight(id);
                     setHighlights((prev) => prev.filter((x) => x.id !== id));
                     if (h) controllerRef.current?.removeHighlight(h.cfi_range);
@@ -986,9 +1003,20 @@ export default function ReaderPage() {
             {sideTab === "favorites" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {!annotationsLoaded ? (
-                  <div className="wr-muted">加载中…</div>
+                  <div className="wr-state wr-state-loading">
+                    <span className="wr-state-icon" aria-hidden="true">
+                      <IconRefresh />
+                    </span>
+                    <div className="wr-state-title">加载中</div>
+                  </div>
                 ) : favoriteQuotes.length === 0 ? (
-                  <div className="wr-muted">还没有收藏，选中正文一段文字试试</div>
+                  <div className="wr-state">
+                    <span className="wr-state-icon" aria-hidden="true">
+                      <IconQuote />
+                    </span>
+                    <div className="wr-state-title">还没有收藏</div>
+                    <div className="wr-state-sub">选中正文一段文字试试</div>
+                  </div>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {favoriteQuotes.map((q) => (
@@ -1002,8 +1030,12 @@ export default function ReaderPage() {
                           <button
                             className="wr-btn"
                             onClick={() => {
-                              if (!window.confirm("确定删除这条收藏吗？")) return;
                               void (async () => {
+                                const ok = await showConfirm("删除收藏", "确定删除这条收藏吗？", {
+                                  danger: true,
+                                  confirmText: "删除",
+                                });
+                                if (!ok) return;
                                 await deleteFavoriteQuote(q.id);
                                 setFavoriteQuotes((prev) => prev.filter((x) => x.id !== q.id));
                               })();
@@ -1132,8 +1164,11 @@ export default function ReaderPage() {
                   </div>
                 )}
                 {!readerError && (!book || tocLoading) ? (
-                  <div className="wr-muted" style={{ padding: 16, margin: "auto" }}>
-                    加载中…
+                  <div className="wr-state wr-state-loading" style={{ margin: "auto" }}>
+                    <span className="wr-state-icon" aria-hidden="true">
+                      <IconRefresh />
+                    </span>
+                    <div className="wr-state-title">加载中</div>
                   </div>
                 ) : null}
                 <div
@@ -1177,7 +1212,7 @@ export default function ReaderPage() {
           </div>
 
           {pagerEnabled ? (
-            <div style={{ position: "absolute", inset: 18, zIndex: "var(--wr-z-pager)", pointerEvents: "none", borderRadius: 22 }}>
+            <div style={{ position: "absolute", inset: 18, zIndex: "var(--wr-z-pager)", pointerEvents: "none", borderRadius: "var(--wr-radius-xl)" }}>
               {pagerHover ? (
                 <div
                   style={{
@@ -1190,8 +1225,8 @@ export default function ReaderPage() {
                     pointerEvents: "none",
                     background:
                       pagerHover === "left"
-                        ? "linear-gradient(90deg, rgba(0,0,0,0.06), rgba(0,0,0,0))"
-                        : "linear-gradient(270deg, rgba(0,0,0,0.06), rgba(0,0,0,0))",
+                        ? "linear-gradient(90deg, rgba(var(--wr-ink-rgb),0.06), rgba(var(--wr-ink-rgb),0))"
+                        : "linear-gradient(270deg, rgba(var(--wr-ink-rgb),0.06), rgba(var(--wr-ink-rgb),0))",
                   }}
                 />
               ) : null}
@@ -1295,6 +1330,7 @@ export default function ReaderPage() {
           />
           {readerError ? (
             <div
+              role="alert"
               style={{
                 position: "absolute",
                 inset: 0,
@@ -1302,14 +1338,16 @@ export default function ReaderPage() {
                 alignItems: "center",
                 justifyContent: "center",
                 padding: 16,
-                background: "rgba(0,0,0,0.45)",
+                background: "var(--wr-scrim)",
                 zIndex: "var(--wr-z-overlay)",
               }}
             >
-              <div role="alert" style={{ maxWidth: 720, width: "100%", border: "1px solid var(--border)", borderRadius: "var(--wr-radius-lg)", padding: 14, background: "var(--panel-solid)", boxShadow: "var(--shadow-sm)" }}>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>加载失败</div>
-                <div style={{ whiteSpace: "pre-wrap", color: "var(--text-muted)", marginBottom: 12 }}>{readerError}</div>
-                <div style={{ display: "flex", gap: 8 }}>
+              <div className="wr-card wr-state wr-state-error" style={{ maxWidth: 720, width: "100%" }}>
+                <div className="wr-state-title">加载失败</div>
+                <div className="wr-state-sub" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: "30vh", overflow: "auto" }}>
+                  {readerError}
+                </div>
+                <div className="wr-state-actions">
                   <button
                     onClick={() => {
                       navigator.clipboard
@@ -1320,7 +1358,7 @@ export default function ReaderPage() {
                         })
                         .catch(() => {});
                     }}
-                    className="wr-btn wr-btn-primary"
+                    className="wr-btn"
                   >
                     {errorCopied ? "已复制" : "复制错误"}
                   </button>
@@ -1387,7 +1425,7 @@ export default function ReaderPage() {
             onPointerCancel={onProgressPointerEnd}
             style={sliderReady ? { cursor: "pointer", touchAction: "none", position: "relative" } : undefined}
           >
-            <div style={{ width: `${Math.round((dragPct ?? percent ?? 0) * 100)}%` }} />
+            <div style={{ "--wr-fill": String(dragPct ?? percent ?? 0) } as React.CSSProperties} />
             {sliderReady ? (
               <span
                 aria-hidden="true"

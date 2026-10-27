@@ -1,5 +1,7 @@
 import type { RefObject } from "react";
 
+import { IconRefresh, IconSearch } from "../../ui/icons";
+
 export default function SearchPanel(props: {
   query: string;
   onQueryChange: (q: string) => void;
@@ -33,14 +35,21 @@ export default function SearchPanel(props: {
       </div>
 
       {props.loading ? (
-        <div className="wr-muted" role="status">
-          搜索中…
+        <div className="wr-state wr-state-loading" role="status">
+          <span className="wr-state-icon" aria-hidden="true">
+            <IconRefresh />
+          </span>
+          <div className="wr-state-title">搜索中</div>
         </div>
       ) : null}
 
       {props.results.length === 0 && !props.loading ? (
-        <div className="wr-muted" role="status">
-          {props.searched ? "没有找到匹配内容" : "输入关键词，回车搜索"}
+        <div className="wr-state" role="status">
+          <span className="wr-state-icon" aria-hidden="true">
+            <IconSearch />
+          </span>
+          <div className="wr-state-title">{props.searched ? "没有找到匹配内容" : "输入关键词"}</div>
+          <div className="wr-state-sub">{props.searched ? "换个关键词试试" : "回车或点搜索开始"}</div>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

@@ -25,6 +25,7 @@ import { notifyBackgroundChanged, resetBackgroundCache } from "../ui/appBackgrou
 import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
 import AppShell from "../ui/AppShell";
+import { showAlert, showConfirm } from "../ui/dialog";
 import { IconBook, IconImage, IconMore, IconPin, IconRefresh } from "../ui/icons";
 
 function formatTitle(book: Book): string {
@@ -255,7 +256,10 @@ export default function LibraryPage() {
       }
 
       if (failed.length) {
-        window.alert(`部分文件导入失败（${failed.length} 个）：\n${failed.join("\n")}\n仅支持 EPUB、TXT（UTF-8/GBK）与 CBZ 漫画`);
+        await showAlert(
+          "部分文件导入失败",
+          `${failed.length} 个文件未导入：\n${failed.join("\n")}\n仅支持 EPUB、TXT（UTF-8/GBK）与 CBZ 漫画`,
+        );
       }
 
       await refresh();
@@ -275,7 +279,8 @@ export default function LibraryPage() {
         logFrontend(`ui: batch import failed ${dir} ${String(e)}`);
       }
     }
-    window.alert(
+    await showAlert(
+      "批量导入",
       failed.length === 0
         ? `成功导入 ${dirs.length} 本`
         : `成功 ${dirs.length - failed.length} 本，失败 ${failed.length} 个：\n${failed.join("\n")}`,
@@ -296,10 +301,15 @@ export default function LibraryPage() {
         // 实测根因：把“每本一个子文件夹”的父目录当单本导入——直接子项全是子文件夹 → 无图。
         // 此时若子文件夹里有漫画，引导走批量导入而不是报错退出
         const subdirs = msg.includes("未找到图片") ? await listImageSubdirs(dir).catch(() => [] as string[]) : [];
-        if (subdirs.length > 0 && window.confirm(`该文件夹内没有直接图片，但包含 ${subdirs.length} 个图片子文件夹。\n按每个子文件夹一本批量导入？`)) {
-          await importImageDirs(subdirs);
+        if (subdirs.length > 0) {
+          const batch = await showConfirm(
+            "改为批量导入？",
+            `该文件夹内没有直接图片，但包含 ${subdirs.length} 个图片子文件夹。\n按每个子文件夹一本批量导入。`,
+            { confirmText: "批量导入" },
+          );
+          if (batch) await importImageDirs(subdirs);
         } else {
-          window.alert(`导入失败：${msg}`);
+          await showAlert("导入失败", msg);
         }
       }
       await refresh();
@@ -317,13 +327,13 @@ export default function LibraryPage() {
     try {
       const dirs = await listImageSubdirs(parent);
       if (dirs.length === 0) {
-        window.alert("父目录下没有包含图片的一级子文件夹");
+        await showAlert("批量导入", "父目录下没有包含图片的一级子文件夹");
         return;
       }
       await importImageDirs(dirs);
       await refresh();
     } catch (e) {
-      window.alert(`批量导入失败：${String(e)}`);
+      await showAlert("批量导入失败", String(e));
     } finally {
       setLoading(false);
     }
@@ -336,7 +346,7 @@ export default function LibraryPage() {
       resetBackgroundCache();
       notifyBackgroundChanged();
     } catch (e) {
-      window.alert(`设置背景失败：${String(e)}`);
+      await showAlert("设置背景失败", String(e));
     }
   }
 
@@ -350,7 +360,7 @@ export default function LibraryPage() {
       const path = await saveReaderBackground(picked);
       await applyGlobalBackground({ type: "image", path });
     } catch (e) {
-      window.alert(`设置背景失败：${String(e)}`);
+      await showAlert("设置背景失败", String(e));
     }
   }
 
@@ -372,16 +382,18 @@ export default function LibraryPage() {
       requestCoverUrl(newPath);
       await refresh();
     } catch (e) {
-      window.alert(`设置封面失败：${String(e)}`);
+      await showAlert("设置封面失败", String(e));
     }
   }
 
   async function onDelete(book: Book) {
     if (loading) return;
     const isFolderComic = book.format === "images" && !book.library_path.toLowerCase().endsWith(".cbz");
-    const ok = window.confirm(
+    const ok = await showConfirm(
+      "删除书籍",
       `确定删除《${formatTitle(book)}》吗？阅读进度、书签与标注将一并删除，且不可恢复。` +
-        (isFolderComic ? "源文件夹不会被改动，仅移除本书记录与封面。" : ""),
+        (isFolderComic ? "\n源文件夹不会被改动，仅移除本书记录与封面。" : ""),
+      { danger: true, confirmText: "删除" },
     );
     if (!ok) return;
 
@@ -390,7 +402,7 @@ export default function LibraryPage() {
       await deleteBook(book.id);
       await refresh();
     } catch (e) {
-      window.alert(String(e));
+      await showAlert("删除失败", String(e));
     } finally {
       setLoading(false);
     }
@@ -402,7 +414,7 @@ export default function LibraryPage() {
       for (const req of reqs) await updateBookMetadata(req);
       await refresh();
     } catch (e) {
-      window.alert(String(e));
+      await showAlert("操作失败", String(e));
     } finally {
       setLoading(false);
     }
@@ -478,8 +490,12 @@ export default function LibraryPage() {
     });
   }
 
-  function onDeleteGroup(group: string) {
-    if (!window.confirm(`删除分组“${group}”？组内书籍保留，归入“未分组”。`)) return;
+  async function onDeleteGroup(group: string) {
+    const ok = await showConfirm("删除分组", `删除分组“${group}”？组内书籍保留，归入“未分组”。`, {
+      danger: true,
+      confirmText: "删除",
+    });
+    if (!ok) return;
     setExtraGroups((prev) => prev.filter((g) => g !== group));
     if (groupFilter === group) setGroupFilter("全部");
     void runUpdates(
@@ -598,10 +614,18 @@ export default function LibraryPage() {
           <div
             key={b.id}
             className="wr-book-card"
+            role="button"
+            tabIndex={0}
             draggable
             onDragStart={(e) => {
               e.dataTransfer.setData("text/book-id", b.id);
               e.dataTransfer.effectAllowed = "move";
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                navigate(`/read/${b.id}`);
+              }
             }}
             onClick={(e) => { if ((e.target as HTMLElement).closest("button")) return; navigate(`/read/${b.id}`); }}
           >
@@ -621,7 +645,6 @@ export default function LibraryPage() {
               {typeof b.reading_percent === "number" ? (
                 <div className="wr-chip-row">
                   <div className="wr-chip">
-                    <span className="wr-chip-dot" />
                     <span>读到 {Math.round(b.reading_percent * 100)}%</span>
                   </div>
                 </div>
@@ -660,12 +683,26 @@ export default function LibraryPage() {
         ))}
 
         {booksFiltered.length === 0 ? (
-          <div className="wr-muted" style={{ padding: 16, gridColumn: "1 / -1" }}>
-            {query.trim()
-              ? "没有匹配的书籍"
-              : groupFilter !== "全部"
-                ? "该分组暂无书籍"
-                : "书架还是空的，从左下角导入第一本书，或在空白处右键"}
+          <div className="wr-state" style={{ gridColumn: "1 / -1" }}>
+            <span className="wr-state-icon" aria-hidden="true">
+              <IconBook />
+            </span>
+            {query.trim() ? (
+              <>
+                <div className="wr-state-title">没有匹配的书籍</div>
+                <div className="wr-state-sub">换个书名或作者试试</div>
+              </>
+            ) : groupFilter !== "全部" ? (
+              <>
+                <div className="wr-state-title">该分组暂无书籍</div>
+                <div className="wr-state-sub">拖动书籍到上方分组即可归类</div>
+              </>
+            ) : (
+              <>
+                <div className="wr-state-title">书架还是空的</div>
+                <div className="wr-state-sub">从左下角导入第一本书，或在空白处右键</div>
+              </>
+            )}
           </div>
         ) : null}
       </div>

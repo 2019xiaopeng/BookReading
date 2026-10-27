@@ -3,13 +3,13 @@
 html,
 body {
   height: 100%;
+  overflow-x: clip;
 }
 
 body {
   margin: 0;
   font-family: var(--font-sans);
-  background: radial-gradient(1200px 600px at 20% 0%, rgba(125, 211, 252, 0.14), transparent 55%),
-    radial-gradient(900px 520px at 90% 10%, rgba(251, 113, 133, 0.12), transparent 50%), var(--bg);
+  background: var(--bg);
   color: var(--text);
   letter-spacing: 0.2px;
 }

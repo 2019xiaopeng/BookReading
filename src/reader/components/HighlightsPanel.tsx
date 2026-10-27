@@ -1,4 +1,5 @@
 import type { Highlight } from "../../tauri/invoke";
+import { IconHighlight, IconRefresh } from "../../ui/icons";
 
 export default function HighlightsPanel(props: {
   items: Highlight[];
@@ -11,9 +12,20 @@ export default function HighlightsPanel(props: {
       <div style={{ fontWeight: 600 }}>标注</div>
 
       {props.loaded === false ? (
-        <div className="wr-muted">加载中…</div>
+        <div className="wr-state wr-state-loading">
+          <span className="wr-state-icon" aria-hidden="true">
+            <IconRefresh />
+          </span>
+          <div className="wr-state-title">加载中</div>
+        </div>
       ) : props.items.length === 0 ? (
-        <div className="wr-muted">还没有标注，选中正文一段文字试试</div>
+        <div className="wr-state">
+          <span className="wr-state-icon" aria-hidden="true">
+            <IconHighlight />
+          </span>
+          <div className="wr-state-title">还没有标注</div>
+          <div className="wr-state-sub">选中正文一段文字试试</div>
+        </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {props.items.map((h) => (

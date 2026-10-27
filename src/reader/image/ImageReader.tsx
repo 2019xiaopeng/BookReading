@@ -480,8 +480,11 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
   if (error) {
     return (
       <div className="wr-image-stage" role="alert" data-theme={theme}>
-        <div className="wr-muted" style={{ padding: 16, textAlign: "center" }}>
-          加载失败：{error}
+        <div className="wr-state wr-state-error">
+          <div className="wr-state-title">加载失败</div>
+          <div className="wr-state-sub" style={{ overflowWrap: "anywhere" }}>
+            {error}
+          </div>
         </div>
       </div>
     );
@@ -490,7 +493,12 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
   if (pages === null || spreadIndex === null) {
     return (
       <div className="wr-image-stage" data-theme={theme}>
-        <div className="wr-muted">加载中…</div>
+        <div className="wr-state wr-state-loading">
+          <span className="wr-state-icon" aria-hidden="true">
+            <IconRefresh />
+          </span>
+          <div className="wr-state-title">加载中</div>
+        </div>
       </div>
     );
   }

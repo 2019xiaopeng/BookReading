@@ -134,7 +134,6 @@ export default function AppShell(props: {
             <div className="wr-brand-sub">weread-inspired</div>
           </div>
           <div className="wr-pill" title="状态">
-            <span className="wr-dot" />
             <span style={{ fontSize: 12 }}>本地库</span>
           </div>
         </div>
