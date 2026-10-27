@@ -10,12 +10,23 @@ pub struct Book {
     pub added_at: i64,
     pub last_opened_at: Option<i64>,
     pub note: Option<String>,
-    pub group_name: Option<String>,
     pub pinned_at: Option<i64>,
     pub format: Option<String>,
     pub page_count: Option<i64>,
     pub reading_percent: Option<f64>,
     pub is_favorite: bool,
+    pub shelf_id: Option<i64>,
+    pub sort_order: Option<i64>,
+    pub deleted_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Shelf {
+    pub id: i64,
+    pub name: String,
+    pub parent_id: Option<i64>,
+    pub sort_order: i64,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,7 +43,6 @@ pub struct UpdateBookMetadataRequest {
     pub book_id: String,
     pub title: Option<String>,
     pub note: Option<String>,
-    pub group_name: Option<String>,
     pub pinned: Option<bool>,
 }
 

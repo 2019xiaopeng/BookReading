@@ -1,5 +1,13 @@
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS shelves (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  parent_id INTEGER NULL REFERENCES shelves(id) ON DELETE CASCADE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS books (
   id TEXT PRIMARY KEY,
   title TEXT,
@@ -13,7 +21,10 @@ CREATE TABLE IF NOT EXISTS books (
   pinned_at INTEGER,
   is_favorite INTEGER NOT NULL DEFAULT 0,
   format TEXT,
-  page_count INTEGER
+  page_count INTEGER,
+  shelf_id INTEGER NULL REFERENCES shelves(id) ON DELETE SET NULL,
+  sort_order INTEGER NULL,
+  deleted_at INTEGER NULL
 );
 
 CREATE TABLE IF NOT EXISTS reading_state (

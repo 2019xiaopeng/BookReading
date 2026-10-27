@@ -201,12 +201,14 @@ fn import_folder(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) 
         added_at: now_ts(),
         last_opened_at: None,
         note: None,
-        group_name: None,
         pinned_at: None,
         format: Some("images".to_string()),
         page_count: Some(pages.len() as i64),
         reading_percent: None,
         is_favorite: false,
+        shelf_id: None,
+        sort_order: None,
+        deleted_at: None,
     };
 
     let conn = db::open_db(app)?;
@@ -267,12 +269,14 @@ fn import_cbz(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) -> 
         added_at: now_ts(),
         last_opened_at: None,
         note: None,
-        group_name: None,
         pinned_at: None,
         format: Some("images".to_string()),
         page_count: Some(names.len() as i64),
         reading_percent: None,
         is_favorite: false,
+        shelf_id: None,
+        sort_order: None,
+        deleted_at: None,
     };
 
     let conn = db::open_db(app)?;

@@ -246,3 +246,31 @@ export function IconLockOpen(props: P) {
   );
 }
 
+export function IconFolder(props: P) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.1c.5 0 1 .2 1.4.6l1.3 1.4h7.2a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-9Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function IconTrash(props: P) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M4.5 6.5h15M9.5 6.5V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v1.5m-8 0 .8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M10 10.5v6M14 10.5v6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+

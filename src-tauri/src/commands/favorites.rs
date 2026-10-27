@@ -20,9 +20,9 @@ fn set_book_favorite_db(conn: &Connection, book_id: &str, is_favorite: bool) -> 
 
 fn list_favorite_books_db(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite, format, page_count
+        "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite, format, page_count, shelf_id, sort_order, deleted_at
          FROM books
-         WHERE is_favorite = 1
+         WHERE is_favorite = 1 AND deleted_at IS NULL
          ORDER BY COALESCE(last_opened_at, added_at) DESC",
     )?;
 
@@ -37,11 +37,13 @@ fn list_favorite_books_db(conn: &Connection) -> Result<Vec<Book>, rusqlite::Erro
             last_opened_at: row.get(6)?,
             is_favorite: row.get(7)?,
             note: None,
-            group_name: None,
             pinned_at: None,
             format: row.get(8)?,
             page_count: row.get(9)?,
             reading_percent: None,
+            shelf_id: row.get(10)?,
+            sort_order: row.get(11)?,
+            deleted_at: row.get(12)?,
         })
     })?;
 
@@ -82,6 +84,9 @@ fn list_favorite_quotes_db(
         "SELECT id, book_id, cfi_range, text, note, created_at FROM favorite_quotes".to_string();
     let mut where_parts: Vec<String> = Vec::new();
     let mut values: Vec<Box<dyn ToSql>> = Vec::new();
+
+    // 已入回收站的书不显示其收藏句（书恢复后自动回来）
+    where_parts.push("book_id IN (SELECT id FROM books WHERE deleted_at IS NULL)".to_string());
 
     if book_id.is_some() {
         where_parts.push("book_id = ?".to_string());

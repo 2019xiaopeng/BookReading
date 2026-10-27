@@ -22,6 +22,10 @@ use commands::logging::append_frontend_log;
 use commands::favorites::{
     add_favorite_quote, delete_favorite_quote, list_favorite_books, list_favorite_quotes, set_book_favorite,
 };
+use commands::shelves::{
+    create_shelf, delete_books, delete_shelf, list_shelves, list_trash, move_books_to_shelf, move_shelf,
+    purge_books, rename_shelf, restore_books, set_books_order, set_shelf_order, set_trash_retention_days,
+};
 
 fn append_startup_log(app: &tauri::AppHandle, line: &str) {
     let dir = match app_paths::app_data_dir(app) {
@@ -71,6 +75,19 @@ pub fn run() {
             set_book_cover,
             update_book_metadata,
             delete_book,
+            list_shelves,
+            create_shelf,
+            rename_shelf,
+            move_shelf,
+            delete_shelf,
+            set_shelf_order,
+            move_books_to_shelf,
+            set_books_order,
+            delete_books,
+            restore_books,
+            purge_books,
+            list_trash,
+            set_trash_retention_days,
             list_bookmarks,
             add_bookmark,
             delete_bookmark,

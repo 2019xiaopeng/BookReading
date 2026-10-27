@@ -1264,6 +1264,196 @@
   outline-offset: 2px;
 }
 
+/* 批次8：书架卡（文件夹图标占封面位），与书卡同语言 */
+.wr-shelf-card .wr-cover {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wr-shelf-icon {
+  color: var(--wr-ink);
+  opacity: 0.75;
+}
+
+/* DnD drop 目标高亮（书卡/书架卡，语义同 chips 的 .drop-target） */
+.wr-book-card.drop-target {
+  border-color: var(--wr-accent);
+  box-shadow: 0 0 0 3px rgba(var(--wr-accent-rgb), 0.25);
+}
+
+.wr-book-card[data-selected="true"] {
+  border-color: rgba(var(--wr-accent-rgb), 0.65);
+  box-shadow: 0 0 0 3px rgba(var(--wr-accent-rgb), 0.2);
+}
+
+/* 选择模式卡角复选框 */
+.wr-select-check {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--wr-hairline);
+  border-radius: 7px;
+  background: var(--panel-solid);
+  color: var(--wr-accent-ink);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.wr-select-check[aria-checked="true"] {
+  background: var(--wr-accent);
+  border-color: var(--wr-accent);
+}
+
+.wr-select-check:focus-visible {
+  outline: 2px solid var(--wr-accent);
+  outline-offset: 2px;
+}
+
+/* 批量操作浮动条（选择模式） */
+.wr-batch-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: var(--wr-z-overlay);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 14px;
+  border: 1px solid var(--wr-hairline);
+  border-radius: 999px;
+  background: var(--panel-solid);
+  box-shadow: var(--wr-shadow-pop);
+}
+
+.wr-batch-bar .wr-btn {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.wr-batch-count {
+  font-size: 13px;
+  color: var(--wr-muted);
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+/* 回收站列表行 */
+.wr-trash-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px 18px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.wr-trash-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--wr-hairline);
+  border-radius: var(--wr-radius-lg);
+  background: var(--wr-paper);
+  box-shadow: var(--wr-shadow-card);
+}
+
+[data-theme="dark"] .wr-trash-row,
+[data-theme="darkcontrast"] .wr-trash-row {
+  background: rgba(var(--wr-ink-rgb), 0.06);
+}
+
+.wr-trash-cover {
+  width: 40px;
+  height: 56px;
+  flex: 0 0 auto;
+  border: 1px solid var(--wr-hairline);
+  border-radius: var(--wr-radius-xs);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wr-muted);
+}
+
+.wr-trash-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.wr-trash-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.wr-trash-title {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wr-trash-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--wr-muted);
+}
+
+.wr-trash-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.wr-trash-actions .wr-btn {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+/* "移动到书架"树选择对话框：缩进行列表 */
+.wr-shelf-tree {
+  display: grid;
+  gap: 2px;
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.wr-shelf-tree button {
+  text-align: left;
+  border: none;
+  border-radius: var(--wr-radius-xs);
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--wr-ink);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wr-shelf-tree button:hover {
+  background: rgba(var(--wr-ink-rgb), 0.05);
+}
+
+[data-theme="dark"] .wr-shelf-tree button:hover,
+[data-theme="darkcontrast"] .wr-shelf-tree button:hover {
+  background: rgba(var(--wr-ink-rgb), 0.08);
+}
+
+.wr-shelf-tree button:focus-visible {
+  outline: 2px solid var(--wr-accent);
+  outline-offset: -2px;
+}
+
 .wr-toc-item {
   text-align: left;
   border: 1px solid transparent;

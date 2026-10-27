@@ -70,8 +70,8 @@ pub(crate) fn atomic_write_to(tmp: &Path, final_path: &Path, bytes: &[u8]) -> Re
 
 pub(crate) fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO books (id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite, format, page_count)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO books (id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite, format, page_count, shelf_id, sort_order, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             book.id,
             book.title,
@@ -82,7 +82,10 @@ pub(crate) fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite
             book.last_opened_at,
             book.is_favorite,
             book.format,
-            book.page_count
+            book.page_count,
+            book.shelf_id,
+            book.sort_order,
+            book.deleted_at
         ],
     )?;
     Ok(())
@@ -91,8 +94,9 @@ pub(crate) fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite
 fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT b.id, b.title, b.author, b.cover_path, b.library_path, b.added_at, b.last_opened_at,
-               b.is_favorite, b.note, b.group_name, b.pinned_at, b.format, b.page_count, r.percent
+               b.is_favorite, b.note, b.pinned_at, b.format, b.page_count, b.shelf_id, b.sort_order, b.deleted_at, r.percent
          FROM books b LEFT JOIN reading_state r ON r.book_id = b.id
+         WHERE b.deleted_at IS NULL
          ORDER BY (b.pinned_at IS NULL) ASC, COALESCE(b.pinned_at, 0) DESC, COALESCE(b.last_opened_at, b.added_at) DESC",
     )?;
 
@@ -108,11 +112,13 @@ fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
                 last_opened_at: row.get(6)?,
                 is_favorite: row.get(7)?,
                 note: row.get(8)?,
-                group_name: row.get(9)?,
-                pinned_at: row.get(10)?,
-                format: row.get(11)?,
-                page_count: row.get(12)?,
-                reading_percent: row.get(13)?,
+                pinned_at: row.get(9)?,
+                format: row.get(10)?,
+                page_count: row.get(11)?,
+                shelf_id: row.get(12)?,
+                sort_order: row.get(13)?,
+                deleted_at: row.get(14)?,
+                reading_percent: row.get(15)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -136,7 +142,7 @@ fn delete_book_by_id(conn: &Connection, book_id: &str) -> Result<(Option<String>
 pub(crate) fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book, rusqlite::Error> {
     conn.query_row(
         "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at,
-               is_favorite, note, group_name, pinned_at, format, page_count
+               is_favorite, note, pinned_at, format, page_count, shelf_id, sort_order, deleted_at
          FROM books
          WHERE id = ?1",
         [book_id],
@@ -151,10 +157,12 @@ pub(crate) fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book,
                 last_opened_at: row.get(6)?,
                 is_favorite: row.get(7)?,
                 note: row.get(8)?,
-                group_name: row.get(9)?,
-                pinned_at: row.get(10)?,
-                format: row.get(11)?,
-                page_count: row.get(12)?,
+                pinned_at: row.get(9)?,
+                format: row.get(10)?,
+                page_count: row.get(11)?,
+                shelf_id: row.get(12)?,
+                sort_order: row.get(13)?,
+                deleted_at: row.get(14)?,
                 reading_percent: None,
             })
         },
@@ -333,12 +341,14 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         added_at: now_ts(),
         last_opened_at: None,
         note: None,
-        group_name: None,
         pinned_at: None,
         format: None,
         page_count: None,
         reading_percent: None,
         is_favorite: false,
+        shelf_id: None,
+        sort_order: None,
+        deleted_at: None,
     };
 
     let conn = db::open_db(&app)?;
@@ -389,7 +399,6 @@ fn merge_metadata(existing: &Book, req: &UpdateBookMetadataRequest, now: i64) ->
             None => existing.title.clone(),
         },
         note: apply(&req.note, &existing.note),
-        group_name: apply(&req.group_name, &existing.group_name),
         pinned_at: match req.pinned {
             Some(true) => Some(now),
             Some(false) => None,
@@ -409,8 +418,8 @@ pub fn update_book_metadata(app: tauri::AppHandle, req: UpdateBookMetadataReques
     let merged = merge_metadata(&existing, &req, now_ts());
 
     conn.execute(
-        "UPDATE books SET note = ?2, group_name = ?3, pinned_at = ?4, title = ?5 WHERE id = ?1",
-        params![req.book_id, merged.note, merged.group_name, merged.pinned_at, merged.title],
+        "UPDATE books SET note = ?2, pinned_at = ?3, title = ?4 WHERE id = ?1",
+        params![req.book_id, merged.note, merged.pinned_at, merged.title],
     )
     .map_err(|e| format!("failed to update book: {e}"))?;
 
@@ -571,12 +580,14 @@ mod tests {
             added_at: 1,
             last_opened_at: None,
             note: None,
-            group_name: None,
             pinned_at: None,
             format: None,
             page_count: None,
             reading_percent: None,
             is_favorite: false,
+            shelf_id: None,
+            sort_order: None,
+            deleted_at: None,
         };
 
         insert_book(&conn, &book).unwrap();
@@ -610,12 +621,14 @@ mod tests {
             added_at: 1,
             last_opened_at: None,
             note: None,
-            group_name: None,
             pinned_at: None,
             format: None,
             page_count: None,
             reading_percent: None,
             is_favorite: false,
+            shelf_id: None,
+            sort_order: None,
+            deleted_at: None,
         };
 
         insert_book(&conn, &book).unwrap();
@@ -655,12 +668,14 @@ mod tests {
             added_at,
             last_opened_at: None,
             note: None,
-            group_name: None,
             pinned_at: None,
             format: None,
             page_count: None,
             reading_percent: None,
             is_favorite: false,
+            shelf_id: None,
+            sort_order: None,
+            deleted_at: None,
         }
     }
 
@@ -683,18 +698,15 @@ mod tests {
     fn merge_metadata_keeps_existing_when_request_none() {
         let mut existing = test_book("b1", 1);
         existing.note = Some("备注".to_string());
-        existing.group_name = Some("分组".to_string());
         existing.pinned_at = Some(7);
         let req = UpdateBookMetadataRequest {
             book_id: "b1".to_string(),
             title: None,
             note: None,
-            group_name: None,
             pinned: None,
         };
         let merged = merge_metadata(&existing, &req, 42);
         assert_eq!(merged.note, existing.note);
-        assert_eq!(merged.group_name, existing.group_name);
         assert_eq!(merged.pinned_at, existing.pinned_at);
     }
 
@@ -702,17 +714,26 @@ mod tests {
     fn merge_metadata_blank_request_clears_value() {
         let mut existing = test_book("b1", 1);
         existing.note = Some("旧备注".to_string());
-        existing.group_name = Some("旧分组".to_string());
         let req = UpdateBookMetadataRequest {
             book_id: "b1".to_string(),
             title: None,
             note: Some("   ".to_string()),
-            group_name: Some("".to_string()),
             pinned: None,
         };
         let merged = merge_metadata(&existing, &req, 42);
         assert_eq!(merged.note, None);
-        assert_eq!(merged.group_name, None);
+    }
+
+    #[test]
+    fn fetch_books_excludes_soft_deleted() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(db::SCHEMA_SQL).unwrap();
+        insert_book(&conn, &test_book("b1", 1)).unwrap();
+        insert_book(&conn, &test_book("b2", 2)).unwrap();
+        conn.execute("UPDATE books SET deleted_at = 99 WHERE id = 'b2'", []).unwrap();
+
+        let ids: Vec<String> = fetch_books(&conn).unwrap().into_iter().map(|b| b.id).collect();
+        assert_eq!(ids, vec!["b1".to_string()]);
     }
 
     #[test]
@@ -723,7 +744,6 @@ mod tests {
             book_id: "b1".to_string(),
             title: None,
             note: None,
-            group_name: None,
             pinned: Some(true),
         };
         assert_eq!(merge_metadata(&existing, &pin, 42).pinned_at, Some(42));
@@ -731,7 +751,6 @@ mod tests {
             book_id: "b1".to_string(),
             title: None,
             note: None,
-            group_name: None,
             pinned: Some(false),
         };
         assert_eq!(merge_metadata(&existing, &unpin, 42).pinned_at, None);
@@ -759,7 +778,6 @@ mod tests {
             book_id: "b1".to_string(),
             title: Some("改名".to_string()),
             note: None,
-            group_name: None,
             pinned: None,
         };
         assert_eq!(merge_metadata(&existing, &req, 42).title, Some("改名".to_string()));
@@ -773,7 +791,6 @@ mod tests {
             book_id: "b1".to_string(),
             title: None,
             note: None,
-            group_name: None,
             pinned: None,
         };
         assert_eq!(merge_metadata(&existing, &req, 42).title, Some("原名".to_string()));

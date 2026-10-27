@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use time::OffsetDateTime;
 
 use crate::app_paths;
 
@@ -73,6 +74,9 @@ pub fn ensure_book_columns(conn: &Connection) -> Result<(), String> {
         "ALTER TABLE books ADD COLUMN pinned_at INTEGER",
         "ALTER TABLE books ADD COLUMN format TEXT",
         "ALTER TABLE books ADD COLUMN page_count INTEGER",
+        "ALTER TABLE books ADD COLUMN shelf_id INTEGER NULL REFERENCES shelves(id) ON DELETE SET NULL",
+        "ALTER TABLE books ADD COLUMN sort_order INTEGER NULL",
+        "ALTER TABLE books ADD COLUMN deleted_at INTEGER NULL",
     ] {
         if let Err(e) = conn.execute(ddl, []) {
             if !e.to_string().contains("duplicate column name") {
@@ -80,6 +84,59 @@ pub fn ensure_book_columns(conn: &Connection) -> Result<(), String> {
             }
         }
     }
+    Ok(())
+}
+
+/// 一次性 group_name → shelves 迁移（幂等）：每个非空唯一分组名对应一个根级书架（存在同名根书架则复用，判重防重复建），
+/// 把 shelf_id 仍为空且带该分组的书挂上去。group_name 列保留不再读写。
+pub fn migrate_groups_to_shelves(conn: &Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT group_name FROM books
+             WHERE group_name IS NOT NULL AND TRIM(group_name) <> ''",
+        )
+        .map_err(|e| format!("failed to prepare group migration select: {e}"))?;
+    let names: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("failed to query group migration: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+    if names.is_empty() {
+        return Ok(());
+    }
+
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("failed to begin group migration: {e}"))?;
+    for name in names {
+        let existing: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM shelves WHERE name = ?1 AND parent_id IS NULL",
+                [&name],
+                |row| row.get(0),
+            )
+            .ok();
+        let shelf_id = match existing {
+            Some(id) => id,
+            None => {
+                let created = OffsetDateTime::now_utc().unix_timestamp();
+                tx.execute(
+                    "INSERT INTO shelves (name, parent_id, sort_order, created_at) VALUES (?1, NULL, 0, ?2)",
+                    rusqlite::params![name, created],
+                )
+                .map_err(|e| format!("failed to insert shelf for group: {e}"))?;
+                tx.last_insert_rowid()
+            }
+        };
+        tx.execute(
+            "UPDATE books SET shelf_id = ?1 WHERE group_name = ?2 AND shelf_id IS NULL",
+            rusqlite::params![shelf_id, name],
+        )
+        .map_err(|e| format!("failed to link books to shelf: {e}"))?;
+    }
+    tx.commit()
+        .map_err(|e| format!("failed to commit group migration: {e}"))?;
     Ok(())
 }
 
@@ -144,7 +201,14 @@ mod tests {
     fn ensure_book_columns_adds_missing_columns_and_is_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE books (
+            "CREATE TABLE shelves (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                parent_id INTEGER NULL REFERENCES shelves(id) ON DELETE CASCADE,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE books (
                 id TEXT PRIMARY KEY,
                 title TEXT,
                 author TEXT,
@@ -170,8 +234,61 @@ mod tests {
         assert!(cols.contains(&"pinned_at".to_string()));
         assert!(cols.contains(&"format".to_string()));
         assert!(cols.contains(&"page_count".to_string()));
+        assert!(cols.contains(&"shelf_id".to_string()));
+        assert!(cols.contains(&"sort_order".to_string()));
+        assert!(cols.contains(&"deleted_at".to_string()));
 
         ensure_book_columns(&conn).unwrap();
+    }
+
+    fn insert_old_book(conn: &Connection, id: &str, group: Option<&str>) {
+        conn.execute(
+            "INSERT INTO books (id, title, library_path, added_at, group_name) VALUES (?1, ?2, ?3, 1, ?4)",
+            rusqlite::params![id, format!("t{id}"), format!("library/books/{id}.epub"), group],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn group_migration_creates_root_shelves_and_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::SCHEMA_SQL).unwrap();
+        insert_old_book(&conn, "b1", Some("小说"));
+        insert_old_book(&conn, "b2", Some("小说"));
+        insert_old_book(&conn, "b3", Some("漫画"));
+        insert_old_book(&conn, "b4", None);
+        insert_old_book(&conn, "b5", Some("  ")); // 空白分组等同未分组，不建书架
+
+        migrate_groups_to_shelves(&conn).unwrap();
+
+        let shelves: Vec<(i64, String)> = conn
+            .prepare("SELECT id, name FROM shelves ORDER BY name")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(shelves.len(), 2);
+
+        let shelf_of = |id: &str| -> Option<i64> {
+            conn.query_row("SELECT shelf_id FROM books WHERE id = ?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(shelf_of("b1"), shelf_of("b2")); // 同组同书架
+        let novel = shelf_of("b1");
+        let comic = shelf_of("b3");
+        assert_eq!(shelf_of("b4"), None); // 未分组留根
+        assert_eq!(shelf_of("b5"), None);
+
+        // 重跑：复用既有同名根书架，不重复建、不重复挂
+        insert_old_book(&conn, "b6", Some("小说"));
+        migrate_groups_to_shelves(&conn).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM shelves", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(shelf_of("b6"), novel);
+        assert_ne!(novel, comic);
     }
 
     #[test]

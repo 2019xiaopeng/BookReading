@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { IconBook, IconPalette, IconSearch, IconStar } from "./icons";
+import { IconBook, IconPalette, IconSearch, IconStar, IconTrash } from "./icons";
 import { getBackgroundUrl, subscribeBackground } from "./appBackground";
 import { applyPersistedTheme, setTheme, THEME_SWATCHES, useTheme } from "./theme";
-import { getSettings, listBooks } from "../tauri/invoke";
+import { getSettings, listShelves, type Shelf } from "../tauri/invoke";
 import { normalizeReaderBackground } from "../reader/settings/normalize";
+import { shelfTreeRows } from "../library/shelves";
 
 // 六个 30px 色块 + 5*8 间距 + 12 内边距 + 2 边框
 const THEME_MENU_WIDTH = 234;
@@ -30,11 +31,12 @@ export default function AppShell(props: {
   const theme = useTheme();
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const [themeMenu, setThemeMenu] = useState<{ x: number; y: number } | null>(null);
-  const [groups, setGroups] = useState<string[]>([]);
+  const [shelves, setShelves] = useState<Shelf[]>([]);
   const themeBtnRef = useRef<HTMLButtonElement | null>(null);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
   const [searchParams] = useSearchParams();
-  const activeGroup = props.active === "library" ? searchParams.get("group") : null;
+  const activeShelf = props.active === "library" ? searchParams.get("shelf") : null;
+  const trashActive = props.active === "library" && searchParams.get("trash") === "1";
 
   // 启动纠偏：DB 主题覆盖 localStorage 缓存；同一份 settings 顺带解析全局背景；书架换背景后广播重读，即时换肤
   useEffect(() => {
@@ -57,20 +59,16 @@ export default function AppShell(props: {
     };
   }, []);
 
-  // 侧栏分组：与书库 chips 同源（books.group_name）；挂载+窗口聚焦刷新，会话新建的空组不入侧栏
+  // 侧栏书架树：与书库同源（shelves 表）；挂载+窗口聚焦刷新
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const list = await listBooks();
+        const list = await listShelves();
         if (cancelled) return;
-        setGroups(
-          [...new Set(list.map((b) => b.group_name).filter((g): g is string => !!g))].sort((a, b) =>
-            a.localeCompare(b, "zh"),
-          ),
-        );
+        setShelves(list);
       } catch {
-        // DB 不可达：侧栏不渲染分组
+        // DB 不可达：侧栏不渲染书架树
       }
     };
     void load();
@@ -139,38 +137,25 @@ export default function AppShell(props: {
         </div>
 
         <div className="wr-nav" role="navigation">
-          <button className="wr-nav-btn" data-active={props.active === "library"} aria-current={props.active === "library" ? "page" : undefined} onClick={() => navigate("/")}>
+          <button className="wr-nav-btn" data-active={props.active === "library" && !trashActive} aria-current={props.active === "library" && !trashActive ? "page" : undefined} onClick={() => navigate("/")}>
             <div className="wr-nav-title">
               <IconBook />
               书架
             </div>
-            <div className="wr-nav-sub">最近阅读、导入与管理</div>
+            <div className="wr-nav-sub">层级书架、导入与管理</div>
           </button>
-          {groups.length > 0 ? (
-            <div className="wr-nav-groups" role="group" aria-label="书架分组">
-              <button
-                className="wr-nav-group-btn"
-                aria-current={!activeGroup ? "page" : undefined}
-                onClick={() => navigate("/")}
-              >
-                全部
-              </button>
-              <button
-                className="wr-nav-group-btn"
-                aria-current={activeGroup === "未分组" ? "page" : undefined}
-                onClick={() => navigate(`/?group=${encodeURIComponent("未分组")}`)}
-              >
-                未分组
-              </button>
-              {groups.map((g) => (
+          {shelves.length > 0 ? (
+            <div className="wr-nav-groups" role="group" aria-label="书架">
+              {shelfTreeRows(shelves).map((row) => (
                 <button
-                  key={g}
+                  key={row.id}
                   className="wr-nav-group-btn"
-                  title={g}
-                  aria-current={activeGroup === g ? "page" : undefined}
-                  onClick={() => navigate(`/?group=${encodeURIComponent(g)}`)}
+                  title={row.name}
+                  aria-current={activeShelf === String(row.id) ? "page" : undefined}
+                  style={{ paddingLeft: 10 + row.depth * 12 }}
+                  onClick={() => navigate(`/?shelf=${row.id}`)}
                 >
-                  {g}
+                  {row.name}
                 </button>
               ))}
             </div>
@@ -181,6 +166,13 @@ export default function AppShell(props: {
               收藏
             </div>
             <div className="wr-nav-sub">书籍与收藏句子</div>
+          </button>
+          <button className="wr-nav-btn" data-active={trashActive} aria-current={trashActive ? "page" : undefined} onClick={() => navigate("/?trash=1")}>
+            <div className="wr-nav-title">
+              <IconTrash />
+              回收站
+            </div>
+            <div className="wr-nav-sub">已删除书籍、保留期内可恢复</div>
           </button>
         </div>
 

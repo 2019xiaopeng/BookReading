@@ -10,16 +10,28 @@ import {
   addBookmark,
   addFavoriteQuote,
   addHighlight,
+  createShelf,
   deleteBook,
   deleteBookmark,
+  deleteBooks,
   deleteFavoriteQuote,
   deleteHighlight,
+  deleteShelf,
   getReadingState,
   listBookmarks,
   listFavoriteQuotes,
   listHighlights,
+  listTrash,
+  moveBooksToShelf,
+  moveShelf,
+  purgeBooks,
+  renameShelf,
   repairBookMetadata,
+  restoreBooks,
   setBookFavorite,
+  setBooksOrder,
+  setShelfOrder,
+  setTrashRetentionDays,
   updateBookMetadata,
   upsertReadingState,
 } from "./invoke";
@@ -95,5 +107,57 @@ describe("tauri invoke arg casing", () => {
     hoisted.invokeMock.mockResolvedValueOnce([]);
     await listFavoriteQuotes({ bookId: "b1", query: "x" });
     expect(hoisted.invokeMock).toHaveBeenLastCalledWith("list_favorite_quotes", { bookId: "b1", query: "x" });
+  });
+
+  test("shelf commands use camelCase keys", async () => {
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await createShelf("小说", 3);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("create_shelf", { name: "小说", parentId: 3 });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await renameShelf(3, "漫画");
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("rename_shelf", { id: 3, name: "漫画" });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await moveShelf(3, null);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("move_shelf", { id: 3, newParentId: null });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await deleteShelf(3);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("delete_shelf", { id: 3 });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await setShelfOrder([2, 1]);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("set_shelf_order", { ids: [2, 1] });
+  });
+
+  test("book batch/trash commands use camelCase keys", async () => {
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await moveBooksToShelf(["b1", "b2"], 3);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("move_books_to_shelf", { bookIds: ["b1", "b2"], shelfId: 3 });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await setBooksOrder(["b2", "b1"]);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("set_books_order", { bookIds: ["b2", "b1"] });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await deleteBooks(["b1"]);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("delete_books", { bookIds: ["b1"] });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await restoreBooks(["b1"]);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("restore_books", { bookIds: ["b1"] });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await purgeBooks(["b1"]);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("purge_books", { bookIds: ["b1"] });
+
+    hoisted.invokeMock.mockResolvedValueOnce([]);
+    await listTrash();
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("list_trash");
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await setTrashRetentionDays(7);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("set_trash_retention_days", { days: 7 });
   });
 });

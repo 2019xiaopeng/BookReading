@@ -9,11 +9,21 @@ export type Book = {
   added_at: number;
   last_opened_at: number | null;
   note: string | null;
-  group_name: string | null;
   pinned_at: number | null;
   reading_percent: number | null;
   is_favorite: boolean;
   format: string | null;
+  shelf_id: number | null;
+  sort_order: number | null;
+  deleted_at: number | null;
+};
+
+export type Shelf = {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  sort_order: number;
+  created_at: number;
 };
 
 export type ImportBookRequest = {
@@ -28,12 +38,63 @@ export type UpdateBookMetadataRequest = {
   book_id: string;
   title?: string;
   note?: string;
-  group_name?: string;
   pinned?: boolean;
 };
 
 export async function listBooks(): Promise<Book[]> {
   return invoke<Book[]>("list_books");
+}
+
+export async function listShelves(): Promise<Shelf[]> {
+  return invoke<Shelf[]>("list_shelves");
+}
+
+export async function createShelf(name: string, parentId: number | null): Promise<Shelf> {
+  return invoke<Shelf>("create_shelf", { name, parentId });
+}
+
+export async function renameShelf(id: number, name: string): Promise<void> {
+  return invoke<void>("rename_shelf", { id, name });
+}
+
+export async function moveShelf(id: number, newParentId: number | null): Promise<void> {
+  return invoke<void>("move_shelf", { id, newParentId });
+}
+
+export async function deleteShelf(id: number): Promise<void> {
+  return invoke<void>("delete_shelf", { id });
+}
+
+export async function setShelfOrder(ids: number[]): Promise<void> {
+  return invoke<void>("set_shelf_order", { ids });
+}
+
+export async function moveBooksToShelf(bookIds: string[], shelfId: number | null): Promise<void> {
+  return invoke<void>("move_books_to_shelf", { bookIds, shelfId });
+}
+
+export async function setBooksOrder(bookIds: string[]): Promise<void> {
+  return invoke<void>("set_books_order", { bookIds });
+}
+
+export async function deleteBooks(bookIds: string[]): Promise<void> {
+  return invoke<void>("delete_books", { bookIds });
+}
+
+export async function restoreBooks(bookIds: string[]): Promise<void> {
+  return invoke<void>("restore_books", { bookIds });
+}
+
+export async function purgeBooks(bookIds: string[]): Promise<void> {
+  return invoke<void>("purge_books", { bookIds });
+}
+
+export async function listTrash(): Promise<Book[]> {
+  return invoke<Book[]>("list_trash");
+}
+
+export async function setTrashRetentionDays(days: number): Promise<void> {
+  return invoke<void>("set_trash_retention_days", { days });
 }
 
 export async function importBook(req: ImportBookRequest): Promise<Book> {

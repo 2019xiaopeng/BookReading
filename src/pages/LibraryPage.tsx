@@ -3,22 +3,42 @@ import type { DragEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import type { Book, UpdateBookMetadataRequest } from "../tauri/invoke";
+import type { Book, Shelf, UpdateBookMetadataRequest } from "../tauri/invoke";
 import {
-  deleteBook,
+  createShelf,
+  deleteBooks,
+  deleteShelf,
   getSettings,
   importBook,
   listBooks,
   listImageSubdirs,
+  listShelves,
+  listTrash,
+  moveBooksToShelf,
+  moveShelf,
+  purgeBooks,
+  renameShelf,
   repairBookMetadata,
+  restoreBooks,
   saveReaderBackground,
   setBookCover,
   setBookFavorite,
+  setBooksOrder,
   setSetting,
+  setShelfOrder,
+  setTrashRetentionDays,
   updateBookMetadata,
 } from "../tauri/invoke";
 import { importImageFolder } from "../reader/image/api";
 import { needsMetadataRepair } from "../library/metadataRepair";
+import {
+  countByShelf,
+  descendantIds,
+  shelfPath,
+  shelfTreeRows,
+  sortShelves,
+  trashRemainingDays,
+} from "../library/shelves";
 import { DENSITY_PRESETS, normalizeLibraryDensity, type LibraryDensity } from "../library/density";
 import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "../library/useCoverUrls";
 import { notifyBackgroundChanged, resetBackgroundCache } from "../ui/appBackground";
@@ -26,7 +46,7 @@ import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
 import AppShell from "../ui/AppShell";
 import { showAlert, showConfirm } from "../ui/dialog";
-import { IconBook, IconImage, IconMore, IconPin, IconRefresh } from "../ui/icons";
+import { IconBook, IconFolder, IconImage, IconMore, IconPin, IconRefresh, IconTrash } from "../ui/icons";
 
 function formatTitle(book: Book): string {
   return book.title?.trim() || "未命名";
@@ -40,53 +60,72 @@ function progressText(book: Book): string {
   return typeof book.reading_percent === "number" ? `读到 ${Math.round(book.reading_percent * 100)}%` : "未读";
 }
 
-type SortKey = "recent" | "title" | "added";
+type SortKey = "recent" | "title" | "added" | "custom";
 
 type MenuState =
   | { kind: "grid"; x: number; y: number }
   | { kind: "book"; x: number; y: number; book: Book }
-  | { kind: "group"; x: number; y: number; group: string };
+  | { kind: "shelf"; x: number; y: number; shelf: Shelf };
 
 type PromptState = {
   title: string;
   value: string;
-  /** true = 空提交合法（分组/备注留空即清除） */
+  /** true = 空提交合法（备注留空即清除） */
   allowEmpty: boolean;
   onConfirm: (value: string) => void;
 };
+
+/** 树形选择对话框：移动书（单/批量）或移动书架到目标书架（null=根） */
+type MoveDialog = { kind: "books"; bookIds: string[] } | { kind: "shelf"; shelfId: number };
 
 export default function LibraryPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [books, setBooks] = useState<Book[]>([]);
+  const [shelves, setShelves] = useState<Shelf[]>([]);
+  const [trash, setTrash] = useState<Book[]>([]);
+  const [retentionDays, setRetentionDays] = useState(30);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
-  const [groupFilter, setGroupFilter] = useState("全部");
   const [sortKey, setSortKey] = useState<SortKey>("recent");
   const [sortAsc, setSortAsc] = useState(false);
   const [density, setDensity] = useState<LibraryDensity>("standard");
-  // session-only groups created via 新建分组 but not yet holding any book (groups otherwise derive from books)
-  const [extraGroups, setExtraGroups] = useState<string[]>([]);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [prompt, setPrompt] = useState<PromptState | null>(null);
+  const [moveDialog, setMoveDialog] = useState<MoveDialog | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // DnD 载荷（HTML5 dataTransfer 在 dragover 里读不到自定义类型，拖拽中用 state 旁路）
+  const [dragBookId, setDragBookId] = useState<string | null>(null);
+  const [dragShelfId, setDragShelfId] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const menuTriggerRef = useRef<HTMLElement | null>(null);
   const repairingRef = useRef<Set<string>>(new Set());
   const attemptedRef = useRef<Set<string>>(new Set());
   const coverUrls = useCoverUrls(books);
+  const trashCoverUrls = useCoverUrls(trash);
 
-  const groups = useMemo(
-    () =>
-      [...new Set([...extraGroups, ...books.map((b) => b.group_name).filter((g): g is string => !!g)])].sort((a, b) =>
-        a.localeCompare(b, "zh"),
-      ),
-    [books, extraGroups],
+  // 回收站视图与当前书架都走 URL（?trash=1 / ?shelf=id），侧栏树与面包屑同源
+  const trashView = searchParams.get("trash") === "1";
+  const shelfParam = searchParams.get("shelf");
+  const parsedShelf = shelfParam ? Number(shelfParam) : null;
+  const currentShelfId =
+    !trashView && parsedShelf != null && Number.isFinite(parsedShelf) ? parsedShelf : null;
+
+  const shelvesSorted = useMemo(() => sortShelves(shelves), [shelves]);
+  const subShelves = useMemo(
+    () => shelvesSorted.filter((s) => (s.parent_id ?? null) === currentShelfId),
+    [shelvesSorted, currentShelfId],
+  );
+  const path = useMemo(() => shelfPath(shelves, currentShelfId), [shelves, currentShelfId]);
+  const counts = useMemo(() => countByShelf(books), [books]);
+  const shelfBooks = useMemo(
+    () => books.filter((b) => (b.shelf_id ?? null) === currentShelfId),
+    [books, currentShelfId],
   );
 
   const booksFiltered = useMemo(() => {
-    let list = books;
-    if (groupFilter === "未分组") list = list.filter((b) => !b.group_name);
-    else if (groupFilter !== "全部") list = list.filter((b) => b.group_name === groupFilter);
+    let list = shelfBooks;
     const q = query.trim().toLowerCase();
     if (q) {
       list = list.filter((b) => `${formatTitle(b)} ${formatAuthor(b)}`.toLowerCase().includes(q));
@@ -95,28 +134,50 @@ export default function LibraryPage() {
     return [...list].sort((a, b) => {
       const pinned = Number(!!b.pinned_at) - Number(!!a.pinned_at);
       if (pinned !== 0) return pinned;
+      // custom：无序值（从未排过）的沉底
+      if (sortKey === "custom") return (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER);
       if (sortKey === "title") return dir * formatTitle(a).localeCompare(formatTitle(b), "zh");
       if (sortKey === "added") return dir * (a.added_at - b.added_at);
       return dir * ((a.last_opened_at ?? a.added_at) - (b.last_opened_at ?? b.added_at));
     });
-  }, [books, query, groupFilter, sortKey, sortAsc]);
+  }, [shelfBooks, query, sortKey, sortAsc]);
 
   async function refresh() {
-    const list = await listBooks();
+    const [list, shelfList] = await Promise.all([listBooks(), listShelves()]);
     setBooks(list);
+    setShelves(shelfList);
+  }
+
+  async function refreshTrash() {
+    setTrash(await listTrash());
   }
 
   useEffect(() => {
     refresh();
     getSettings()
-      .then((m) => setDensity(normalizeLibraryDensity(m.library_density)))
+      .then((m) => {
+        setDensity(normalizeLibraryDensity(m.library_density));
+        const r = Number(m.trash_retention_days);
+        if (Number.isFinite(r) && r >= 0) setRetentionDays(r);
+      })
       .catch(() => {});
   }, []);
 
-  // 侧栏分组导航写 URL（/?group=…），与 AppShell 同源；chips 点击仍是本地态不写 URL
+  // 进入回收站视图拉取清单；切书架/切视图时退出批量选择
   useEffect(() => {
-    setGroupFilter(searchParams.get("group") ?? "全部");
-  }, [searchParams]);
+    if (trashView) void refreshTrash();
+  }, [trashView]);
+
+  useEffect(() => {
+    setSelectMode(false);
+    setSelected(new Set());
+  }, [currentShelfId, trashView]);
+
+  // 当前书架被删（含在别的窗口删）→ 回根，避免渲染悬空路径
+  useEffect(() => {
+    if (currentShelfId == null || shelves.length === 0) return;
+    if (!shelves.some((s) => s.id === currentShelfId)) navigate("/", { replace: true });
+  }, [shelves, currentShelfId]);
 
   function changeDensity(v: LibraryDensity) {
     setDensity(v);
@@ -320,7 +381,6 @@ export default function LibraryPage() {
 
   // 批量导入：选父目录 → 每个一级子文件夹各导入一本漫画（空/无图目录服务端已过滤），失败逐个记日志不中断
   async function onBatchImportImages() {
-    if (loading) return;
     const parent = await open({ directory: true, multiple: false, title: "选择漫画父目录（每个一级子文件夹导入一本）" });
     if (!parent || Array.isArray(parent)) return;
     setLoading(true);
@@ -386,12 +446,13 @@ export default function LibraryPage() {
     }
   }
 
-  async function onDelete(book: Book) {
+  // 删除=软删入回收站，可恢复（彻底删除只在回收站页提供）
+  async function onDeleteBook(book: Book) {
     if (loading) return;
     const isFolderComic = book.format === "images" && !book.library_path.toLowerCase().endsWith(".cbz");
     const ok = await showConfirm(
-      "删除书籍",
-      `确定删除《${formatTitle(book)}》吗？阅读进度、书签与标注将一并删除，且不可恢复。` +
+      "移入回收站",
+      `确定删除《${formatTitle(book)}》吗？将移入回收站，可在回收站恢复。` +
         (isFolderComic ? "\n源文件夹不会被改动，仅移除本书记录与封面。" : ""),
       { danger: true, confirmText: "删除" },
     );
@@ -399,7 +460,7 @@ export default function LibraryPage() {
 
     setLoading(true);
     try {
-      await deleteBook(book.id);
+      await deleteBooks([book.id]);
       await refresh();
     } catch (e) {
       await showAlert("删除失败", String(e));
@@ -436,15 +497,6 @@ export default function LibraryPage() {
     });
   }
 
-  function onSetGroup(book: Book) {
-    setPrompt({
-      title: "分组名称（留空清除）",
-      value: book.group_name ?? "",
-      allowEmpty: true,
-      onConfirm: (v) => onChipUpdate({ book_id: book.id, group_name: v }),
-    });
-  }
-
   function onNote(book: Book) {
     setPrompt({
       title: "备注（留空清除）",
@@ -462,61 +514,262 @@ export default function LibraryPage() {
       .finally(() => setLoading(false));
   }
 
-  function onNewGroup() {
+  // ---- 书架操作 ----
+
+  function onNewShelf() {
     setPrompt({
-      title: "新分组名称",
+      title: currentShelfId == null ? "新书架名称" : `在“${path[path.length - 1]?.name ?? ""}”内新建书架`,
       value: "",
       allowEmpty: false,
       onConfirm: (name) => {
-        setExtraGroups((prev) => (prev.includes(name) ? prev : [...prev, name]));
-        setGroupFilter(name);
+        void (async () => {
+          try {
+            await createShelf(name, currentShelfId);
+            await refresh();
+          } catch (e) {
+            await showAlert("新建书架失败", String(e));
+          }
+        })();
       },
     });
   }
 
-  function onRenameGroup(group: string) {
+  function onRenameShelf(shelf: Shelf) {
     setPrompt({
-      title: "分组名称",
-      value: group,
+      title: "书架名称",
+      value: shelf.name,
       allowEmpty: false,
       onConfirm: (name) => {
-        if (name === group) return;
-        setExtraGroups((prev) => prev.map((g) => (g === group ? name : g)));
-        if (groupFilter === group) setGroupFilter(name);
-        void runUpdates(
-          books.filter((b) => b.group_name === group).map((b) => ({ book_id: b.id, group_name: name })),
-        );
+        if (name === shelf.name) return;
+        void (async () => {
+          try {
+            await renameShelf(shelf.id, name);
+            await refresh();
+          } catch (e) {
+            await showAlert("重命名失败", String(e));
+          }
+        })();
       },
     });
   }
 
-  async function onDeleteGroup(group: string) {
-    const ok = await showConfirm("删除分组", `删除分组“${group}”？组内书籍保留，归入“未分组”。`, {
-      danger: true,
-      confirmText: "删除",
-    });
-    if (!ok) return;
-    setExtraGroups((prev) => prev.filter((g) => g !== group));
-    if (groupFilter === group) setGroupFilter("全部");
-    void runUpdates(
-      books.filter((b) => b.group_name === group).map((b) => ({ book_id: b.id, group_name: "" })),
+  async function onDeleteShelf(shelf: Shelf) {
+    const ok = await showConfirm(
+      "删除书架",
+      `删除书架“${shelf.name}”？其中的书移到上级书架，子书架一并删除。`,
+      { danger: true, confirmText: "删除" },
     );
+    if (!ok) return;
+    setLoading(true);
+    try {
+      await deleteShelf(shelf.id);
+      // 删的是当前书架或其祖先 → 回根
+      if (path.some((s) => s.id === shelf.id)) navigate("/", { replace: true });
+      await refresh();
+    } catch (e) {
+      await showAlert("删除书架失败", String(e));
+    } finally {
+      setLoading(false);
+    }
   }
 
-  function onDropToGroup(e: DragEvent<HTMLButtonElement>, chip: string) {
-    e.preventDefault();
-    e.currentTarget.classList.remove("drop-target");
-    if (chip === "全部") return;
-    const id = e.dataTransfer.getData("text/book-id");
-    if (!id) return;
-    void runUpdates([{ book_id: id, group_name: chip === "未分组" ? "" : chip }]);
+  // 树选择对话框确认：targetId null = 根
+  async function onMoveDialogPick(targetId: number | null) {
+    const d = moveDialog;
+    if (!d) return;
+    setMoveDialog(null);
+    try {
+      if (d.kind === "books") {
+        await moveBooksToShelf(d.bookIds, targetId);
+        if (d.bookIds.some((id) => selected.has(id))) setSelected(new Set());
+      } else {
+        await moveShelf(d.shelfId, targetId);
+      }
+      await refresh();
+    } catch (e) {
+      await showAlert("移动失败", String(e));
+    }
   }
+
+  // ---- 拖拽 ----
+
+  async function moveDroppedBook(bookId: string, shelfId: number | null) {
+    try {
+      await moveBooksToShelf([bookId], shelfId);
+      await refresh();
+    } catch (e) {
+      await showAlert("移动失败", String(e));
+    }
+  }
+
+  // custom 模式下拖到目标卡前，整列顺序落库
+  async function persistOrder<T>(ids: T[], write: (ids: T[]) => Promise<void>) {
+    try {
+      await write(ids);
+      await refresh();
+    } catch (e) {
+      await showAlert("排序失败", String(e));
+    }
+  }
+
+  function dropOnShelf(e: DragEvent<HTMLElement>, shelfId: number | null) {
+    e.currentTarget.classList.remove("drop-target");
+    e.preventDefault();
+    if (dragBookId) {
+      void moveDroppedBook(dragBookId, shelfId);
+    } else if (
+      dragShelfId != null &&
+      sortKey === "custom" &&
+      shelfId != null &&
+      dragShelfId !== shelfId &&
+      subShelves.some((s) => s.id === shelfId)
+    ) {
+      const ids = subShelves.map((s) => s.id);
+      const rest = ids.filter((id) => id !== dragShelfId);
+      const to = rest.indexOf(shelfId);
+      rest.splice(to < 0 ? rest.length : to, 0, dragShelfId);
+      void persistOrder(rest, setShelfOrder);
+    }
+    setDragBookId(null);
+    setDragShelfId(null);
+  }
+
+  function dropOnBook(e: DragEvent<HTMLElement>, target: Book) {
+    e.currentTarget.classList.remove("drop-target");
+    if (sortKey !== "custom" || !dragBookId || dragBookId === target.id) return;
+    e.preventDefault();
+    const rest = booksFiltered.map((b) => b.id).filter((id) => id !== dragBookId);
+    const to = rest.indexOf(target.id);
+    rest.splice(to < 0 ? rest.length : to, 0, dragBookId);
+    void persistOrder(rest, setBooksOrder);
+    setDragBookId(null);
+  }
+
+  // ---- 批量选择 ----
+
+  function toggleSelected(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function exitSelect() {
+    setSelectMode(false);
+    setSelected(new Set());
+  }
+
+  const allSelected = booksFiltered.length > 0 && booksFiltered.every((b) => selected.has(b.id));
+
+  function toggleSelectAll() {
+    setSelected(allSelected ? new Set() : new Set(booksFiltered.map((b) => b.id)));
+  }
+
+  async function onBatchDelete() {
+    const ids = [...selected];
+    if (ids.length === 0 || loading) return;
+    const ok = await showConfirm(
+      "移入回收站",
+      `确定删除选中的 ${ids.length} 本书吗？将移入回收站，可在回收站恢复。`,
+      { danger: true, confirmText: "删除" },
+    );
+    if (!ok) return;
+    setLoading(true);
+    try {
+      await deleteBooks(ids);
+      setSelected(new Set());
+      await refresh();
+    } catch (e) {
+      await showAlert("删除失败", String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onBatchFavorite() {
+    const ids = [...selected].filter((id) => !books.find((b) => b.id === id)?.is_favorite);
+    if (ids.length === 0) return;
+    setLoading(true);
+    try {
+      for (const id of ids) await setBookFavorite(id, true);
+      setSelected(new Set());
+      await refresh();
+    } catch (e) {
+      await showAlert("收藏失败", String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ---- 回收站 ----
+
+  async function onRestore(book: Book) {
+    setLoading(true);
+    try {
+      await restoreBooks([book.id]);
+      await Promise.all([refresh(), refreshTrash()]);
+    } catch (e) {
+      await showAlert("恢复失败", String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onPurge(book: Book) {
+    const ok = await showConfirm(
+      "彻底删除",
+      `彻底删除《${formatTitle(book)}》？将删除书籍文件与全部阅读记录，不可恢复。`,
+      { danger: true, confirmText: "彻底删除" },
+    );
+    if (!ok) return;
+    setLoading(true);
+    try {
+      await purgeBooks([book.id]);
+      await refreshTrash();
+    } catch (e) {
+      await showAlert("删除失败", String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onEmptyTrash() {
+    if (trash.length === 0 || loading) return;
+    const ok = await showConfirm(
+      "清空回收站",
+      `彻底删除回收站中的 ${trash.length} 本书？将删除书籍文件与全部阅读记录，不可恢复。`,
+      { danger: true, confirmText: "清空" },
+    );
+    if (!ok) return;
+    setLoading(true);
+    try {
+      await purgeBooks(trash.map((b) => b.id));
+      await refreshTrash();
+    } catch (e) {
+      await showAlert("清空失败", String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function onChangeRetention(days: number) {
+    setRetentionDays(days);
+    void setTrashRetentionDays(days).catch((e) => showAlert("设置保留期失败", String(e)));
+  }
+
+  // 移动树选择对话框里要排除的书架（移动书架时不能选自身/后代）
+  const moveExclude =
+    moveDialog?.kind === "shelf" ? descendantIds(shelves, moveDialog.shelfId) : null;
+
+  const nowSec = Date.now() / 1000;
 
   return (
     <AppShell
       active="library"
-      title="书架"
-      search={{ value: query, placeholder: "搜索书名 / 作者", onChange: setQuery }}
+      title={trashView ? "回收站" : "书架"}
+      search={{ value: query, placeholder: trashView ? "搜索书名 / 作者" : "搜索书名 / 作者", onChange: setQuery }}
       sidebarFooter={
         <>
           <button className="wr-small-btn" disabled={loading} onClick={() => void refresh()}>
@@ -534,185 +787,392 @@ export default function LibraryPage() {
         </>
       }
     >
-      <div style={{ display: "flex", gap: 8, padding: "16px 18px 0", alignItems: "center" }}>
-        <div className="wr-seg" role="group" aria-label="排序">
-          <button className="wr-seg-btn" data-active={sortKey === "recent"} onClick={() => setSortKey("recent")}>
-            最近阅读
+      {trashView ? (
+        <div style={{ display: "flex", gap: 8, padding: "16px 18px 0", alignItems: "center" }}>
+          <button className="wr-btn" onClick={() => navigate("/")}>
+            返回书架
           </button>
-          <button className="wr-seg-btn" data-active={sortKey === "title"} onClick={() => setSortKey("title")}>
-            书名
-          </button>
-          <button className="wr-seg-btn" data-active={sortKey === "added"} onClick={() => setSortKey("added")}>
-            导入时间
-          </button>
-          <button
-            className="wr-seg-btn"
-            aria-pressed={sortAsc}
-            aria-label={`排序方向：${sortAsc ? "升序" : "降序"}`}
-            title={`排序方向：${sortAsc ? "升序" : "降序"}`}
-            onClick={() => setSortAsc((v) => !v)}
+          <label htmlFor="trash-retention" className="wr-muted" style={{ fontSize: 13 }}>
+            保留期
+          </label>
+          <select
+            id="trash-retention"
+            className="wr-select"
+            style={{ padding: "6px 10px" }}
+            value={retentionDays}
+            aria-label="回收站保留期"
+            onChange={(e) => onChangeRetention(Number(e.currentTarget.value))}
           >
-            {sortAsc ? "↑ 升序" : "↓ 降序"}
+            <option value={7}>7 天</option>
+            <option value={30}>30 天</option>
+            <option value={0}>永不</option>
+          </select>
+          <button
+            className="wr-btn wr-btn-danger"
+            style={{ marginLeft: "auto" }}
+            onClick={() => void onEmptyTrash()}
+            disabled={loading || trash.length === 0}
+          >
+            <IconTrash />
+            <span>清空回收站</span>
           </button>
         </div>
-        <div className="wr-seg" role="group" aria-label="书架密度" style={{ marginLeft: "auto" }}>
-          {(Object.keys(DENSITY_PRESETS) as LibraryDensity[]).map((d) => (
-            <button
-              key={d}
-              className="wr-seg-btn"
-              data-active={density === d}
-              aria-pressed={density === d}
-              onClick={() => changeDensity(d)}
-            >
-              {DENSITY_PRESETS[d].label}
+      ) : (
+        <div style={{ display: "flex", gap: 8, padding: "16px 18px 0", alignItems: "center" }}>
+          <div className="wr-seg" role="group" aria-label="排序">
+            <button className="wr-seg-btn" data-active={sortKey === "recent"} onClick={() => setSortKey("recent")}>
+              最近阅读
             </button>
-          ))}
-        </div>
-      </div>
-
-      {groups.length > 0 ? (
-        <div className="wr-group-row" role="group" aria-label="分组筛选">
-          {["全部", "未分组", ...groups].map((chip) => (
+            <button className="wr-seg-btn" data-active={sortKey === "title"} onClick={() => setSortKey("title")}>
+              书名
+            </button>
+            <button className="wr-seg-btn" data-active={sortKey === "added"} onClick={() => setSortKey("added")}>
+              导入时间
+            </button>
             <button
-              key={chip}
+              className="wr-seg-btn"
+              data-active={sortKey === "custom"}
+              title="拖动卡片调整顺序"
+              onClick={() => setSortKey("custom")}
+            >
+              自定义
+            </button>
+            <button
+              className="wr-seg-btn"
+              aria-pressed={sortAsc}
+              aria-label={`排序方向：${sortAsc ? "升序" : "降序"}`}
+              title={`排序方向：${sortAsc ? "升序" : "降序"}`}
+              onClick={() => setSortAsc((v) => !v)}
+            >
+              {sortAsc ? "↑ 升序" : "↓ 降序"}
+            </button>
+          </div>
+          <div className="wr-seg" role="group" aria-label="批量选择">
+            <button
+              className="wr-seg-btn"
+              aria-pressed={selectMode}
+              data-active={selectMode}
+              onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
+            >
+              选择
+            </button>
+          </div>
+          <div className="wr-seg" role="group" aria-label="书架密度" style={{ marginLeft: "auto" }}>
+            {(Object.keys(DENSITY_PRESETS) as LibraryDensity[]).map((d) => (
+              <button
+                key={d}
+                className="wr-seg-btn"
+                data-active={density === d}
+                aria-pressed={density === d}
+                onClick={() => changeDensity(d)}
+              >
+                {DENSITY_PRESETS[d].label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!trashView ? (
+        <div className="wr-group-row" role="group" aria-label="书架路径">
+          <button
+            className="wr-group-chip"
+            data-active={currentShelfId == null}
+            aria-current={currentShelfId == null ? "page" : undefined}
+            onClick={() => navigate("/")}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+            }}
+            onDragEnter={(e) => e.currentTarget.classList.add("drop-target")}
+            onDragLeave={(e) => e.currentTarget.classList.remove("drop-target")}
+            onDrop={(e) => dropOnShelf(e, null)}
+          >
+            全部
+          </button>
+          {path.map((s, i) => (
+            <button
+              key={s.id}
               className="wr-group-chip"
-              data-active={groupFilter === chip}
-              aria-pressed={groupFilter === chip}
-              onClick={() => setGroupFilter(chip)}
-              onContextMenu={(e) => {
-                if (!groups.includes(chip)) return;
-                e.preventDefault();
-                openMenu({ kind: "group", x: e.clientX, y: e.clientY, group: chip }, e.currentTarget);
-              }}
+              data-active={i === path.length - 1}
+              aria-current={i === path.length - 1 ? "page" : undefined}
+              onClick={() => navigate(`/?shelf=${s.id}`)}
               onDragOver={(e) => {
-                if (chip === "全部") return;
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "move";
               }}
-              onDragEnter={(e) => {
-                if (chip !== "全部") e.currentTarget.classList.add("drop-target");
-              }}
+              onDragEnter={(e) => e.currentTarget.classList.add("drop-target")}
               onDragLeave={(e) => e.currentTarget.classList.remove("drop-target")}
-              onDrop={(e) => onDropToGroup(e, chip)}
+              onDrop={(e) => dropOnShelf(e, s.id)}
             >
-              {chip}
+              {s.name}
             </button>
           ))}
         </div>
       ) : null}
 
-      <div
-        className={density === "standard" ? "wr-book-grid" : `wr-book-grid wr-book-grid--${density}`}
-        style={{ gridTemplateColumns: DENSITY_PRESETS[density].grid }}
-        onContextMenu={(e) => {
-          if ((e.target as HTMLElement).closest(".wr-book-card")) return;
-          e.preventDefault();
-          openMenu({ kind: "grid", x: e.clientX, y: e.clientY }, e.currentTarget);
-        }}
-      >
-        {booksFiltered.map((b) => (
-          <div
-            key={b.id}
-            className="wr-book-card"
-            role="button"
-            tabIndex={0}
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData("text/book-id", b.id);
-              e.dataTransfer.effectAllowed = "move";
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                navigate(`/read/${b.id}`);
-              }
-            }}
-            onClick={(e) => { if ((e.target as HTMLElement).closest("button")) return; navigate(`/read/${b.id}`); }}
-          >
-            <div className="wr-cover">
-              {b.cover_path && coverUrls[b.cover_path] ? <img src={coverUrls[b.cover_path]} alt="" /> : null}
-              {!b.cover_path || !coverUrls[b.cover_path] ? (
-                <div className="wr-cover-text">
-                  <div className="wr-cover-title">{formatTitle(b)}</div>
-                  <div className="wr-cover-author">{formatAuthor(b)}</div>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="wr-meta">
-              <div className="wr-title" title={formatTitle(b)}>{formatTitle(b)}</div>
-              <div className="wr-author" title={`${formatAuthor(b)} · ${progressText(b)}`}>{formatAuthor(b)}</div>
-              {typeof b.reading_percent === "number" ? (
-                <div className="wr-chip-row">
-                  <div className="wr-chip">
-                    <span>读到 {Math.round(b.reading_percent * 100)}%</span>
+      {trashView ? (
+        <div className="wr-trash-list">
+          {trash
+            .filter((b) => {
+              const q = query.trim().toLowerCase();
+              return !q || `${formatTitle(b)} ${formatAuthor(b)}`.toLowerCase().includes(q);
+            })
+            .map((b) => {
+              const remaining = trashRemainingDays(b.deleted_at ?? 0, retentionDays, nowSec);
+              return (
+                <div key={b.id} className="wr-trash-row">
+                  <div className="wr-trash-cover" aria-hidden="true">
+                    {b.cover_path && trashCoverUrls[b.cover_path] ? <img src={trashCoverUrls[b.cover_path]} alt="" /> : null}
+                    {!b.cover_path || !trashCoverUrls[b.cover_path] ? <IconBook width={18} height={18} /> : null}
+                  </div>
+                  <div className="wr-trash-info">
+                    <div className="wr-trash-title" title={formatTitle(b)}>{formatTitle(b)}</div>
+                    <div className="wr-trash-meta">
+                      {new Date((b.deleted_at ?? 0) * 1000).toLocaleString()} ·{" "}
+                      {remaining == null ? "永久保留" : `剩余 ${remaining} 天`}
+                    </div>
+                  </div>
+                  <div className="wr-trash-actions">
+                    <button className="wr-btn" onClick={() => void onRestore(b)} disabled={loading}>
+                      恢复
+                    </button>
+                    <button className="wr-btn wr-btn-danger" onClick={() => void onPurge(b)} disabled={loading}>
+                      彻底删除
+                    </button>
                   </div>
                 </div>
+              );
+            })}
+
+          {trash.length === 0 ? (
+            <div className="wr-state">
+              <span className="wr-state-icon" aria-hidden="true">
+                <IconTrash />
+              </span>
+              <div className="wr-state-title">回收站是空的</div>
+              <div className="wr-state-sub">删除的书会在这里保留一段时间，可随时恢复</div>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div
+          className={density === "standard" ? "wr-book-grid" : `wr-book-grid wr-book-grid--${density}`}
+          style={{ gridTemplateColumns: DENSITY_PRESETS[density].grid }}
+          onContextMenu={(e) => {
+            if ((e.target as HTMLElement).closest(".wr-book-card")) return;
+            e.preventDefault();
+            openMenu({ kind: "grid", x: e.clientX, y: e.clientY }, e.currentTarget);
+          }}
+        >
+          {subShelves.map((s) => (
+            <div
+              key={s.id}
+              className="wr-book-card wr-shelf-card"
+              role="button"
+              tabIndex={0}
+              aria-label={`书架 ${s.name}，${counts.get(s.id) ?? 0} 本`}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = "move";
+                setDragShelfId(s.id);
+                setDragBookId(null);
+              }}
+              onDragEnd={() => {
+                setDragShelfId(null);
+                setDragBookId(null);
+              }}
+              onClick={() => navigate(`/?shelf=${s.id}`)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  navigate(`/?shelf=${s.id}`);
+                }
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                openMenu({ kind: "shelf", x: e.clientX, y: e.clientY, shelf: s }, e.currentTarget);
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+              }}
+              onDragEnter={(e) => e.currentTarget.classList.add("drop-target")}
+              onDragLeave={(e) => e.currentTarget.classList.remove("drop-target")}
+              onDrop={(e) => dropOnShelf(e, s.id)}
+            >
+              <div className="wr-cover" aria-hidden="true">
+                <IconFolder className="wr-shelf-icon" width={30} height={30} />
+              </div>
+              <div className="wr-meta">
+                <div className="wr-title" title={s.name}>{s.name}</div>
+                <div className="wr-author">{counts.get(s.id) ?? 0} 本</div>
+              </div>
+            </div>
+          ))}
+
+          {booksFiltered.map((b) => (
+            <div
+              key={b.id}
+              className="wr-book-card"
+              role="button"
+              tabIndex={0}
+              data-selected={selectMode && selected.has(b.id)}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData("text/book-id", b.id);
+                e.dataTransfer.effectAllowed = "move";
+                setDragBookId(b.id);
+                setDragShelfId(null);
+              }}
+              onDragEnd={() => {
+                setDragBookId(null);
+                setDragShelfId(null);
+              }}
+              onDragOver={(e) => {
+                if (sortKey === "custom" && dragBookId && dragBookId !== b.id) {
+                  e.preventDefault();
+                  e.currentTarget.classList.add("drop-target");
+                }
+              }}
+              onDragLeave={(e) => e.currentTarget.classList.remove("drop-target")}
+              onDrop={(e) => dropOnBook(e, b)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  if (selectMode) toggleSelected(b.id);
+                  else navigate(`/read/${b.id}`);
+                }
+              }}
+              onClick={(e) => {
+                if ((e.target as HTMLElement).closest("button")) return;
+                if (selectMode) toggleSelected(b.id);
+                else navigate(`/read/${b.id}`);
+              }}
+            >
+              {selectMode ? (
+                <button
+                  className="wr-select-check"
+                  role="checkbox"
+                  aria-checked={selected.has(b.id)}
+                  aria-label={`选择《${formatTitle(b)}》`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleSelected(b.id);
+                  }}
+                >
+                  {selected.has(b.id) ? "✓" : ""}
+                </button>
+              ) : null}
+
+              <div className="wr-cover">
+                {b.cover_path && coverUrls[b.cover_path] ? <img src={coverUrls[b.cover_path]} alt="" /> : null}
+                {!b.cover_path || !coverUrls[b.cover_path] ? (
+                  <div className="wr-cover-text">
+                    <div className="wr-cover-title">{formatTitle(b)}</div>
+                    <div className="wr-cover-author">{formatAuthor(b)}</div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="wr-meta">
+                <div className="wr-title" title={formatTitle(b)}>{formatTitle(b)}</div>
+                <div className="wr-author" title={`${formatAuthor(b)} · ${progressText(b)}`}>{formatAuthor(b)}</div>
+                {typeof b.reading_percent === "number" ? (
+                  <div className="wr-chip-row">
+                    <div className="wr-chip">
+                      <span>读到 {Math.round(b.reading_percent * 100)}%</span>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              {!selectMode ? (
+                <div className="wr-card-tools" data-show={!!b.pinned_at}>
+                  <button
+                    className="wr-mini-btn"
+                    aria-label={b.pinned_at ? "取消置顶" : "置顶"}
+                    aria-pressed={!!b.pinned_at}
+                    data-pinned={!!b.pinned_at}
+                    disabled={loading}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onChipUpdate({ book_id: b.id, pinned: !b.pinned_at });
+                    }}
+                  >
+                    <IconPin fill={b.pinned_at ? "currentColor" : "none"} />
+                  </button>
+                  <button
+                    className="wr-mini-btn"
+                    aria-label="更多操作"
+                    aria-haspopup="menu"
+                    disabled={loading}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const r = e.currentTarget.getBoundingClientRect();
+                      openMenu({ kind: "book", x: r.right, y: r.bottom + 4, book: b }, e.currentTarget);
+                    }}
+                  >
+                    <IconMore />
+                  </button>
+                </div>
               ) : null}
             </div>
+          ))}
 
-            <div className="wr-card-tools" data-show={!!b.pinned_at}>
-              <button
-                className="wr-mini-btn"
-                aria-label={b.pinned_at ? "取消置顶" : "置顶"}
-                aria-pressed={!!b.pinned_at}
-                data-pinned={!!b.pinned_at}
-                disabled={loading}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onChipUpdate({ book_id: b.id, pinned: !b.pinned_at });
-                }}
-              >
-                <IconPin fill={b.pinned_at ? "currentColor" : "none"} />
-              </button>
-              <button
-                className="wr-mini-btn"
-                aria-label="更多操作"
-                aria-haspopup="menu"
-                disabled={loading}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const r = e.currentTarget.getBoundingClientRect();
-                  openMenu({ kind: "book", x: r.right, y: r.bottom + 4, book: b }, e.currentTarget);
-                }}
-              >
-                <IconMore />
-              </button>
+          {booksFiltered.length === 0 && subShelves.length === 0 ? (
+            <div className="wr-state" style={{ gridColumn: "1 / -1" }}>
+              <span className="wr-state-icon" aria-hidden="true">
+                <IconBook />
+              </span>
+              {query.trim() ? (
+                <>
+                  <div className="wr-state-title">没有匹配的书籍</div>
+                  <div className="wr-state-sub">换个书名或作者试试</div>
+                </>
+              ) : currentShelfId != null ? (
+                <>
+                  <div className="wr-state-title">该书架暂无书籍</div>
+                  <div className="wr-state-sub">拖动书籍到左侧书架，或在空白处右键新建子书架</div>
+                </>
+              ) : (
+                <>
+                  <div className="wr-state-title">书架还是空的</div>
+                  <div className="wr-state-sub">从左下角导入第一本书，或在空白处右键</div>
+                </>
+              )}
             </div>
-          </div>
-        ))}
+          ) : null}
+        </div>
+      )}
 
-        {booksFiltered.length === 0 ? (
-          <div className="wr-state" style={{ gridColumn: "1 / -1" }}>
-            <span className="wr-state-icon" aria-hidden="true">
-              <IconBook />
-            </span>
-            {query.trim() ? (
-              <>
-                <div className="wr-state-title">没有匹配的书籍</div>
-                <div className="wr-state-sub">换个书名或作者试试</div>
-              </>
-            ) : groupFilter !== "全部" ? (
-              <>
-                <div className="wr-state-title">该分组暂无书籍</div>
-                <div className="wr-state-sub">拖动书籍到上方分组即可归类</div>
-              </>
-            ) : (
-              <>
-                <div className="wr-state-title">书架还是空的</div>
-                <div className="wr-state-sub">从左下角导入第一本书，或在空白处右键</div>
-              </>
-            )}
-          </div>
-        ) : null}
-      </div>
+      {selectMode && !trashView ? (
+        <div className="wr-batch-bar" role="toolbar" aria-label="批量操作">
+          <span className="wr-batch-count">已选 {selected.size}</span>
+          <button className="wr-btn" onClick={() => setMoveDialog({ kind: "books", bookIds: [...selected] })} disabled={selected.size === 0}>
+            移动到书架
+          </button>
+          <button className="wr-btn" onClick={() => void onBatchFavorite()} disabled={selected.size === 0}>
+            收藏
+          </button>
+          <button className="wr-btn wr-btn-danger" onClick={() => void onBatchDelete()} disabled={selected.size === 0}>
+            删除
+          </button>
+          <button className="wr-btn" onClick={toggleSelectAll} disabled={booksFiltered.length === 0}>
+            {allSelected ? "取消全选" : "全选"}
+          </button>
+          <button className="wr-btn" onClick={exitSelect}>
+            取消
+          </button>
+        </div>
+      ) : null}
 
       {menu ? (
         <div ref={menuRef} className="wr-menu" role="menu" style={{ left: menu.x, top: menu.y }} onKeyDown={onMenuKeyDown}>
           {menu.kind === "grid" ? (
             <>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onNewGroup(); }}>
-                新建分组
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onNewShelf(); }}>
+                新建书架
               </button>
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onImport(); }}>
                 导入图书
@@ -729,7 +1189,7 @@ export default function LibraryPage() {
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onResetGlobalBackground(); }}>
                 恢复默认背景
               </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu();setSortAsc((v) => !v); }}>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); setSortAsc((v) => !v); }}>
                 {sortAsc ? "切换为降序" : "切换为升序"}
               </button>
             </>
@@ -738,8 +1198,12 @@ export default function LibraryPage() {
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onRenameBook(menu.book); }}>
                 重命名
               </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onSetGroup(menu.book); }}>
-                设置分组
+              <button
+                className="wr-menu-item"
+                role="menuitem"
+                onClick={() => { closeMenu(); setMoveDialog({ kind: "books", bookIds: [menu.book.id] }); }}
+              >
+                移动到书架…
               </button>
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onNote(menu.book); }}>
                 备注
@@ -758,26 +1222,68 @@ export default function LibraryPage() {
                 className="wr-menu-item"
                 role="menuitem"
                 data-danger="true"
-                onClick={() => { closeMenu(); void onDelete(menu.book); }}
+                onClick={() => { closeMenu(); void onDeleteBook(menu.book); }}
               >
                 删除
               </button>
             </>
           ) : (
             <>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onRenameGroup(menu.group); }}>
-                重命名分组
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onRenameShelf(menu.shelf); }}>
+                重命名书架
+              </button>
+              <button
+                className="wr-menu-item"
+                role="menuitem"
+                onClick={() => { closeMenu(); setMoveDialog({ kind: "shelf", shelfId: menu.shelf.id }); }}
+              >
+                移动到…
               </button>
               <button
                 className="wr-menu-item"
                 role="menuitem"
                 data-danger="true"
-                onClick={() => { closeMenu(); onDeleteGroup(menu.group); }}
+                onClick={() => { closeMenu(); void onDeleteShelf(menu.shelf); }}
               >
-                删除分组
+                删除书架
               </button>
             </>
           )}
+        </div>
+      ) : null}
+
+      {moveDialog ? (
+        <div
+          className="wr-prompt-overlay"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setMoveDialog(null);
+          }}
+        >
+          <div
+            className="wr-panel wr-prompt wr-move-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="移动到书架"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setMoveDialog(null);
+            }}
+          >
+            <div style={{ fontWeight: 700 }}>移动到书架</div>
+            <div className="wr-shelf-tree" role="listbox" aria-label="选择目标书架">
+              <button onClick={() => void onMoveDialogPick(null)}>全部（根）</button>
+              {shelfTreeRows(shelves)
+                .filter((row) => !moveExclude?.has(row.id))
+                .map((row) => (
+                  <button
+                    key={row.id}
+                    style={{ paddingLeft: 12 + row.depth * 14 }}
+                    onClick={() => void onMoveDialogPick(row.id)}
+                  >
+                    {row.name}
+                  </button>
+                ))}
+            </div>
+          </div>
         </div>
       ) : null}
 

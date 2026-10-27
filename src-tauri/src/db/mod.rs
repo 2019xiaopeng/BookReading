@@ -1,8 +1,10 @@
 use std::fs;
 
 use rusqlite::Connection;
+use time::OffsetDateTime;
 
 use crate::app_paths;
+use crate::commands;
 
 pub const SCHEMA_SQL: &str = include_str!("schema.sql");
 
@@ -24,6 +26,15 @@ pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
     ensure_books_is_favorite_column(&conn)?;
     migrations::ensure_book_columns(&conn)?;
     migrations::migrate_book_paths_to_appdata_relative(&conn, app)?;
+    migrations::migrate_groups_to_shelves(&conn)?;
+    // 回收站到期自动清理（保留期 0 = 永不）；启动失败不阻断应用
+    if let Ok(data_dir) = app_paths::app_data_dir(app) {
+        let _ = commands::shelves::purge_expired_trash(
+            &conn,
+            &data_dir,
+            OffsetDateTime::now_utc().unix_timestamp(),
+        );
+    }
 
     Ok(())
 }

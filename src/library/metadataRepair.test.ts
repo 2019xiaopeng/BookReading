@@ -13,11 +13,13 @@ function b(partial: Partial<Book>): Book {
     added_at: 0,
     last_opened_at: null,
     note: null,
-    group_name: null,
     pinned_at: null,
     reading_percent: null,
     is_favorite: false,
     format: null,
+    shelf_id: null,
+    sort_order: null,
+    deleted_at: null,
     ...partial,
   };
 }
