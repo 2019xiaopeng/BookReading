@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { saveReaderBackground } from "../../tauri/invoke";
-import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../../tauri/appDataPaths";
 import type { ReaderSettings, Theme } from "../settings/types";
 
 const THEME_SWATCHES: { value: Theme; label: string; color: string }[] = [
@@ -17,42 +16,14 @@ const THEME_SWATCHES: { value: Theme; label: string; color: string }[] = [
 
 export default function SettingsPanel(props: {
   value: ReaderSettings;
+  /** 阅读页的背景图 URL（模块级单缓存，面板预览复用，不再自建 objectURL） */
+  bgUrl: string | null;
   onChange: (next: ReaderSettings) => void;
 }) {
   const v = props.value;
   const scrolled = v.readingMode === "scrolled";
-  const [bgPreview, setBgPreview] = useState<string | null>(null);
   const [bgBusy, setBgBusy] = useState(false);
   const [bgError, setBgError] = useState<string | null>(null);
-  const bgPreviewRef = useRef<string | null>(null);
-
-  function swapBgPreview(url: string | null) {
-    if (bgPreviewRef.current && bgPreviewRef.current !== url) revokeObjectUrl(bgPreviewRef.current);
-    bgPreviewRef.current = url;
-    setBgPreview(url);
-  }
-
-  useEffect(() => {
-    return () => revokeObjectUrl(bgPreviewRef.current);
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (v.reader_bg.type !== "image") {
-      swapBgPreview(null);
-      return;
-    }
-    const ext = v.reader_bg.path.split(".").pop() ?? "";
-    readAppDataBlobUrl(v.reader_bg.path, extToMime(ext))
-      .then((url) => {
-        if (!cancelled) swapBgPreview(url);
-        else revokeObjectUrl(url);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [v.reader_bg]);
 
   async function pickBackground() {
     if (bgBusy) return;
@@ -109,20 +80,13 @@ export default function SettingsPanel(props: {
               <button
                 key={s.value}
                 type="button"
-                className="wr-btn"
+                className="wr-swatch-btn"
+                data-selected={active}
                 aria-label={s.label}
                 aria-pressed={active}
                 title={s.label}
                 onClick={() => props.onChange({ ...v, theme: s.value })}
-                style={{
-                  height: 30,
-                  padding: 0,
-                  borderRadius: 10,
-                  background: s.color,
-                  borderColor: active ? "rgba(var(--wr-accent-rgb), 0.65)" : "var(--wr-hairline)",
-                  boxShadow: active ? "0 0 0 3px rgba(var(--wr-accent-rgb), 0.2)" : "none",
-                  transition: "box-shadow 180ms ease, border-color 180ms ease",
-                }}
+                style={{ background: s.color }}
               />
             );
           })}
@@ -223,7 +187,7 @@ export default function SettingsPanel(props: {
               恢复默认
             </button>
           ) : null}
-          {bgPreview ? (
+          {props.bgUrl ? (
             <div
               aria-hidden="true"
               style={{
@@ -231,7 +195,7 @@ export default function SettingsPanel(props: {
                 height: 32,
                 borderRadius: 8,
                 border: "1px solid var(--wr-hairline)",
-                backgroundImage: `url("${bgPreview}")`,
+                backgroundImage: `url("${props.bgUrl}")`,
                 backgroundSize: "cover",
                 backgroundPosition: "center",
               }}

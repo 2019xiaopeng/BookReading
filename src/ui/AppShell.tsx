@@ -55,7 +55,7 @@ export default function AppShell(props: {
           </button>
         </div>
 
-        <div className="wr-side-bottom">{props.sidebarFooter}</div>
+        {props.sidebarFooter ? <div className="wr-side-bottom">{props.sidebarFooter}</div> : null}
       </div>
 
       <div className="wr-panel wr-main">

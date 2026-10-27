@@ -1,80 +1,102 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../tauri/appDataPaths";
+import { extToMime, readAppDataBlobUrl } from "../tauri/appDataPaths";
 import { logFrontend } from "../tauri/frontendLog";
+
+// Module-level cache: blob URLs live for the whole app session, so covers survive
+// page unmount/remount (returning from the reader shows them instantly, no refetch).
+// shortcut: blobs of deleted/replaced covers are never revoked; local covers are small
+const urlCache = new Map<string, string>();
+const failedAttempts = new Map<string, number>();
+const inflight = new Set<string>();
+const listeners = new Set<(path: string) => void>();
+
+export const COVER_MAX_ATTEMPTS = 3;
+
+export function coverRetryDelayMs(failedCount: number): number {
+  return 200 * 2 ** Math.max(0, failedCount - 1); // 200 / 400 / 800
+}
+
+export function getCoverUrl(path: string): string | undefined {
+  return urlCache.get(path);
+}
+
+function notify(path: string) {
+  for (const l of listeners) l(path);
+}
+
+export function requestCoverUrl(path: string): void {
+  if (urlCache.has(path) || inflight.has(path)) return;
+  if ((failedAttempts.get(path) ?? 0) >= COVER_MAX_ATTEMPTS) return;
+  inflight.add(path);
+  void (async () => {
+    try {
+      const ext = path.split(".").pop() ?? null;
+      const url = await readAppDataBlobUrl(path, extToMime(ext));
+      failedAttempts.delete(path);
+      urlCache.set(path, url);
+      notify(path);
+      inflight.delete(path);
+    } catch (e) {
+      const failed = (failedAttempts.get(path) ?? 0) + 1;
+      failedAttempts.set(path, failed);
+      if (failed < COVER_MAX_ATTEMPTS) {
+        logFrontend(`cover: load failed ${path} attempt ${failed}, retrying: ${String(e)}`);
+        setTimeout(() => {
+          inflight.delete(path);
+          requestCoverUrl(path);
+        }, coverRetryDelayMs(failed));
+        return;
+      }
+      logFrontend(`cover: load failed ${path}, giving up: ${String(e)}`);
+      inflight.delete(path);
+    }
+  })();
+}
 
 export function useCoverUrls(items: { cover_path?: string | null }[]): Record<string, string> {
   const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
-  const coverUrlsRef = useRef<Record<string, string>>({});
-  const loadingRef = useRef<Set<string>>(new Set());
+  // deps: the cover path set as a stable string, so book-list refreshes with identical covers don't churn loads
+  const wantedKey = useMemo(
+    () =>
+      [...new Set(items.map((it) => it.cover_path).filter((p): p is string => !!p))].sort().join("\n"),
+    [items],
+  );
 
   useEffect(() => {
-    coverUrlsRef.current = coverUrls;
-  }, [coverUrls]);
-
-  useEffect(() => {
-    const abort = new AbortController();
-    const pending: Promise<void>[] = [];
-
-    const wanted = new Set<string>();
-    for (const it of items) {
-      if (it.cover_path) wanted.add(it.cover_path);
-    }
-
-    setCoverUrls((prev) => {
-      const next = { ...prev };
-      for (const key of Object.keys(next)) {
-        if (!wanted.has(key)) {
-          revokeObjectUrl(next[key]);
-          delete next[key];
-        }
-      }
-      return next;
-    });
-
-    for (const coverPath of wanted) {
-      if (coverUrlsRef.current[coverPath]) continue;
-      if (loadingRef.current.has(coverPath)) continue;
-      loadingRef.current.add(coverPath);
-
-      pending.push(
-        (async () => {
-          try {
-            const ext = coverPath.split(".").pop() ?? null;
-            const url = await readAppDataBlobUrl(coverPath, extToMime(ext));
-            if (abort.signal.aborted) {
-              revokeObjectUrl(url);
-              return;
-            }
-            setCoverUrls((prev) => {
-              if (prev[coverPath]) {
-                revokeObjectUrl(url);
-                return prev;
-              }
-              return { ...prev, [coverPath]: url };
-            });
-          } catch (e) {
-            logFrontend(`cover: load failed ${coverPath} ${String(e)}`);
-          } finally {
-            loadingRef.current.delete(coverPath);
-          }
-        })(),
-      );
-    }
-
-    return () => {
-      abort.abort();
-      void Promise.allSettled(pending);
+    const onLoaded = (path: string) => {
+      setCoverUrls((prev) => {
+        const url = urlCache.get(path);
+        if (!url || prev[path] === url) return prev;
+        return { ...prev, [path]: url };
+      });
     };
-  }, [items]);
-
-  useEffect(() => {
+    listeners.add(onLoaded);
     return () => {
-      for (const url of Object.values(coverUrlsRef.current)) revokeObjectUrl(url);
-      coverUrlsRef.current = {};
+      listeners.delete(onLoaded);
     };
   }, []);
 
+  useEffect(() => {
+    const wanted = new Set(wantedKey ? wantedKey.split("\n") : []);
+    for (const path of wanted) requestCoverUrl(path);
+    setCoverUrls((prev) => {
+      let next: Record<string, string> | null = null;
+      for (const k of Object.keys(prev)) {
+        if (wanted.has(k)) continue;
+        next ??= { ...prev };
+        delete next[k];
+      }
+      for (const p of wanted) {
+        const u = urlCache.get(p);
+        if (u && prev[p] !== u) {
+          next ??= { ...prev };
+          next[p] = u;
+        }
+      }
+      return next ?? prev;
+    });
+  }, [wantedKey]);
+
   return coverUrls;
 }
-

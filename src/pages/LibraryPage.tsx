@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -16,6 +17,7 @@ import { needsMetadataRepair } from "../library/metadataRepair";
 import { useCoverUrls } from "../library/useCoverUrls";
 import { logFrontend } from "../tauri/frontendLog";
 import AppShell from "../ui/AppShell";
+import { IconBook, IconImage, IconMore, IconPin, IconRefresh } from "../ui/icons";
 
 function formatTitle(book: Book): string {
   return book.title?.trim() || "未命名";
@@ -25,39 +27,68 @@ function formatAuthor(book: Book): string {
   return book.author?.trim() || "未知作者";
 }
 
+function progressText(book: Book): string {
+  return typeof book.reading_percent === "number" ? `读到 ${Math.round(book.reading_percent * 100)}%` : "未读";
+}
+
+type SortKey = "recent" | "title" | "added";
+
+type MenuState =
+  | { kind: "grid"; x: number; y: number }
+  | { kind: "book"; x: number; y: number; book: Book }
+  | { kind: "group"; x: number; y: number; group: string };
+
+type PromptState = {
+  title: string;
+  value: string;
+  /** true = 空提交合法（分组/备注留空即清除） */
+  allowEmpty: boolean;
+  onConfirm: (value: string) => void;
+};
+
 export default function LibraryPage() {
   const navigate = useNavigate();
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [groupFilter, setGroupFilter] = useState("全部");
-  const [sortBy, setSortBy] = useState<"recent" | "title">("recent");
+  const [sortKey, setSortKey] = useState<SortKey>("recent");
+  const [sortAsc, setSortAsc] = useState(false);
+  // session-only groups created via 新建分组 but not yet holding any book (groups otherwise derive from books)
+  const [extraGroups, setExtraGroups] = useState<string[]>([]);
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const [prompt, setPrompt] = useState<PromptState | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuTriggerRef = useRef<HTMLElement | null>(null);
   const repairingRef = useRef<Set<string>>(new Set());
   const attemptedRef = useRef<Set<string>>(new Set());
   const coverUrls = useCoverUrls(books);
 
   const groups = useMemo(
     () =>
-      [...new Set(books.map((b) => b.group_name).filter((g): g is string => !!g))].sort((a, b) =>
+      [...new Set([...extraGroups, ...books.map((b) => b.group_name).filter((g): g is string => !!g)])].sort((a, b) =>
         a.localeCompare(b, "zh"),
       ),
-    [books],
+    [books, extraGroups],
   );
 
   const booksFiltered = useMemo(() => {
-    let list = groupFilter === "全部" ? books : books.filter((b) => b.group_name === groupFilter);
+    let list = books;
+    if (groupFilter === "未分组") list = list.filter((b) => !b.group_name);
+    else if (groupFilter !== "全部") list = list.filter((b) => b.group_name === groupFilter);
     const q = query.trim().toLowerCase();
     if (q) {
       list = list.filter((b) => `${formatTitle(b)} ${formatAuthor(b)}`.toLowerCase().includes(q));
     }
-    if (sortBy === "title") {
-      list = [...list].sort(
-        (a, b) =>
-          Number(!!b.pinned_at) - Number(!!a.pinned_at) || formatTitle(a).localeCompare(formatTitle(b), "zh"),
-      );
-    }
-    return list;
-  }, [books, query, groupFilter, sortBy]);
+    const dir = sortAsc ? 1 : -1;
+    return [...list].sort((a, b) => {
+      const pinned = Number(!!b.pinned_at) - Number(!!a.pinned_at);
+      if (pinned !== 0) return pinned;
+      if (sortKey === "title") return dir * formatTitle(a).localeCompare(formatTitle(b), "zh");
+      if (sortKey === "added") return dir * (a.added_at - b.added_at);
+      return dir * ((a.last_opened_at ?? a.added_at) - (b.last_opened_at ?? b.added_at));
+    });
+  }, [books, query, groupFilter, sortKey, sortAsc]);
 
   async function refresh() {
     const list = await listBooks();
@@ -93,6 +124,74 @@ export default function LibraryPage() {
       void Promise.allSettled(pending);
     };
   }, [books]);
+
+  // menu keyboard semantics: open moves focus in, arrows cycle, close returns focus to the trigger
+  function openMenu(next: MenuState, trigger: EventTarget | null) {
+    menuTriggerRef.current = trigger instanceof HTMLElement ? trigger : null;
+    setMenu(next);
+  }
+
+  function closeMenu() {
+    setMenu(null);
+    menuTriggerRef.current?.focus?.();
+    menuTriggerRef.current = null;
+  }
+
+  function onMenuKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>("button") ?? []);
+      if (items.length === 0) return;
+      const cur = items.indexOf(document.activeElement as HTMLElement);
+      const next =
+        cur < 0
+          ? e.key === "ArrowDown"
+            ? items[0]
+            : items[items.length - 1]
+          : e.key === "ArrowDown"
+            ? items[(cur + 1) % items.length]
+            : items[(cur - 1 + items.length) % items.length];
+      next.focus();
+    } else if (e.key === "Tab") {
+      closeMenu();
+    }
+  }
+
+  // close the popup menu on outside pointerdown / Escape
+  useEffect(() => {
+    if (!menu) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (menuRef.current?.contains(e.target as Node)) return;
+      closeMenu();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeMenu();
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+
+  // clamp menu into the viewport before paint, then focus the first item (ARIA menu pattern)
+  useLayoutEffect(() => {
+    if (!menu || !menuRef.current) return;
+    const el = menuRef.current;
+    el.style.left = `${Math.max(8, Math.min(menu.x, window.innerWidth - el.offsetWidth - 8))}px`;
+    el.style.top = `${Math.max(8, Math.min(menu.y, window.innerHeight - el.offsetHeight - 8))}px`;
+    el.querySelector<HTMLElement>("button")?.focus();
+  }, [menu]);
+
+  function submitPrompt() {
+    const p = prompt;
+    if (!p) return;
+    const v = p.value.trim();
+    if (!v && !p.allowEmpty) return;
+    setPrompt(null);
+    p.onConfirm(v);
+  }
 
   async function onImport() {
     if (loading) return;
@@ -175,17 +274,104 @@ export default function LibraryPage() {
     }
   }
 
-  async function onChipUpdate(req: UpdateBookMetadataRequest) {
-    if (loading) return;
+  async function runUpdates(reqs: UpdateBookMetadataRequest[]) {
     setLoading(true);
     try {
-      await updateBookMetadata(req);
+      for (const req of reqs) await updateBookMetadata(req);
       await refresh();
     } catch (e) {
       window.alert(String(e));
     } finally {
       setLoading(false);
     }
+  }
+
+  function onChipUpdate(req: UpdateBookMetadataRequest) {
+    if (loading) return;
+    void runUpdates([req]);
+  }
+
+  function onRenameBook(book: Book) {
+    setPrompt({
+      title: "重命名书籍",
+      value: formatTitle(book),
+      allowEmpty: false,
+      onConfirm: (v) => {
+        if (v !== formatTitle(book)) onChipUpdate({ book_id: book.id, title: v });
+      },
+    });
+  }
+
+  function onSetGroup(book: Book) {
+    setPrompt({
+      title: "分组名称（留空清除）",
+      value: book.group_name ?? "",
+      allowEmpty: true,
+      onConfirm: (v) => onChipUpdate({ book_id: book.id, group_name: v }),
+    });
+  }
+
+  function onNote(book: Book) {
+    setPrompt({
+      title: "备注（留空清除）",
+      value: book.note ?? "",
+      allowEmpty: true,
+      onConfirm: (v) => onChipUpdate({ book_id: book.id, note: v }),
+    });
+  }
+
+  function onToggleFavorite(book: Book) {
+    if (loading) return;
+    setLoading(true);
+    setBookFavorite(book.id, !book.is_favorite)
+      .then(() => refresh())
+      .finally(() => setLoading(false));
+  }
+
+  function onNewGroup() {
+    setPrompt({
+      title: "新分组名称",
+      value: "",
+      allowEmpty: false,
+      onConfirm: (name) => {
+        setExtraGroups((prev) => (prev.includes(name) ? prev : [...prev, name]));
+        setGroupFilter(name);
+      },
+    });
+  }
+
+  function onRenameGroup(group: string) {
+    setPrompt({
+      title: "分组名称",
+      value: group,
+      allowEmpty: false,
+      onConfirm: (name) => {
+        if (name === group) return;
+        setExtraGroups((prev) => prev.map((g) => (g === group ? name : g)));
+        if (groupFilter === group) setGroupFilter(name);
+        void runUpdates(
+          books.filter((b) => b.group_name === group).map((b) => ({ book_id: b.id, group_name: name })),
+        );
+      },
+    });
+  }
+
+  function onDeleteGroup(group: string) {
+    if (!window.confirm(`删除分组“${group}”？组内书籍保留，归入“未分组”。`)) return;
+    setExtraGroups((prev) => prev.filter((g) => g !== group));
+    if (groupFilter === group) setGroupFilter("全部");
+    void runUpdates(
+      books.filter((b) => b.group_name === group).map((b) => ({ book_id: b.id, group_name: "" })),
+    );
+  }
+
+  function onDropToGroup(e: DragEvent<HTMLButtonElement>, chip: string) {
+    e.preventDefault();
+    e.currentTarget.classList.remove("drop-target");
+    if (chip === "全部") return;
+    const id = e.dataTransfer.getData("text/book-id");
+    if (!id) return;
+    void runUpdates([{ book_id: id, group_name: chip === "未分组" ? "" : chip }]);
   }
 
   return (
@@ -196,47 +382,93 @@ export default function LibraryPage() {
       sidebarFooter={
         <>
           <button className="wr-small-btn" disabled={loading} onClick={() => void refresh()}>
-            刷新
+            <IconRefresh />
+            <span>刷新</span>
           </button>
           <button className="wr-small-btn" onClick={onImportImages} disabled={loading}>
-            导入漫画
+            <IconImage />
+            <span>导入漫画</span>
           </button>
           <button className="wr-small-btn wr-primary" onClick={onImport} disabled={loading}>
-            {loading ? "导入中…" : "导入图书"}
+            <IconBook />
+            <span>{loading ? "导入中…" : "导入图书"}</span>
           </button>
         </>
       }
     >
       <div style={{ display: "flex", gap: 8, padding: "16px 18px 0", alignItems: "center" }}>
-        <div className="wr-seg" role="group" aria-label="排序方式">
-          <button className="wr-seg-btn" data-active={sortBy === "recent"} onClick={() => setSortBy("recent")}>
-            最近
+        <div className="wr-seg" role="group" aria-label="排序">
+          <button className="wr-seg-btn" data-active={sortKey === "recent"} onClick={() => setSortKey("recent")}>
+            最近阅读
           </button>
-          <button className="wr-seg-btn" data-active={sortBy === "title"} onClick={() => setSortBy("title")}>
+          <button className="wr-seg-btn" data-active={sortKey === "title"} onClick={() => setSortKey("title")}>
             书名
           </button>
-        </div>
-        {groups.length > 0 ? (
-          <select
-            className="wr-select"
-            aria-label="按分组筛选"
-            value={groupFilter}
-            onChange={(e) => setGroupFilter(e.currentTarget.value)}
-            style={{ marginLeft: "auto", width: "auto" }}
+          <button className="wr-seg-btn" data-active={sortKey === "added"} onClick={() => setSortKey("added")}>
+            导入时间
+          </button>
+          <button
+            className="wr-seg-btn"
+            aria-pressed={sortAsc}
+            aria-label={`排序方向：${sortAsc ? "升序" : "降序"}`}
+            title={`排序方向：${sortAsc ? "升序" : "降序"}`}
+            onClick={() => setSortAsc((v) => !v)}
           >
-            <option value="全部">全部分组</option>
-            {groups.map((g) => (
-              <option key={g} value={g}>
-                {g}
-              </option>
-            ))}
-          </select>
-        ) : null}
+            {sortAsc ? "↑ 升序" : "↓ 降序"}
+          </button>
+        </div>
       </div>
 
-      <div className="wr-book-grid">
+      {groups.length > 0 ? (
+        <div className="wr-group-row" role="group" aria-label="分组筛选">
+          {["全部", "未分组", ...groups].map((chip) => (
+            <button
+              key={chip}
+              className="wr-group-chip"
+              data-active={groupFilter === chip}
+              aria-pressed={groupFilter === chip}
+              onClick={() => setGroupFilter(chip)}
+              onContextMenu={(e) => {
+                if (!groups.includes(chip)) return;
+                e.preventDefault();
+                openMenu({ kind: "group", x: e.clientX, y: e.clientY, group: chip }, e.currentTarget);
+              }}
+              onDragOver={(e) => {
+                if (chip === "全部") return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+              }}
+              onDragEnter={(e) => {
+                if (chip !== "全部") e.currentTarget.classList.add("drop-target");
+              }}
+              onDragLeave={(e) => e.currentTarget.classList.remove("drop-target")}
+              onDrop={(e) => onDropToGroup(e, chip)}
+            >
+              {chip}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div
+        className="wr-book-grid"
+        onContextMenu={(e) => {
+          if ((e.target as HTMLElement).closest(".wr-book-card")) return;
+          e.preventDefault();
+          openMenu({ kind: "grid", x: e.clientX, y: e.clientY }, e.currentTarget);
+        }}
+      >
         {booksFiltered.map((b) => (
-          <div key={b.id} className="wr-book-card" onClick={(e) => { if ((e.target as HTMLElement).closest("button")) return; navigate(`/read/${b.id}`); }}>
+          <div
+            key={b.id}
+            className="wr-book-card"
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData("text/book-id", b.id);
+              e.dataTransfer.effectAllowed = "move";
+            }}
+            onClick={(e) => { if ((e.target as HTMLElement).closest("button")) return; navigate(`/read/${b.id}`); }}
+          >
             <div className="wr-cover">
               {b.cover_path && coverUrls[b.cover_path] ? <img src={coverUrls[b.cover_path]} alt="" /> : null}
               {!b.cover_path || !coverUrls[b.cover_path] ? (
@@ -248,92 +480,158 @@ export default function LibraryPage() {
             </div>
 
             <div className="wr-meta">
-              <div className="wr-title">{formatTitle(b)}</div>
-              <div className="wr-author">{formatAuthor(b)}</div>
-              {b.note ? <div className="wr-note">{b.note}</div> : null}
-
-              <div className="wr-chip-row">
-                <div className="wr-chip">
-                  <span className="wr-chip-dot" />
-                  <span>{b.is_favorite ? "收藏" : b.format === "images" ? "漫画" : "本地"}</span>
-                </div>
-                <div className="wr-chip" style={{ fontFamily: "var(--wr-mono)" }}>
-                  {new Date(b.added_at * 1000).toLocaleDateString()}
-                </div>
-                {typeof b.reading_percent === "number" ? (
+              <div className="wr-title" title={formatTitle(b)}>{formatTitle(b)}</div>
+              <div className="wr-author" title={`${formatAuthor(b)} · ${progressText(b)}`}>{formatAuthor(b)}</div>
+              {typeof b.reading_percent === "number" ? (
+                <div className="wr-chip-row">
                   <div className="wr-chip">
                     <span className="wr-chip-dot" />
                     <span>读到 {Math.round(b.reading_percent * 100)}%</span>
                   </div>
-                ) : null}
-                <button
-                  className="wr-chip wr-chip-btn"
-                  aria-pressed={!!b.pinned_at}
-                  data-pinned={!!b.pinned_at}
-                  disabled={loading}
-                  onClick={() => void onChipUpdate({ book_id: b.id, pinned: !b.pinned_at })}
-                >
-                  {b.pinned_at ? "已置顶" : "置顶"}
-                </button>
-                <button
-                  className="wr-chip wr-chip-btn"
-                  disabled={loading}
-                  onClick={() => {
-                    const v = window.prompt("分组名称（留空清除）", b.group_name ?? "");
-                    if (v === null) return;
-                    void onChipUpdate({ book_id: b.id, group_name: v });
-                  }}
-                >
-                  {b.group_name || "分组"}
-                </button>
-                <button
-                  className="wr-chip wr-chip-btn"
-                  disabled={loading}
-                  onClick={() => {
-                    const v = window.prompt("备注（留空清除）", b.note ?? "");
-                    if (v === null) return;
-                    void onChipUpdate({ book_id: b.id, note: v });
-                  }}
-                >
-                  {b.note ? "有备注" : "备注"}
-                </button>
-              </div>
+                </div>
+              ) : null}
+            </div>
 
-              <div className="wr-actions">
-                <button
-                  className="wr-btn wr-btn-primary"
-                  disabled={loading}
-                  onClick={() => {
-                    logFrontend(`ui: open book ${b.id}`);
-                    navigate(`/read/${b.id}`);
-                  }}
-                >
-                  打开
-                </button>
-                <button
-                  className="wr-btn"
-                  disabled={loading}
-                  onClick={() => {
-                    setLoading(true);
-                    setBookFavorite(b.id, !b.is_favorite)
-                      .then(() => refresh())
-                      .finally(() => setLoading(false));
-                  }}
-                >
-                  {b.is_favorite ? "取消收藏" : "收藏"}
-                </button>
-                <button className="wr-btn" disabled={loading} onClick={() => onDelete(b)}>
-                  删除
-                </button>
-              </div>
+            <div className="wr-card-tools" data-show={!!b.pinned_at}>
+              <button
+                className="wr-mini-btn"
+                aria-label={b.pinned_at ? "取消置顶" : "置顶"}
+                aria-pressed={!!b.pinned_at}
+                data-pinned={!!b.pinned_at}
+                disabled={loading}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onChipUpdate({ book_id: b.id, pinned: !b.pinned_at });
+                }}
+              >
+                <IconPin fill={b.pinned_at ? "currentColor" : "none"} />
+              </button>
+              <button
+                className="wr-mini-btn"
+                aria-label="更多操作"
+                aria-haspopup="menu"
+                disabled={loading}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const r = e.currentTarget.getBoundingClientRect();
+                  openMenu({ kind: "book", x: r.right, y: r.bottom + 4, book: b }, e.currentTarget);
+                }}
+              >
+                <IconMore />
+              </button>
             </div>
           </div>
         ))}
+
+        {booksFiltered.length === 0 ? (
+          <div className="wr-muted" style={{ padding: 16, gridColumn: "1 / -1" }}>
+            {query.trim() ? "没有匹配的书籍" : "书架还是空的，从左下角导入第一本书，或在空白处右键"}
+          </div>
+        ) : null}
       </div>
 
-      {booksFiltered.length === 0 ? (
-        <div className="wr-muted" style={{ padding: 16, gridColumn: "1 / -1" }}>
-          {query.trim() ? "没有匹配的书籍" : "书架还是空的，从左下角导入第一本书试试"}
+      {menu ? (
+        <div ref={menuRef} className="wr-menu" role="menu" style={{ left: menu.x, top: menu.y }} onKeyDown={onMenuKeyDown}>
+          {menu.kind === "grid" ? (
+            <>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onNewGroup(); }}>
+                新建分组
+              </button>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onImport(); }}>
+                导入图书
+              </button>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onImportImages(); }}>
+                导入漫画
+              </button>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu();setSortAsc((v) => !v); }}>
+                {sortAsc ? "切换为降序" : "切换为升序"}
+              </button>
+            </>
+          ) : menu.kind === "book" ? (
+            <>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onRenameBook(menu.book); }}>
+                重命名
+              </button>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onSetGroup(menu.book); }}>
+                设置分组
+              </button>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onNote(menu.book); }}>
+                备注
+              </button>
+              <button
+                className="wr-menu-item"
+                role="menuitem"
+                onClick={() => { closeMenu(); onToggleFavorite(menu.book); }}
+              >
+                {menu.book.is_favorite ? "取消收藏" : "收藏"}
+              </button>
+              <button
+                className="wr-menu-item"
+                role="menuitem"
+                data-danger="true"
+                onClick={() => { closeMenu(); void onDelete(menu.book); }}
+              >
+                删除
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onRenameGroup(menu.group); }}>
+                重命名分组
+              </button>
+              <button
+                className="wr-menu-item"
+                role="menuitem"
+                data-danger="true"
+                onClick={() => { closeMenu(); onDeleteGroup(menu.group); }}
+              >
+                删除分组
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {prompt ? (
+        <div
+          className="wr-prompt-overlay"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setPrompt(null);
+          }}
+        >
+          <div
+            className="wr-panel wr-prompt"
+            role="dialog"
+            aria-modal="true"
+            aria-label={prompt.title}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setPrompt(null);
+            }}
+          >
+            <div style={{ fontWeight: 700 }}>{prompt.title}</div>
+            <input
+              className="wr-input"
+              autoFocus
+              aria-label={prompt.title}
+              value={prompt.value}
+              onChange={(e) => setPrompt((prev) => (prev ? { ...prev, value: e.currentTarget.value } : prev))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submitPrompt();
+              }}
+            />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button className="wr-btn" onClick={() => setPrompt(null)}>
+                取消
+              </button>
+              <button
+                className="wr-btn wr-btn-primary"
+                onClick={submitPrompt}
+                disabled={!prompt.allowEmpty && !prompt.value.trim()}
+              >
+                确定
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </AppShell>

@@ -5,6 +5,7 @@ import type { Book, FavoriteQuote } from "../tauri/invoke";
 import { deleteFavoriteQuote, listBooks, listFavoriteBooks, listFavoriteQuotes, setBookFavorite } from "../tauri/invoke";
 import { useCoverUrls } from "../library/useCoverUrls";
 import AppShell from "../ui/AppShell";
+import { IconHeart } from "../ui/icons";
 
 export default function FavoritesPage() {
   const navigate = useNavigate();
@@ -52,6 +53,16 @@ export default function FavoritesPage() {
     refreshQuotes().finally(() => setLoading(false));
   }, [tab, filterBookId]);
 
+  // silent refresh on window focus: returning to this page keeps data fresh (no manual refresh button)
+  useEffect(() => {
+    const onFocus = () => {
+      if (tab === "books") void refreshBooks();
+      else void refreshQuotes();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [tab, filterBookId, query]);
+
   const filteredBooks = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return favoriteBooks;
@@ -84,23 +95,6 @@ export default function FavoritesPage() {
           if (k === "books" || k === "quotes") setTab(k);
         },
       }}
-      sidebarFooter={
-        <>
-          <button className="wr-small-btn" onClick={() => navigate("/")}>
-            返回书架
-          </button>
-          <button
-            className="wr-small-btn wr-primary"
-            disabled={loading}
-            onClick={() => {
-              setLoading(true);
-              refreshBooks().finally(() => setLoading(false));
-            }}
-          >
-            刷新
-          </button>
-        </>
-      }
     >
       {tab === "books" ? (
         <div className="wr-book-grid">
@@ -132,13 +126,14 @@ export default function FavoritesPage() {
                     className="wr-btn"
                     onClick={() => {
                       setLoading(true);
-                      setBookFavorite(b.id, false)
+                      setBookFavorite(b.id, !b.is_favorite)
                         .then(() => refreshBooks())
                         .finally(() => setLoading(false));
                     }}
                     disabled={loading}
                   >
-                    取消收藏
+                    <IconHeart fill={b.is_favorite ? "currentColor" : "none"} aria-hidden />
+                    <span>{b.is_favorite ? "已收藏" : "收藏"}</span>
                   </button>
                 </div>
               </div>

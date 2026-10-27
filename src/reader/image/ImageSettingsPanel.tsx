@@ -2,8 +2,9 @@ import type { Theme } from "../settings/types";
 import type { ImageFit, ImagePageLayout, ImageReadMode, ImageReaderSettings } from "./layout";
 
 type Props = {
-  theme: Theme;
-  onThemeChange: (theme: Theme) => void;
+    /** dropped in batch4 B1: comic reader follows the global six-theme tokens; A5 removes the call-site props */
+  theme?: Theme;
+  onThemeChange?: (theme: Theme) => void;
   value: ImageReaderSettings;
   onChange: (next: ImageReaderSettings) => void;
 };
@@ -33,29 +34,13 @@ function Seg<T extends string>(props: { label: string; value: T; options: SegOpt
   );
 }
 
-export default function ImageSettingsPanel({ theme, onThemeChange, value, onChange }: Props) {
+export default function ImageSettingsPanel({ value, onChange }: Props) {
   const webtoon = value.mode === "webtoon";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ fontWeight: 600 }}>漫画设置</div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <div className="wr-muted">主题</div>
-        <select
-          className="wr-select"
-          aria-label="主题"
-          value={theme}
-          onChange={(e) => {
-            const next = e.currentTarget.value;
-            if (next === "light" || next === "sepia" || next === "dark") onThemeChange(next);
-          }}
-        >
-          <option value="light">浅色</option>
-          <option value="sepia">护眼</option>
-          <option value="dark">夜间</option>
-        </select>
-      </div>
 
       <Seg
         label="阅读模式"

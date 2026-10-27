@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import type { Book } from "../../tauri/invoke";
 import { getReadingState } from "../../tauri/invoke";
+import type { Theme } from "../settings/types";
 import { listImagePages, readImagePage } from "./api";
 import {
   WIDE_PAGE_RATIO,
   buildSpreads,
   clampPage,
   displayOrder,
+    slideDirection,
   parseImageCfi,
   spreadIndexForPage,
   type ImageReaderSettings,
@@ -16,11 +18,16 @@ import {
 
 export type ImageReaderApi = {
   turn: (direction: TurnDirection) => void;
+  goToPage: (page: number) => void;
+  /** url of a resident (preload-window) page blob, for the pages panel */
+  getPageUrl: (page: number) => string | undefined;
 };
 
 type Props = {
   book: Book;
   settings: ImageReaderSettings;
+  /** 跟随全局六主题（ReaderPage 传入；组件内部 token 化由批次4 B 区接线） */
+  theme: Theme;
   onRelocated: (page: number, pageCount: number) => void;
   onApi: (api: ImageReaderApi) => void;
 };
@@ -36,7 +43,7 @@ function mimeFor(name: string): string {
   return "application/octet-stream";
 }
 
-export default function ImageReader({ book, settings, onRelocated, onApi }: Props) {
+export default function ImageReader({ book, theme, settings, onRelocated, onApi }: Props) {
   const [pages, setPages] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [spreadIndex, setSpreadIndex] = useState<number | null>(null);
@@ -44,6 +51,8 @@ export default function ImageReader({ book, settings, onRelocated, onApi }: Prop
   const [wide, setWide] = useState<Record<number, boolean>>({});
   const [failed, setFailed] = useState<Set<number>>(new Set());
   const [anchor, setAnchor] = useState(0);
+  const [shownSpread, setShownSpread] = useState<number | null>(null);
+  const [snap, setSnap] = useState<{ pages: number[]; urls: Record<number, string>; dir: 1 | -1 } | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pageElsRef = useRef<Map<number, HTMLElement>>(new Map());
   const cacheRef = useRef<Map<number, string>>(new Map());
@@ -51,6 +60,7 @@ export default function ImageReader({ book, settings, onRelocated, onApi }: Prop
   const wantedRef = useRef<Set<number>>(new Set());
   const epochRef = useRef(0);
   const currentPageRef = useRef(0);
+  const shownSpreadRef = useRef<number | null>(null);
   const reportedRef = useRef<number | null>(null);
   const settingsRef = useRef(settings);
   const onRelocatedRef = useRef(onRelocated);
@@ -81,6 +91,9 @@ export default function ImageReader({ book, settings, onRelocated, onApi }: Prop
     setUrls({});
     setFailed(new Set());
     reportedRef.current = null;
+    shownSpreadRef.current = null;
+    setShownSpread(null);
+    setSnap(null);
     (async () => {
       try {
         const names = await listImagePages(book.id);
@@ -131,6 +144,32 @@ export default function ImageReader({ book, settings, onRelocated, onApi }: Prop
     onRelocatedRef.current(activePage, pages.length);
   }, [activePage, pages]);
 
+  // batch4 B2: hold the last ready spread while the target loads (no white flash), then slide on unit turns
+  useEffect(() => {
+    if (settings.mode === "webtoon") {
+      if (snap) setSnap(null);
+      shownSpreadRef.current = null;
+      return;
+    }
+    if (spreadIndex === null) return;
+    const target = spreads[spreadIndex];
+    if (!target || !target.every((p) => urls[p] || failed.has(p))) return;
+    const prev = shownSpreadRef.current;
+    if (prev === spreadIndex) return;
+    shownSpreadRef.current = spreadIndex;
+    setShownSpread(spreadIndex);
+    if (prev !== null && Math.abs(spreadIndex - prev) === 1 && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const pages = spreads[prev] ?? [];
+      const snapUrls: Record<number, string> = {};
+      for (const p of pages) {
+        const u = urls[p];
+        if (u) snapUrls[p] = u;
+      }
+      if (pages.length > 0 && pages.every((p) => snapUrls[p])) {
+        setSnap({ pages, urls: snapUrls, dir: slideDirection(spreadIndex - prev, settings.rtl) as 1 | -1 });
+      }
+    }
+  }, [spreadIndex, spreads, urls, failed, settings.mode, settings.rtl, snap]);
   function retry(index: number) {
     setFailed((prev) => {
       if (!prev.has(index)) return prev;
@@ -190,6 +229,7 @@ export default function ImageReader({ book, settings, onRelocated, onApi }: Prop
         }
       }
     }
+    for (const p of spreads[shownSpreadRef.current ?? -1] ?? []) want.add(p);
     wantedRef.current = want;
     for (const p of want) void ensureLoaded(p);
     for (const [i, url] of cacheRef.current) {
@@ -224,8 +264,21 @@ export default function ImageReader({ book, settings, onRelocated, onApi }: Prop
           return Math.min(spreads.length - 1, Math.max(0, next));
         });
       },
+goToPage: (page: number) => {
+        if (settings.mode === "webtoon") {
+          const el = pageElsRef.current.get(clampPage(page, pages?.length ?? 0));
+          el?.scrollIntoView({
+            behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+            block: "start",
+          });
+          return;
+        }
+        setSpreadIndex(spreadIndexForPage(spreads, page));
+      },
+      getPageUrl: (page: number) => cacheRef.current.get(page),
+
     });
-  }, [onApi, spreads, settings.mode]);
+        }, [onApi, spreads, settings.mode, pages]);
 
   // snap webtoon mode to the current page when it (re)mounts
   useEffect(() => {
@@ -264,7 +317,7 @@ export default function ImageReader({ book, settings, onRelocated, onApi }: Prop
 
   if (error) {
     return (
-      <div className="wr-image-stage" role="alert">
+      <div className="wr-image-stage" role="alert" data-theme={theme}>
         <div className="wr-muted" style={{ padding: 16, textAlign: "center" }}>
           加载失败：{error}
         </div>
@@ -274,7 +327,7 @@ export default function ImageReader({ book, settings, onRelocated, onApi }: Prop
 
   if (pages === null || spreadIndex === null) {
     return (
-      <div className="wr-image-stage">
+      <div className="wr-image-stage" data-theme={theme}>
         <div className="wr-muted">加载中…</div>
       </div>
     );
@@ -282,7 +335,7 @@ export default function ImageReader({ book, settings, onRelocated, onApi }: Prop
 
   if (settings.mode === "webtoon") {
     return (
-      <div className="wr-image-stage">
+      <div className="wr-image-stage" data-theme={theme}>
         <div className="wr-image-webtoon" ref={scrollRef} tabIndex={0} aria-label="条漫阅读区">
           {pages.map((_, i) => (
             <div
@@ -312,22 +365,37 @@ export default function ImageReader({ book, settings, onRelocated, onApi }: Prop
   }
 
   return (
-    <div className="wr-image-stage">
-      <div className="wr-image-fit" data-fit={settings.fit}>
-        {displayOrder(spreads[spreadIndex] ?? [], settings.rtl).map((p) =>
-          urls[p] ? (
-            <img key={p} src={urls[p]} alt={`第 ${p + 1} 页`} loading="lazy" decoding="async" draggable={false} />
-          ) : (
-            failed.has(p) ? (
-              <button key={p} type="button" className="wr-image-loading wr-image-failed" onClick={() => retry(p)}>
-                本页加载失败，点击重试
-              </button>
-            ) : (
-              <div key={p} className="wr-image-loading" />
-            )
-          ),
+  <div className="wr-image-stage" data-theme={theme}>
+    {snap ? (
+      <div
+        className="wr-image-fit wr-image-fit--out"
+        data-fit={settings.fit}
+        aria-hidden="true"
+        style={{ "--slide-dir": snap.dir } as CSSProperties}
+        onAnimationEnd={() => setSnap(null)}
+      >
+        {displayOrder(snap.pages, settings.rtl).map((p) =>
+          snap.urls[p] ? <img key={p} src={snap.urls[p]} alt="" draggable={false} /> : null,
         )}
       </div>
+    ) : null}
+    <div
+      className={snap ? "wr-image-fit wr-image-fit--in" : "wr-image-fit"}
+      data-fit={settings.fit}
+      style={snap ? ({ "--slide-dir": snap.dir } as CSSProperties) : undefined}
+    >
+      {displayOrder(spreads[shownSpread ?? spreadIndex] ?? spreads[spreadIndex] ?? [], settings.rtl).map((p) =>
+        urls[p] ? (
+          <img key={p} src={urls[p]} alt={"第 " + (p + 1) + " 页"} loading="lazy" decoding="async" draggable={false} />
+        ) : failed.has(p) ? (
+          <button key={p} type="button" className="wr-image-loading wr-image-failed" onClick={() => retry(p)}>
+            本页加载失败，点击重试
+          </button>
+        ) : (
+          <div key={p} className="wr-image-loading" />
+        ),
+      )}
     </div>
-  );
+  </div>
+);
 }

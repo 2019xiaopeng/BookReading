@@ -9,6 +9,7 @@ import {
   normalizeImageReaderSettings,
   pagePercent,
   parseImageCfi,
+  slideDirection,
   spreadIndexForPage,
   turnKeyDirection,
 } from "./layout";
@@ -121,5 +122,15 @@ describe("normalizeImageReaderSettings", () => {
       rtl: true,
       mode: "webtoon",
     });
+  });
+});
+
+describe("slideDirection", () => {
+  test("next slides from the right, prev from the left, rtl mirrors, no move is 0", () => {
+    expect(slideDirection(1, false)).toBe(1);
+    expect(slideDirection(-1, false)).toBe(-1);
+    expect(slideDirection(1, true)).toBe(-1);
+    expect(slideDirection(-1, true)).toBe(1);
+    expect(slideDirection(0, true)).toBe(0);
   });
 });

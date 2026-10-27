@@ -21,7 +21,7 @@ import {
   type FavoriteQuote,
   type Highlight,
 } from "../tauri/invoke";
-import { createReader, type ReaderController, type SearchResult, type TocItem } from "../reader/epub/reader";
+import { createReader, type ReaderController, type SearchResult, type SelectionRect, type TocItem } from "../reader/epub/reader";
 import { tocLabelFor } from "../reader/epub/tocLabel";
 import BookmarksPanel from "../reader/components/BookmarksPanel";
 import HighlightsPanel from "../reader/components/HighlightsPanel";
@@ -30,6 +30,7 @@ import SettingsPanel from "../reader/components/SettingsPanel";
 import SelectionToolbar from "../reader/components/SelectionToolbar";
 import ImageReader, { type ImageReaderApi } from "../reader/image/ImageReader";
 import ImageSettingsPanel from "../reader/image/ImageSettingsPanel";
+import PagesPanel from "../reader/image/PagesPanel";
 import {
   defaultImageReaderSettings,
   imageCfi,
@@ -58,6 +59,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconHighlight,
+  IconImage,
   IconList,
   IconMoon,
   IconQuote,
@@ -86,8 +88,8 @@ export default function ReaderPage() {
   }));
   const [imageSettings, setImageSettings] = useState<ImageReaderSettings>(defaultImageReaderSettings);
   const [bgUrl, setBgUrl] = useState<string | null>(null);
-  const [pageLabel, setPageLabel] = useState<string | null>(null);
-  const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings">("toc");
+  const [imagePage, setImagePage] = useState<{ page: number; pageCount: number } | null>(null);
+  const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings" | "pages">("toc");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [favoriteQuotes, setFavoriteQuotes] = useState<FavoriteQuote[]>([]);
@@ -97,11 +99,13 @@ export default function ReaderPage() {
   const [searched, setSearched] = useState(false);
   const [isImmersive, setIsImmersive] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selection, setSelection] = useState<{ cfiRange: string; text: string } | null>(null);
+  const [selection, setSelection] = useState<{ cfiRange: string; text: string; rect: SelectionRect | null } | null>(null);
   const [noteDraft, setNoteDraft] = useState<{ cfiRange: string; text: string } | null>(null);
   const [noteText, setNoteText] = useState("");
   const [immersiveHudVisible, setImmersiveHudVisible] = useState(false);
   const [pagerHover, setPagerHover] = useState<"left" | "right" | null>(null);
+  const [locationsReady, setLocationsReady] = useState(false);
+  const [dragPct, setDragPct] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const viewerSize = useElementSize(viewerRef);
@@ -122,6 +126,8 @@ export default function ReaderPage() {
   const immersiveHudTimerRef = useRef<number | null>(null);
   const imageApiRef = useRef<ImageReaderApi | null>(null);
   const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false });
+  const progressRef = useRef<HTMLDivElement | null>(null);
+  const draggingRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -224,7 +230,7 @@ export default function ReaderPage() {
     (async () => {
       if (!book) return;
       if (book.format === "images") {
-        setPageLabel(null);
+        setImagePage(null);
         setTocLoading(false);
         return;
       }
@@ -233,6 +239,8 @@ export default function ReaderPage() {
       const container = containerRef.current;
       container.innerHTML = "";
       setReaderError(null);
+      setLocationsReady(false);
+      setDragPct(null);
       restoredRef.current = false;
       setAnnotationsLoaded(false);
       setToc([]);
@@ -243,6 +251,8 @@ export default function ReaderPage() {
         lastCfiRef.current = cfi;
         chapterRef.current = href;
         if (typeof percent === "number") setPercent(percent);
+        setDragPct(null);
+        setSelection(null);
         if (!restoredRef.current) return;
 
         if (persistTimerRef.current) {
@@ -268,13 +278,13 @@ export default function ReaderPage() {
         setTocLoading(false);
       };
 
-      const onSelected = ({ cfiRange, text }: { cfiRange: string; text: string }) => {
+      const onSelected = ({ cfiRange, text, rect }: { cfiRange: string; text: string; rect: SelectionRect | null }) => {
         if (cancelled) return;
         if (!text.trim()) {
           setSelection(null);
           return;
         }
-        setSelection({ cfiRange, text });
+        setSelection({ cfiRange, text, rect });
       };
 
       let ctrl: ReaderController | null = null;
@@ -288,6 +298,11 @@ export default function ReaderPage() {
           onRelocated,
           onTocLoaded,
           onSelected,
+          onLocationsReady: () => {
+            if (!cancelled) setLocationsReady(true);
+          },
+          // iframe 内按下（含开始新选区）即收起旧气泡
+          onContentsPress: () => setSelection(null),
           onError,
         });
       } catch (e) {
@@ -497,13 +512,13 @@ export default function ReaderPage() {
           void animateTurn(imageDir);
           return;
         }
-      } else if (settings.readingMode === "paginated" && (e.key === "ArrowLeft" || e.key === "PageUp")) {
+      } else if (
+        !imageCtxRef.current.active &&
+        (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "PageUp" || e.key === "PageDown")
+      ) {
+        // 分页=翻页；滚动模式由 animateTurn 内部分流为章节导航
         e.preventDefault();
-        void animateTurn("prev");
-        return;
-      } else if (settings.readingMode === "paginated" && (e.key === "ArrowRight" || e.key === "PageDown")) {
-        e.preventDefault();
-        void animateTurn("next");
+        void animateTurn(e.key === "ArrowLeft" || e.key === "PageUp" ? "prev" : "next");
         return;
       }
 
@@ -575,7 +590,7 @@ export default function ReaderPage() {
     const pct = pagePercent(page, pageCount);
     lastCfiRef.current = cfi;
     setPercent(pct);
-    setPageLabel(`${page + 1} / ${pageCount}`);
+    setImagePage({ page, pageCount });
     if (persistTimerRef.current) {
       window.clearTimeout(persistTimerRef.current);
     }
@@ -591,8 +606,11 @@ export default function ReaderPage() {
       imageApiRef.current?.turn(direction);
       return;
     }
-    // epub 滚动模式下翻页与动画一律关闭（wheel/键盘/热区已在各自入口拦截，此处兜底 footer/HUD 按钮）
-    if (settingsRef.current.readingMode !== "paginated") return;
+    // epub 滚动模式无分页语义：footer/HUD/键盘的 上一页/下一页 统一改为上一章/下一章（wheel 仍留给 iframe 原生滚动）
+    if (settingsRef.current.readingMode !== "paginated") {
+      controllerRef.current?.chapterNav(direction === "next" ? 1 : -1);
+      return;
+    }
     const ctrl = controllerRef.current;
     const el = viewerRef.current;
     if (!ctrl) return;
@@ -649,6 +667,57 @@ export default function ReaderPage() {
     void controllerRef.current?.display(target);
   }
 
+  // locations 就绪后进度条可拖/可点（点击=零位移拖动，同一路径）
+  const sliderReady = locationsReady && !isImageBook && !readerError;
+  const scrolledNav = !isImageBook && settings.readingMode === "scrolled";
+
+  function pctFromClientX(clientX: number): number | null {
+    const el = progressRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return null;
+    return Math.min(0.999, Math.max(0, (clientX - rect.left) / rect.width));
+  }
+
+  function seekTo(p: number) {
+    const cfi = controllerRef.current?.progressCfi(p);
+    if (cfi) locate(cfi);
+  }
+
+  function onProgressKeyDown(e: React.KeyboardEvent) {
+    if (!sliderReady) return;
+    const base = dragPct ?? percent ?? 0;
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      seekTo(Math.max(0, base - 0.01));
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      seekTo(Math.min(0.999, base + 0.01));
+    }
+  }
+
+  function onProgressPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (!sliderReady) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    draggingRef.current = true;
+    const p = pctFromClientX(e.clientX);
+    if (p !== null) setDragPct(p);
+  }
+
+  function onProgressPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!draggingRef.current) return;
+    const p = pctFromClientX(e.clientX);
+    if (p !== null) setDragPct(p);
+  }
+
+  function onProgressPointerEnd(e: React.PointerEvent<HTMLDivElement>) {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    const p = pctFromClientX(e.clientX);
+    // 松手才 display（拖动仅更新视觉，避免高频 display 抖动）；跳转触发的 relocated 恢复持久化
+    if (p !== null) seekTo(p);
+  }
+
   const drawerTitle =
     sideTab === "toc"
       ? "目录"
@@ -660,7 +729,9 @@ export default function ReaderPage() {
             ? "收藏句子"
             : sideTab === "search"
               ? "搜索"
-              : "阅读设置";
+              : sideTab === "pages"
+                ? "页面"
+                : "阅读设置";
 
   return (
     <div
@@ -699,6 +770,12 @@ export default function ReaderPage() {
                 搜索
               </button>
             </>
+          ) : null}
+          {isImageBook ? (
+            <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("pages")}>
+              <IconImage />
+              页面
+            </button>
           ) : null}
           <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("settings")}>
             <IconSettings />
@@ -748,10 +825,21 @@ export default function ReaderPage() {
             {sideTab === "settings" && !isImageBook ? (
               <SettingsPanel
                 value={settings}
+                bgUrl={bgUrl}
                 onChange={(next) => {
                   setSettings(next);
                   void persistSettings(next);
                 }}
+              />
+            ) : null}
+
+            {sideTab === "pages" && isImageBook && book && imagePage ? (
+              <PagesPanel
+                bookId={book.id}
+                pageCount={imagePage.pageCount}
+                currentPage={imagePage.page}
+                goTo={(p) => imageApiRef.current?.goToPage(p)}
+                getResidentUrl={(p) => imageApiRef.current?.getPageUrl(p)}
               />
             ) : null}
 
@@ -927,6 +1015,7 @@ export default function ReaderPage() {
                 key={book.id}
                 book={book}
                 settings={imageSettings}
+                theme={settings.theme}
                 onRelocated={handleImageRelocated}
                 onApi={(api) => {
                   imageApiRef.current = api;
@@ -1013,7 +1102,7 @@ export default function ReaderPage() {
           ) : null}
           <SelectionToolbar
             open={!!selection && !drawerOpen && !readerError}
-            text={selection?.text ?? ""}
+            rect={selection?.rect ?? null}
             onHighlight={() => {
               const s = selection;
               if (!book || !s) return;
@@ -1105,18 +1194,51 @@ export default function ReaderPage() {
         >
           <button className="wr-btn wr-icon-btn" onClick={() => void animateTurn("prev")}>
             <IconChevronLeft />
-            上一页
+            {scrolledNav ? "上一章" : "上一页"}
           </button>
           <button className="wr-btn wr-icon-btn" onClick={() => void animateTurn("next")}>
             <IconChevronRight />
-            下一页
+            {scrolledNav ? "下一章" : "下一页"}
           </button>
-          <div className="wr-progress" aria-hidden="true">
-            <div style={{ width: `${Math.round((percent ?? 0) * 100)}%` }} />
+          <div
+            ref={progressRef}
+            className="wr-progress"
+            role={sliderReady ? "slider" : undefined}
+            aria-hidden={sliderReady ? undefined : "true"}
+            aria-label={sliderReady ? "阅读进度" : undefined}
+            aria-valuemin={sliderReady ? 0 : undefined}
+            aria-valuemax={sliderReady ? 100 : undefined}
+            aria-valuenow={sliderReady ? Math.round((dragPct ?? percent ?? 0) * 100) : undefined}
+            tabIndex={sliderReady ? 0 : undefined}
+            data-dragging={dragPct !== null ? "" : undefined}
+            onKeyDown={onProgressKeyDown}
+            onPointerDown={onProgressPointerDown}
+            onPointerMove={onProgressPointerMove}
+            onPointerUp={onProgressPointerEnd}
+            onPointerCancel={onProgressPointerEnd}
+            style={sliderReady ? { cursor: "pointer", touchAction: "none", position: "relative" } : undefined}
+          >
+            <div style={{ width: `${Math.round((dragPct ?? percent ?? 0) * 100)}%` }} />
+            {sliderReady ? (
+              <span
+                aria-hidden="true"
+                style={{
+                  position: "absolute",
+                  top: "50%",
+                  // 收进 [5px, 100%-5px]，避免轨道 overflow:hidden 在两端裁掉把手半圆
+                  left: `calc(5px + (100% - 10px) * ${dragPct ?? percent ?? 0})`,
+                  transform: "translate(-50%, -50%)",
+                  width: 10,
+                  height: 10,
+                  borderRadius: 999,
+                  background: "var(--wr-accent)",
+                }}
+              />
+            ) : null}
           </div>
           <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
-            {isImageBook && pageLabel !== null
-              ? pageLabel
+            {isImageBook && imagePage !== null
+              ? `${imagePage.page + 1} / ${imagePage.pageCount}`
               : typeof percent === "number"
                 ? `${Math.round(percent * 100)}%`
                 : ""}
@@ -1170,7 +1292,7 @@ export default function ReaderPage() {
                 }}
               >
                 <IconChevronLeft />
-                上一页
+                {scrolledNav ? "上一章" : "上一页"}
               </button>
               <button
                 className="wr-btn wr-icon-btn"
@@ -1180,7 +1302,7 @@ export default function ReaderPage() {
                 }}
               >
                 <IconChevronRight />
-                下一页
+                {scrolledNav ? "下一章" : "下一页"}
               </button>
             </div>
             <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums", paddingRight: 6 }}>

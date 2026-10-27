@@ -353,6 +353,21 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
     Ok(book)
 }
 
+// rename must never blank out a title; repair merges only fill gaps, so blank = user error
+fn validated_title(req_title: &Option<String>) -> Result<Option<String>, String> {
+    match req_title {
+        Some(t) => {
+            let t = t.trim();
+            if t.is_empty() {
+                Err("标题不能为空".to_string())
+            } else {
+                Ok(Some(t.to_string()))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
 fn merge_metadata(existing: &Book, req: &UpdateBookMetadataRequest, now: i64) -> Book {
     let apply = |update: &Option<String>, current: &Option<String>| -> Option<String> {
         match update {
@@ -368,6 +383,11 @@ fn merge_metadata(existing: &Book, req: &UpdateBookMetadataRequest, now: i64) ->
         }
     };
     Book {
+        // blank titles are rejected by validated_title before merge runs
+        title: match &req.title {
+            Some(t) => Some(t.trim().to_string()),
+            None => existing.title.clone(),
+        },
         note: apply(&req.note, &existing.note),
         group_name: apply(&req.group_name, &existing.group_name),
         pinned_at: match req.pinned {
@@ -385,11 +405,12 @@ pub fn update_book_metadata(app: tauri::AppHandle, req: UpdateBookMetadataReques
 
     let existing =
         fetch_book_by_id(&conn, &req.book_id).map_err(|e| format!("failed to fetch book: {e}"))?;
+    validated_title(&req.title)?;
     let merged = merge_metadata(&existing, &req, now_ts());
 
     conn.execute(
-        "UPDATE books SET note = ?2, group_name = ?3, pinned_at = ?4 WHERE id = ?1",
-        params![req.book_id, merged.note, merged.group_name, merged.pinned_at],
+        "UPDATE books SET note = ?2, group_name = ?3, pinned_at = ?4, title = ?5 WHERE id = ?1",
+        params![req.book_id, merged.note, merged.group_name, merged.pinned_at, merged.title],
     )
     .map_err(|e| format!("failed to update book: {e}"))?;
 
@@ -632,6 +653,7 @@ mod tests {
         existing.pinned_at = Some(7);
         let req = UpdateBookMetadataRequest {
             book_id: "b1".to_string(),
+            title: None,
             note: None,
             group_name: None,
             pinned: None,
@@ -649,6 +671,7 @@ mod tests {
         existing.group_name = Some("旧分组".to_string());
         let req = UpdateBookMetadataRequest {
             book_id: "b1".to_string(),
+            title: None,
             note: Some("   ".to_string()),
             group_name: Some("".to_string()),
             pinned: None,
@@ -664,6 +687,7 @@ mod tests {
         existing.pinned_at = Some(7);
         let pin = UpdateBookMetadataRequest {
             book_id: "b1".to_string(),
+            title: None,
             note: None,
             group_name: None,
             pinned: Some(true),
@@ -671,11 +695,54 @@ mod tests {
         assert_eq!(merge_metadata(&existing, &pin, 42).pinned_at, Some(42));
         let unpin = UpdateBookMetadataRequest {
             book_id: "b1".to_string(),
+            title: None,
             note: None,
             group_name: None,
             pinned: Some(false),
         };
         assert_eq!(merge_metadata(&existing, &unpin, 42).pinned_at, None);
+    }
+
+    #[test]
+    fn validated_title_rejects_blank() {
+        assert_eq!(
+            validated_title(&Some("   ".to_string())),
+            Err("标题不能为空".to_string())
+        );
+        assert_eq!(validated_title(&Some(String::new())), Err("标题不能为空".to_string()));
+    }
+
+    #[test]
+    fn validated_title_trims_and_passes_none_through() {
+        assert_eq!(validated_title(&Some(" 新书名 ".to_string())), Ok(Some("新书名".to_string())));
+        assert_eq!(validated_title(&None), Ok(None));
+    }
+
+    #[test]
+    fn merge_metadata_title_updates_when_provided() {
+        let existing = test_book("b1", 1);
+        let req = UpdateBookMetadataRequest {
+            book_id: "b1".to_string(),
+            title: Some("改名".to_string()),
+            note: None,
+            group_name: None,
+            pinned: None,
+        };
+        assert_eq!(merge_metadata(&existing, &req, 42).title, Some("改名".to_string()));
+    }
+
+    #[test]
+    fn merge_metadata_keeps_title_when_none() {
+        let mut existing = test_book("b1", 1);
+        existing.title = Some("原名".to_string());
+        let req = UpdateBookMetadataRequest {
+            book_id: "b1".to_string(),
+            title: None,
+            note: None,
+            group_name: None,
+            pinned: None,
+        };
+        assert_eq!(merge_metadata(&existing, &req, 42).title, Some("原名".to_string()));
     }
 
     fn temp_bg_dir(tag: &str) -> PathBuf {

@@ -26,6 +26,7 @@ export type ImportBookRequest = {
 
 export type UpdateBookMetadataRequest = {
   book_id: string;
+  title?: string;
   note?: string;
   group_name?: string;
   pinned?: boolean;

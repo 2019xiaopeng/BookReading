@@ -30,6 +30,7 @@ pub struct ImportBookRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateBookMetadataRequest {
     pub book_id: String,
+    pub title: Option<String>,
     pub note: Option<String>,
     pub group_name: Option<String>,
     pub pinned: Option<bool>,

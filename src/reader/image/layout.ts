@@ -87,6 +87,12 @@ export function turnKeyDirection(key: string, rtl: boolean): TurnDirection | nul
   return null;
 }
 
+/** batch4 B2: +1 = next turn (new page slides in from the right); RTL mirrors. 0 = no slide. */
+export function slideDirection(delta: number, rtl: boolean): 1 | -1 | 0 {
+  const d = Math.sign(delta);
+  if (d === 0) return 0;
+  return (rtl ? -d : d) as 1 | -1;
+}
 export function imageCfi(page: number): string {
   return `img:${page}`;
 }
