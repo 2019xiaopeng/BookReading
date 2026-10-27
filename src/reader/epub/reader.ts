@@ -1,6 +1,6 @@
 import ePub, { EpubCFI } from "epubjs";
 
-import type { ReadingMode, Theme } from "../settings/types";
+import type { FontFamily, ReadingMode, Theme } from "../settings/types";
 import { readAppDataFile } from "../../tauri/appDataPaths";
 import type { SpreadMode } from "../settings/layoutMode";
 import { logFrontend } from "../../tauri/frontendLog";
@@ -126,6 +126,7 @@ export type ReaderController = {
   setTheme: (theme: Theme) => void;
   setFontSizePercent: (percent: number) => void;
   setLineHeight: (lineHeight: number) => void;
+  setFontFamily: (fontFamily: FontFamily) => void;
   setSpreadMode: (mode: SpreadMode) => void;
   setReadingMode: (mode: ReadingMode) => void;
   addHighlight: (cfiRange: string) => void;
@@ -198,12 +199,22 @@ const THEME_STYLES: Record<Theme, { paper: string | null; fg: string }> = {
   darkcontrast: { paper: "#050505", fg: "#f5f5f5" },
 };
 
+// B6 正文字体：default=现状 serif 栈（与壳 --wr-serif 同源），其余为 Windows 安全字体栈
+const FONT_STACKS: Record<FontFamily, string> = {
+  default: `"Songti SC", "STSong", "Source Han Serif SC", "Noto Serif SC", "SimSun", serif`,
+  songti: `"SimSun", "NSimSun", "Songti SC", "STSong", serif`,
+  heiti: `"Microsoft YaHei", "PingFang SC", "SimHei", sans-serif`,
+  kaiti: `"KaiTi", "楷体", "STKaiti", serif`,
+  fangsong: `"FangSong", "仿宋", "STFangsong", serif`,
+};
+
 export async function createReader(opts: {
   container: HTMLElement;
   libraryPath: string;
   spreadMode?: SpreadMode;
   readingMode?: ReadingMode;
   lineHeight?: number;
+  fontFamily?: FontFamily;
   onRelocated?: (payload: RelocatedPayload) => void;
   onTocLoaded?: (toc: TocItem[]) => void;
   onSelected?: (payload: { cfiRange: string; text: string; rect: SelectionRect | null }) => void;
@@ -248,7 +259,8 @@ export async function createReader(opts: {
 
   let currentTheme: Theme = "light";
   let currentLineHeight = opts.lineHeight ?? 1.9;
-  const registerThemes = (lineHeight: number) => {
+  let currentFontFamily: FontFamily = opts.fontFamily ?? "default";
+  const registerThemes = (lineHeight: number, fontFamily: FontFamily) => {
     const common: Record<string, any> = {
       "*, *::before, *::after": { "box-sizing": "border-box" },
       img: { "max-width": "100%", height: "auto" },
@@ -265,6 +277,7 @@ export async function createReader(opts: {
           margin: "0 auto",
           padding: "24px 20px",
           "line-height": String(lineHeight),
+          "font-family": FONT_STACKS[fontFamily],
           "word-break": "break-word",
           "overflow-wrap": "anywhere",
           // epub 自带浅底会透出暗色壳：dark/darkcontrast 注入不透明纸面（!important 压过 epub 自身规则），浅色主题保持 transparent
@@ -277,7 +290,7 @@ export async function createReader(opts: {
     }
     rendition.themes.select(currentTheme);
   };
-  registerThemes(opts.lineHeight ?? 1.9);
+  registerThemes(opts.lineHeight ?? 1.9, currentFontFamily);
   rendition.themes.fontSize("120%");
   rendition.themes.default({
     "::selection": { background: "rgba(255, 230, 0, 0.35)" },
@@ -408,7 +421,12 @@ export async function createReader(opts: {
     setLineHeight: (lineHeight: number) => {
       if (lineHeight === currentLineHeight) return;
       currentLineHeight = lineHeight;
-      registerThemes(lineHeight);
+      registerThemes(lineHeight, currentFontFamily);
+    },
+    setFontFamily: (fontFamily: FontFamily) => {
+      if (fontFamily === currentFontFamily) return;
+      currentFontFamily = fontFamily;
+      registerThemes(currentLineHeight, fontFamily);
     },
     setSpreadMode: (mode: SpreadMode) => {
       if (mode === lastSpreadMode) return;

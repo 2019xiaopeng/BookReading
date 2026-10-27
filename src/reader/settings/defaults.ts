@@ -5,6 +5,7 @@ export const defaultSettings: ReaderSettings = {
   pageAnimation: "none",
   layoutMode: "auto",
   lineHeight: 1.9,
+  fontFamily: "default",
   readingMode: "paginated",
   reader_bg: { type: "preset" },
 };

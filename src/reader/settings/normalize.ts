@@ -1,4 +1,11 @@
-import type { PageAnimation, ReaderBackground, ReadingMode, Theme } from "./types";
+import type { FontFamily, PageAnimation, ReaderBackground, ReadingMode, Theme } from "./types";
+
+const FONT_FAMILIES = ["default", "songti", "heiti", "kaiti", "fangsong"] as const;
+
+export function normalizeFontFamily(v: unknown): FontFamily {
+  const s = String(v ?? "").trim().toLowerCase();
+  return (FONT_FAMILIES as readonly string[]).includes(s) ? (s as FontFamily) : "default";
+}
 
 export function normalizeTheme(v: unknown): Theme {
   const s = String(v ?? "").trim().toLowerCase();

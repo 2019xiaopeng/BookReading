@@ -125,6 +125,27 @@ export default function SettingsPanel(props: {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div className="wr-muted">正文字体</div>
+        <select
+          className="wr-select"
+          aria-label="正文字体"
+          value={v.fontFamily}
+          onChange={(e) => {
+            const next = e.currentTarget.value;
+            if (next === "default" || next === "songti" || next === "heiti" || next === "kaiti" || next === "fangsong") {
+              props.onChange({ ...v, fontFamily: next });
+            }
+          }}
+        >
+          <option value="default">默认（宋体系）</option>
+          <option value="songti">宋体</option>
+          <option value="heiti">黑体</option>
+          <option value="kaiti">楷体</option>
+          <option value="fangsong">仿宋</option>
+        </select>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div className="wr-muted">翻页动画</div>
         <select
           className="wr-select"

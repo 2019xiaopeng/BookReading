@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { defaultSettings } from "./defaults";
 import {
+  normalizeFontFamily,
   normalizeLineHeight,
   normalizePageAnimation,
   normalizeReaderBackground,
@@ -81,8 +82,26 @@ describe("normalize", () => {
     expect(normalizeReaderBackground(stored.reader_bg)).toEqual({ type: "preset" });
   });
 
+  test("normalizeFontFamily defaults to default on invalid values", () => {
+    expect(normalizeFontFamily(undefined)).toBe("default");
+    expect(normalizeFontFamily("")).toBe("default");
+    expect(normalizeFontFamily("comic-sans")).toBe("default");
+  });
+
+  test("normalizeFontFamily accepts all five families", () => {
+    for (const f of ["default", "songti", "heiti", "kaiti", "fangsong"] as const) {
+      expect(normalizeFontFamily(f)).toBe(f);
+    }
+  });
+
+  test("normalizeFontFamily trims and lowercases stored values", () => {
+    expect(normalizeFontFamily(" KaiTi ")).toBe("kaiti");
+    expect(normalizeFontFamily("SONGTI")).toBe("songti");
+  });
+
   test("defaultSettings includes the new keys with their defaults", () => {
     expect(defaultSettings.readingMode).toBe("paginated");
     expect(defaultSettings.reader_bg).toEqual({ type: "preset" });
+    expect(defaultSettings.fontFamily).toBe("default");
   });
 });

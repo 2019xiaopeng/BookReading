@@ -595,6 +595,7 @@
 
 .wr-reader-root {
   height: 100vh;
+  position: relative;
   font-family: var(--wr-sans);
   display: flex;
   flex-direction: column;
@@ -671,7 +672,13 @@
   transition: opacity 200ms ease;
 }
 
+/* B6：栏为 absolute overlay（浮动在纸面上方，显隐不占布局、纸面恒满高不触发 epub resize） */
 .wr-reader-topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 16; /* 高于热区(14)与边缘翻页区(15)，低于抽屉(20) */
   background: rgba(251, 250, 247, 0.86);
   backdrop-filter: blur(10px);
 }
@@ -682,8 +689,88 @@
 }
 
 .wr-reader-footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 16;
   background: rgba(251, 250, 247, 0.86);
   backdrop-filter: blur(10px);
+}
+
+/* B6 热区条：顶/底 48px 透明带，鼠标进入唤出上下栏；z 低于边缘翻页区(15)，点击照常翻页 */
+.wr-chrome-hotzone {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 48px;
+  z-index: 14;
+}
+
+.wr-chrome-hotzone--top {
+  top: 0;
+}
+
+.wr-chrome-hotzone--bottom {
+  bottom: 0;
+}
+
+/* B6 锁定态常驻退出控件：半透明、hover 提亮，角落 24px 内边距不遮正文 */
+.wr-immersive-exit {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  z-index: 17;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(360px, 40vw);
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--wr-hairline);
+  border-radius: 999px;
+  background: var(--panel-solid);
+  opacity: 0.55;
+  transition: opacity 160ms ease;
+}
+
+.wr-immersive-exit:hover {
+  opacity: 1;
+}
+
+.wr-immersive-exit-chapter {
+  font-size: 12px;
+  color: var(--wr-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wr-immersive-exit-btn {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--wr-ink);
+  cursor: pointer;
+}
+
+.wr-immersive-exit-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="dark"] .wr-immersive-exit-btn:hover,
+[data-theme="darkcontrast"] .wr-immersive-exit-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.wr-immersive-exit-btn:focus-visible {
+  outline: 2px solid var(--wr-accent);
+  outline-offset: 2px;
 }
 
 [data-theme="dark"] .wr-reader-footer,
@@ -834,10 +921,12 @@
     linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
 }
 
+/* 封面原图直出：contain 完整呈现（禁 cover 裁切/拉伸），image-rendering:auto 走浏览器默认缩放采样 */
 .wr-cover img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  image-rendering: auto;
 }
 
 .wr-cover::after {

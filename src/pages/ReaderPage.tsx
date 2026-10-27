@@ -53,6 +53,7 @@ import { defaultSettings, HIGHLIGHT_COLOR } from "../reader/settings/defaults";
 import type { ReaderSettings } from "../reader/settings/types";
 import { normalizeLayoutMode, resolveSpreadMode } from "../reader/settings/layoutMode";
 import {
+  normalizeFontFamily,
   normalizeLineHeight,
   normalizePageAnimation,
   normalizeReaderBackground,
@@ -74,6 +75,7 @@ import {
   IconImage,
   IconList,
   IconLock,
+  IconLockOpen,
   IconQuote,
   IconSearch,
   IconSettings,
@@ -134,7 +136,7 @@ export default function ReaderPage() {
   const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false });
   const progressRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
-  // 沉浸 chrome：常态栏自动隐藏（3s 无输入淡出），锁定=全藏；抽屉开/加载失败/选区气泡开强制可见
+  // 沉浸 chrome（B6 热区版）：默认净屏，鼠标进顶/底热区或栏内浮现，离开 2.5s 淡出；锁定=全藏+热区禁用；抽屉开/加载失败/选区气泡开强制可见
   const chrome = useImmersiveChrome({ disabled: drawerOpen || !!readerError || !!selection || !!noteDraft });
 
   useEffect(() => {
@@ -212,6 +214,7 @@ export default function ReaderPage() {
       const pageAnimation = normalizePageAnimation(map.pageAnimation);
       const layoutMode = normalizeLayoutMode(map.layoutMode);
       const lineHeight = normalizeLineHeight(map.lineHeight);
+      const fontFamily = normalizeFontFamily(map.fontFamily);
       setSettings({
         fontSizePercent: Number.isFinite(fontSizePercent)
           ? Math.min(200, Math.max(80, fontSizePercent))
@@ -219,6 +222,7 @@ export default function ReaderPage() {
         pageAnimation,
         layoutMode,
         lineHeight,
+        fontFamily,
         readingMode: normalizeReadingMode(map.readingMode),
         reader_bg: normalizeReaderBackground(map.reader_bg),
       });
@@ -321,6 +325,7 @@ export default function ReaderPage() {
           libraryPath: book.library_path,
           spreadMode: spreadModeRef.current,
           readingMode: settingsRef.current.readingMode,
+          fontFamily: settingsRef.current.fontFamily,
           onRelocated,
           onTocLoaded,
           onSelected,
@@ -413,9 +418,10 @@ export default function ReaderPage() {
     controllerRef.current.setTheme(theme);
     controllerRef.current.setFontSizePercent(settings.fontSizePercent);
     controllerRef.current.setLineHeight(settings.lineHeight);
+    controllerRef.current.setFontFamily(settings.fontFamily);
     // scrolled 模式下分栏失效，跳过 spread 以免与 epubjs scrolled 冲突
     if (settings.readingMode !== "scrolled") controllerRef.current.setSpreadMode(spreadMode);
-  }, [theme, settings.fontSizePercent, settings.lineHeight, settings.layoutMode, spreadMode, settings.readingMode]);
+  }, [theme, settings.fontSizePercent, settings.lineHeight, settings.fontFamily, settings.layoutMode, spreadMode, settings.readingMode]);
 
   // 字号/行距变化后重排：章内页码（displayed.total）随新分页更新
   useEffect(() => {
@@ -445,11 +451,7 @@ export default function ReaderPage() {
     };
   }, [settings.reader_bg, isImageBook]);
 
-  // 锁定切换后纸面高度变化：epub.js Stage 不感知容器变高（iframe 维持旧高度→底部空白），布局稳定后强制重排
-  useEffect(() => {
-    const t = window.setTimeout(() => controllerRef.current?.resize(), 250);
-    return () => window.clearTimeout(t);
-  }, [chrome.locked]);
+  // B6：栏改为 overlay 后纸面高度恒定，锁定切换不再需要 resize 联动（原底部空白根因已消除）
 
   useEffect(() => {
     if (!chrome.locked) return;
@@ -532,12 +534,27 @@ export default function ReaderPage() {
     const el = viewerRef.current;
     if (!el) return;
 
+    // 热区条盖住的顶/底 48px 带内，iframe/内嵌滚动收不到 wheel——接力给实际滚动容器
+    const forwardHotzoneWheel = (e: WheelEvent, host: HTMLElement) => {
+      if (!(e.target as HTMLElement | null)?.closest?.(".wr-chrome-hotzone")) return;
+      const scroller =
+        containerRef.current?.querySelector<HTMLElement>(".epub-container") ??
+        host.querySelector<HTMLElement>(".wr-image-webtoon");
+      if (scroller) scroller.scrollTop += e.deltaY;
+    };
+
     const onWheel = (e: WheelEvent) => {
       if (drawerOpen) return;
       // epub 滚动模式下 wheel 交给 iframe 原生滚动
-      if (!imageCtxRef.current.active && settingsRef.current.readingMode !== "paginated") return;
-      // 条漫原生滚动；B5 缩放态平移交 ImageReader 内部处理
-      if (imageCtxRef.current.active && (imageCtxRef.current.webtoon || imageApiRef.current?.zoomed?.())) return;
+      if (!imageCtxRef.current.active && settingsRef.current.readingMode !== "paginated") {
+        forwardHotzoneWheel(e, el);
+        return;
+      }
+      // 条漫原生滚动；B6 缩放态滚轮=平移（ImageReader 内部处理）；键盘/热区翻页走 turn 内先复位
+      if (imageCtxRef.current.active && (imageCtxRef.current.webtoon || imageApiRef.current?.zoomed?.())) {
+        forwardHotzoneWheel(e, el);
+        return;
+      }
       const now = Date.now();
       if (now - wheelCooldownRef.current < 300) return;
       if (Math.abs(e.deltaY) < Math.abs(e.deltaX) * 1.2) return;
@@ -568,6 +585,7 @@ export default function ReaderPage() {
     await setSetting("pageAnimation", next.pageAnimation);
     await setSetting("layoutMode", next.layoutMode);
     await setSetting("lineHeight", String(next.lineHeight));
+    await setSetting("fontFamily", next.fontFamily);
     await setSetting("readingMode", next.readingMode);
     await setSetting("reader_bg", JSON.stringify(next.reader_bg));
   }
@@ -591,8 +609,8 @@ export default function ReaderPage() {
     setSelection(null);
     setNoteDraft(null);
     if (imageCtxRef.current.active) {
-      // B5 缩放态平移由 ImageReader 内部处理，禁翻页
-      if (!imageApiRef.current?.zoomed?.()) imageApiRef.current?.turn(direction);
+      // B6：翻页不再被缩放阻塞——ImageReader.turn 内部先复位缩放再翻
+      imageApiRef.current?.turn(direction);
       return;
     }
     // epub 滚动模式无分页语义：键盘/滚轮/热区统一改为上一章/下一章（wheel 仍留给 iframe 原生滚动）
@@ -769,7 +787,7 @@ export default function ReaderPage() {
                 ? "页面"
                 : "阅读设置";
 
-  // 栏淡出/淡入：仅 opacity+transform，高度保留（无 layout 变化，不触发 epub resize/relocated 抖动）
+  // 栏淡出/淡入：仅 opacity+transform（栏已是 absolute overlay，不占布局，纸面恒定不 resize）
   const chromeBarStyle = (dy: number): React.CSSProperties => ({
     transition: "opacity 200ms ease, transform 200ms ease",
     ...(chrome.visible ? null : { opacity: 0, transform: `translateY(${dy}px)`, pointerEvents: "none" as const }),
@@ -790,7 +808,12 @@ export default function ReaderPage() {
       className="wr-reader-root"
     >
       {!chrome.locked ? (
-        <div className="wr-topbar wr-reader-topbar" style={chromeBarStyle(-8)}>
+        <div
+          className="wr-topbar wr-reader-topbar"
+          style={chromeBarStyle(-8)}
+          onMouseEnter={chrome.enter}
+          onMouseLeave={chrome.leave}
+        >
           <button className="wr-btn" onClick={() => navigate("/")}>
             返回书库
           </button>
@@ -853,7 +876,7 @@ export default function ReaderPage() {
           <button
             className="wr-btn wr-icon-btn"
             aria-pressed={chrome.locked}
-            title="锁定沉浸：隐藏所有栏，Esc 解锁"
+            title="锁定沉浸：栏与热区全禁用，角落控件或 Esc 解锁"
             onClick={() => chrome.setLocked(true)}
           >
             <IconLock />
@@ -1070,7 +1093,7 @@ export default function ReaderPage() {
 
           <div
             className={isImageBook ? "wr-reader-paper-wrap wr-paper-image" : "wr-reader-paper-wrap"}
-            style={isImageBook ? undefined : { position: "relative", ...(chrome.locked ? { padding: "0 6px" } : null) }}
+            style={isImageBook ? undefined : { position: "relative" }}
           >
             {isImageBook && book ? (
               <ImageReader
@@ -1206,6 +1229,23 @@ export default function ReaderPage() {
               />
             </div>
           ) : null}
+          {!chrome.locked ? (
+            <>
+              {/* 顶/底热区条：透明覆盖、z(14) 低于边缘翻页区(15) 点击照常翻页；置于 viewer 子树内滚轮照常冒泡翻页 */}
+              <div
+                aria-hidden="true"
+                className="wr-chrome-hotzone wr-chrome-hotzone--top"
+                onMouseEnter={chrome.enter}
+                onMouseLeave={chrome.leave}
+              />
+              <div
+                aria-hidden="true"
+                className="wr-chrome-hotzone wr-chrome-hotzone--bottom"
+                onMouseEnter={chrome.enter}
+                onMouseLeave={chrome.leave}
+              />
+            </>
+          ) : null}
           <SelectionToolbar
             open={!!selection && !drawerOpen && !readerError}
             rect={selection?.rect ?? null}
@@ -1312,6 +1352,8 @@ export default function ReaderPage() {
             padding: 10,
             borderTop: "1px solid var(--wr-hairline)",
           }}
+          onMouseEnter={chrome.enter}
+          onMouseLeave={chrome.leave}
         >
           <button
             className="wr-btn wr-icon-btn"
@@ -1372,6 +1414,22 @@ export default function ReaderPage() {
           </div>
         </div>
       ) : null}
+
+      {!chrome.locked ? null : (
+        /* 锁定态常驻退出控件：半透明、hover 提亮，角落 24px 内边距不遮正文 */
+        <div className="wr-immersive-exit">
+          <span className="wr-immersive-exit-chapter">{isImageBook ? book?.title : chapterTitle}</span>
+          <button
+            type="button"
+            className="wr-immersive-exit-btn"
+            aria-label="退出沉浸模式"
+            title="退出沉浸模式（Esc）"
+            onClick={() => chrome.setLocked(false)}
+          >
+            <IconLockOpen />
+          </button>
+        </div>
+      )}
 
       {chrome.locked && lockToast ? (
         <div

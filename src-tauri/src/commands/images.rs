@@ -181,6 +181,7 @@ fn import_folder(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) 
         .unwrap_or_else(|| "png".to_string());
     let final_cover_abs = covers_dir.join(format!("{book_id}.{ext}"));
     let tmp_cover_abs = covers_dir.join(format!("{book_id}.{ext}.part"));
+    // 封面=原图直出（不缩放不压缩）：书架清晰度只受源文件限制，可用“设置封面”上传高清图替换
     atomic_copy_to(&pages[0].to_string_lossy(), &tmp_cover_abs, &final_cover_abs)
         .map_err(|e| format!("failed to copy cover: {e}"))?;
 

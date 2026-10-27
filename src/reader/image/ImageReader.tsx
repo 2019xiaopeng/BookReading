@@ -10,6 +10,7 @@ import {
 import type { Book } from "../../tauri/invoke";
 import { getReadingState } from "../../tauri/invoke";
 import type { Theme } from "../settings/types";
+import { IconRefresh } from "../../ui/icons";
 import { listImagePages, readImagePage } from "./api";
 import {
   WIDE_PAGE_RATIO,
@@ -30,7 +31,7 @@ export type ImageReaderApi = {
   goToPage: (page: number) => void;
   /** url of a resident (preload-window) page blob, for the pages panel */
   getPageUrl: (page: number) => string | undefined;
-  /** B5: true while Ctrl+wheel zoom is active — callers should not turn pages */
+  /** B6: true while Ctrl+wheel zoom is active — 仅用于滚轮分流（缩放态滚轮=平移）；翻页不受缩放阻塞 */
   zoomed: () => boolean;
 };
 
@@ -282,11 +283,19 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
   useEffect(() => {
     onApi({
       turn: (direction: TurnDirection) => {
+        // B6：翻页先复位缩放（缩放不再阻塞翻页；条漫缩放态容器 overflow:hidden，复位后下一帧再滚动）
+        const wasZoomed = zoomRef.current.scale !== 1;
+        if (wasZoomed) resetZoom();
         if (settings.mode === "webtoon") {
           const el = scrollRef.current;
           if (!el) return;
           const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-          el.scrollBy({ top: (direction === "next" ? 1 : -1) * el.clientHeight * 0.85, behavior: smooth ? "smooth" : "auto" });
+          const opts = {
+            top: (direction === "next" ? 1 : -1) * el.clientHeight * 0.85,
+            behavior: smooth ? ("smooth" as const) : ("auto" as const),
+          };
+          if (wasZoomed) requestAnimationFrame(() => el.scrollBy(opts));
+          else el.scrollBy(opts);
           return;
         }
         setSpreadIndex((prev) => {
@@ -295,22 +304,26 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
           return Math.min(spreads.length - 1, Math.max(0, next));
         });
       },
-goToPage: (page: number) => {
+      goToPage: (page: number) => {
+        const wasZoomed = zoomRef.current.scale !== 1;
+        if (wasZoomed) resetZoom();
         if (settings.mode === "webtoon") {
           const el = pageElsRef.current.get(clampPage(page, pages?.length ?? 0));
-          el?.scrollIntoView({
-            behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-            block: "start",
-          });
+          if (!el) return;
+          const opts = {
+            behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? ("auto" as const) : ("smooth" as const),
+            block: "start" as const,
+          };
+          if (wasZoomed) requestAnimationFrame(() => el.scrollIntoView(opts));
+          else el.scrollIntoView(opts);
           return;
         }
         setSpreadIndex(spreadIndexForPage(spreads, page));
       },
       getPageUrl: (page: number) => cacheRef.current.get(page),
       zoomed: () => zoomRef.current.scale !== 1,
-
     });
-        }, [onApi, spreads, settings.mode, pages]);
+  }, [onApi, spreads, settings.mode, pages]);
 
   // snap webtoon mode to the current page when it (re)mounts
   useEffect(() => {
@@ -435,17 +448,21 @@ goToPage: (page: number) => {
         ? `center ${(scrollRef.current?.scrollTop ?? 0) + vh2}px`
         : `${(fitRef.current?.scrollLeft ?? 0) + (stage?.clientWidth ?? 0) / 2}px ${(fitRef.current?.scrollTop ?? 0) + vh2}px`;
   }
+  // B6：缩放中可见的“复原”浮动钮（一键回 1x 与原位；替代原 100% 文本钮）
   const resetBtn = zoomed ? (
     <button
       type="button"
-      aria-label="复位缩放"
-      title="复位缩放"
+      aria-label="复原缩放"
+      title="复原缩放"
       onClick={resetZoom}
       style={{
         position: "absolute",
         right: 12,
         bottom: 12,
         zIndex: 3,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
         padding: "4px 10px",
         fontSize: 12,
         borderRadius: 999,
@@ -455,7 +472,8 @@ goToPage: (page: number) => {
         cursor: "pointer",
       }}
     >
-      100%
+      <IconRefresh />
+      复原
     </button>
   ) : null;
 

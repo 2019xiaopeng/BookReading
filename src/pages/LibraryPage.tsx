@@ -264,6 +264,24 @@ export default function LibraryPage() {
     }
   }
 
+  // 逐本导入子目录（批量入口与误选父目录的兜底共用）：单项失败不中断，汇总 成功 N / 失败 M + 失败清单
+  async function importImageDirs(dirs: string[]) {
+    const failed: string[] = [];
+    for (const dir of dirs) {
+      try {
+        await importImageFolder(dir, null); // title=null → 取子目录名
+      } catch (e) {
+        failed.push(String(e)); // 错误串已含目录绝对路径与原因
+        logFrontend(`ui: batch import failed ${dir} ${String(e)}`);
+      }
+    }
+    window.alert(
+      failed.length === 0
+        ? `成功导入 ${dirs.length} 本`
+        : `成功 ${dirs.length - failed.length} 本，失败 ${failed.length} 个：\n${failed.join("\n")}`,
+    );
+  }
+
   async function onImportImages() {
     if (loading) return;
     setLoading(true);
@@ -273,8 +291,16 @@ export default function LibraryPage() {
       try {
         await importImageFolder(dir, null);
       } catch (e) {
-        window.alert(`导入失败：${String(e)}`);
-        logFrontend(`ui: import image folder failed ${dir} ${String(e)}`);
+        const msg = String(e);
+        logFrontend(`ui: import image folder failed ${dir} ${msg}`);
+        // 实测根因：把“每本一个子文件夹”的父目录当单本导入——直接子项全是子文件夹 → 无图。
+        // 此时若子文件夹里有漫画，引导走批量导入而不是报错退出
+        const subdirs = msg.includes("未找到图片") ? await listImageSubdirs(dir).catch(() => [] as string[]) : [];
+        if (subdirs.length > 0 && window.confirm(`该文件夹内没有直接图片，但包含 ${subdirs.length} 个图片子文件夹。\n按每个子文件夹一本批量导入？`)) {
+          await importImageDirs(subdirs);
+        } else {
+          window.alert(`导入失败：${msg}`);
+        }
       }
       await refresh();
     } finally {
@@ -291,19 +317,10 @@ export default function LibraryPage() {
     try {
       const dirs = await listImageSubdirs(parent);
       if (dirs.length === 0) {
-        window.alert("该目录下没有包含图片的一级子文件夹");
+        window.alert("父目录下没有包含图片的一级子文件夹");
         return;
       }
-      const failed: string[] = [];
-      for (const dir of dirs) {
-        try {
-          await importImageFolder(dir, null); // title=null → 取子目录名
-        } catch (e) {
-          failed.push(dir);
-          logFrontend(`ui: batch import failed ${dir} ${String(e)}`);
-        }
-      }
-      window.alert(`导入 ${dirs.length - failed.length} 本，失败 ${failed.length} 个`);
+      await importImageDirs(dirs);
       await refresh();
     } catch (e) {
       window.alert(`批量导入失败：${String(e)}`);
