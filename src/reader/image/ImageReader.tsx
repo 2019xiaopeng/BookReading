@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 import type { Book } from "../../tauri/invoke";
 import { getReadingState } from "../../tauri/invoke";
@@ -8,8 +15,10 @@ import {
   WIDE_PAGE_RATIO,
   buildSpreads,
   clampPage,
+  clampZoomScale,
   displayOrder,
     slideDirection,
+  panClamp,
   parseImageCfi,
   spreadIndexForPage,
   type ImageReaderSettings,
@@ -21,6 +30,8 @@ export type ImageReaderApi = {
   goToPage: (page: number) => void;
   /** url of a resident (preload-window) page blob, for the pages panel */
   getPageUrl: (page: number) => string | undefined;
+  /** B5: true while Ctrl+wheel zoom is active — callers should not turn pages */
+  zoomed: () => boolean;
 };
 
 type Props = {
@@ -53,6 +64,12 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
   const [anchor, setAnchor] = useState(0);
   const [shownSpread, setShownSpread] = useState<number | null>(null);
   const [snap, setSnap] = useState<{ pages: number[]; urls: Record<number, string>; dir: 1 | -1 } | null>(null);
+  const [zoom, setZoom] = useState({ scale: 1, tx: 0, ty: 0 });
+  const zoomed = zoom.scale !== 1;
+  const zoomRef = useRef(zoom);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const fitRef = useRef<HTMLDivElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pageElsRef = useRef<Map<number, HTMLElement>>(new Map());
   const cacheRef = useRef<Map<number, string>>(new Map());
@@ -72,6 +89,15 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
   useEffect(() => {
     onRelocatedRef.current = onRelocated;
   }, [onRelocated]);
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  // zoom geometry is per-mode (stage fit layer vs webtoon strip): start each mode fresh
+  useEffect(() => {
+    if (zoomRef.current.scale !== 1) setZoom({ scale: 1, tx: 0, ty: 0 });
+  }, [settings.mode]);
 
   const spreads = useMemo(() => {
     const count = pages?.length ?? 0;
@@ -158,7 +184,12 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
     if (prev === spreadIndex) return;
     shownSpreadRef.current = spreadIndex;
     setShownSpread(spreadIndex);
-    if (prev !== null && Math.abs(spreadIndex - prev) === 1 && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (
+      prev !== null &&
+      Math.abs(spreadIndex - prev) === 1 &&
+      settings.pageAnimation === "slide" &&
+      !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
       const pages = spreads[prev] ?? [];
       const snapUrls: Record<number, string> = {};
       for (const p of pages) {
@@ -169,7 +200,7 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
         setSnap({ pages, urls: snapUrls, dir: slideDirection(spreadIndex - prev, settings.rtl) as 1 | -1 });
       }
     }
-  }, [spreadIndex, spreads, urls, failed, settings.mode, settings.rtl, snap]);
+  }, [spreadIndex, spreads, urls, failed, settings.mode, settings.rtl, settings.pageAnimation, snap]);
   function retry(index: number) {
     setFailed((prev) => {
       if (!prev.has(index)) return prev;
@@ -276,6 +307,7 @@ goToPage: (page: number) => {
         setSpreadIndex(spreadIndexForPage(spreads, page));
       },
       getPageUrl: (page: number) => cacheRef.current.get(page),
+      zoomed: () => zoomRef.current.scale !== 1,
 
     });
         }, [onApi, spreads, settings.mode, pages]);
@@ -315,6 +347,118 @@ goToPage: (page: number) => {
     return () => observer.disconnect();
   }, [settings.mode, pages]);
 
+  // B5 zoom: viewport vs content dims decide the pan slack (tall strips / fit-width pages pan end to end)
+  function panDims() {
+    const stage = stageRef.current;
+    if (!stage) return { vw: 0, vh: 0, cw: 0, ch: 0 };
+    const vw = stage.clientWidth;
+    const vh = stage.clientHeight;
+    const content = settings.mode === "webtoon" ? wrapRef.current : fitRef.current;
+    if (settings.mode === "webtoon") return { vw, vh, cw: content?.clientWidth ?? vw, ch: content?.clientHeight ?? vh };
+    return { vw, vh, cw: content?.scrollWidth || vw, ch: content?.scrollHeight || vh };
+  }
+
+  function resetZoom() {
+    setZoom({ scale: 1, tx: 0, ty: 0 });
+  }
+
+  function startPan(e: ReactPointerEvent<HTMLDivElement>) {
+    const el = stageRef.current;
+    if (!el || zoomRef.current.scale === 1) return;
+    // pointer capture retargets clicks to the stage: never swallow the reset/retry buttons
+    if (e.target !== e.currentTarget && (e.target as HTMLElement).closest("button")) return;
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    const sx = e.clientX;
+    const sy = e.clientY;
+    const start = zoomRef.current;
+    const onMove = (ev: PointerEvent) => {
+      const d = panDims();
+      setZoom({ ...start, ...panClamp(start.tx + ev.clientX - sx, start.ty + ev.clientY - sy, d.vw, d.vh, d.cw, d.ch, start.scale) });
+    };
+    const onUp = () => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  }
+
+  // native listener: React's onWheel is passive at the root, preventDefault needs passive:false.
+  // stopPropagation keeps the zoom/pan gesture away from ReaderPage's page-turn wheel handler.
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = el.getBoundingClientRect();
+        // anchor the zoom: the point under the cursor stays fixed (origin = stage center)
+        const px = e.clientX - rect.left - rect.width / 2;
+        const py = e.clientY - rect.top - rect.height / 2;
+        const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+        setZoom((z) => {
+          const scale = clampZoomScale(z.scale * factor);
+          if (scale === z.scale) return z;
+          const k = scale / z.scale;
+          const d = panDims();
+          return { scale, ...panClamp(px - (px - z.tx) * k, py - (py - z.ty) * k, d.vw, d.vh, d.cw, d.ch, scale) };
+        });
+        return;
+      }
+      if (zoomRef.current.scale !== 1) {
+        e.preventDefault();
+        e.stopPropagation();
+        setZoom((z) => {
+          const d = panDims();
+          const p = panClamp(z.tx - e.deltaX, z.ty - e.deltaY, d.vw, d.vh, d.cw, d.ch, z.scale);
+          return p.tx === z.tx && p.ty === z.ty ? z : { ...z, ...p };
+        });
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [settings.mode, pages, error]);
+
+  const zoomTransform = zoomed ? `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.scale})` : undefined;
+  // zooming is scroll-locked while active, so the visible-center origin read here stays
+  // frozen for the whole zoom session; panClamp's symmetric slack is exact around it
+  let zoomOrigin: string | undefined;
+  if (zoomed) {
+    const stage = stageRef.current;
+    const vh2 = (stage?.clientHeight ?? 0) / 2;
+    zoomOrigin =
+      settings.mode === "webtoon"
+        ? `center ${(scrollRef.current?.scrollTop ?? 0) + vh2}px`
+        : `${(fitRef.current?.scrollLeft ?? 0) + (stage?.clientWidth ?? 0) / 2}px ${(fitRef.current?.scrollTop ?? 0) + vh2}px`;
+  }
+  const resetBtn = zoomed ? (
+    <button
+      type="button"
+      aria-label="复位缩放"
+      title="复位缩放"
+      onClick={resetZoom}
+      style={{
+        position: "absolute",
+        right: 12,
+        bottom: 12,
+        zIndex: 3,
+        padding: "4px 10px",
+        fontSize: 12,
+        borderRadius: 999,
+        border: "1px solid var(--wr-hairline)",
+        background: "var(--wr-bg)",
+        color: "var(--wr-muted)",
+        cursor: "pointer",
+      }}
+    >
+      100%
+    </button>
+  ) : null;
+
   if (error) {
     return (
       <div className="wr-image-stage" role="alert" data-theme={theme}>
@@ -335,37 +479,68 @@ goToPage: (page: number) => {
 
   if (settings.mode === "webtoon") {
     return (
-      <div className="wr-image-stage" data-theme={theme}>
-        <div className="wr-image-webtoon" ref={scrollRef} tabIndex={0} aria-label="条漫阅读区">
-          {pages.map((_, i) => (
-            <div
-              key={i}
-              data-page={i}
-              ref={(el) => {
-                if (el) pageElsRef.current.set(i, el);
-                else pageElsRef.current.delete(i);
-              }}
-            >
-              {urls[i] ? (
-                <img src={urls[i]} alt={`第 ${i + 1} 页`} loading="lazy" decoding="async" draggable={false} />
-              ) : (
-                failed.has(i) ? (
-                  <button type="button" className="wr-image-loading wr-image-failed" onClick={() => retry(i)}>
-                    本页加载失败，点击重试
-                  </button>
+      <div
+        className="wr-image-stage"
+        data-theme={theme}
+        ref={stageRef}
+        onPointerDown={startPan}
+        onDoubleClick={resetZoom}
+        style={zoomed ? { cursor: "grab" } : undefined}
+      >
+        <div
+          className="wr-image-webtoon"
+          ref={scrollRef}
+          tabIndex={0}
+          aria-label="条漫阅读区"
+          style={zoomed ? { overflow: "hidden" } : undefined}
+        >
+          <div
+            ref={wrapRef}
+            style={{
+              width: "100%",
+              ...(zoomed ? { transform: zoomTransform, transformOrigin: zoomOrigin } : null),
+            }}
+          >
+            {pages.map((_, i) => (
+              <div
+                key={i}
+                data-page={i}
+                // B3: wrap 中间层挡住了列容器 align-items:center，块级 marginInline:auto 恢复水平居中
+                style={{ width: `${settings.webtoonWidth}%`, marginInline: "auto" }}
+                ref={(el) => {
+                  if (el) pageElsRef.current.set(i, el);
+                  else pageElsRef.current.delete(i);
+                }}
+              >
+                {urls[i] ? (
+                  <img src={urls[i]} alt={`第 ${i + 1} 页`} loading="lazy" decoding="async" draggable={false} />
                 ) : (
-                  <div className="wr-image-loading" />
-                )
-              )}
-            </div>
-          ))}
+                  failed.has(i) ? (
+                    <button type="button" className="wr-image-loading wr-image-failed" onClick={() => retry(i)}>
+                      本页加载失败，点击重试
+                    </button>
+                  ) : (
+                    <div className="wr-image-loading" />
+                  )
+                )}
+              </div>
+            ))}
+          </div>
         </div>
+        {resetBtn}
       </div>
     );
   }
 
   return (
-  <div className="wr-image-stage" data-theme={theme}>
+  <div
+    className="wr-image-stage"
+    data-theme={theme}
+    ref={stageRef}
+    onPointerDown={startPan}
+    onDoubleClick={resetZoom}
+    style={zoomed ? { cursor: "grab" } : undefined}
+  >
     {snap ? (
       <div
         className="wr-image-fit wr-image-fit--out"
@@ -382,7 +557,14 @@ goToPage: (page: number) => {
     <div
       className={snap ? "wr-image-fit wr-image-fit--in" : "wr-image-fit"}
       data-fit={settings.fit}
-      style={snap ? ({ "--slide-dir": snap.dir } as CSSProperties) : undefined}
+      ref={fitRef}
+      style={{
+        ...(snap ? ({ "--slide-dir": snap.dir } as CSSProperties) : null),
+        // zoomed: pan/translate the whole layer and suppress the fit=width/original overflow scroll
+        ...(zoomed
+          ? { transform: zoomTransform, transformOrigin: zoomOrigin, overflow: "hidden" as const }
+          : null),
+      }}
     >
       {displayOrder(spreads[shownSpread ?? spreadIndex] ?? spreads[spreadIndex] ?? [], settings.rtl).map((p) =>
         urls[p] ? (
@@ -396,6 +578,7 @@ goToPage: (page: number) => {
         ),
       )}
     </div>
+    {resetBtn}
   </div>
 );
 }

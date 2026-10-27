@@ -12,6 +12,20 @@ export function resetBackgroundCache() {
   }
 }
 
+// 换背景广播（仿 useCoverUrls listeners）：书架改设置后 AppShell 订阅重读 settings 即时换肤，应用即预览
+const backgroundListeners = new Set<() => void>();
+
+export function subscribeBackground(fn: () => void): () => void {
+  backgroundListeners.add(fn);
+  return () => {
+    backgroundListeners.delete(fn);
+  };
+}
+
+export function notifyBackgroundChanged() {
+  for (const fn of backgroundListeners) fn();
+}
+
 export async function getBackgroundUrl(bg: ReaderBackground): Promise<string | null> {
   if (bg.type !== "image") {
     resetBackgroundCache();

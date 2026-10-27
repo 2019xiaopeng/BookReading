@@ -474,7 +474,8 @@ pub fn delete_book(app: tauri::AppHandle, book_id: String) -> Result<(), String>
     Ok(())
 }
 
-fn validate_reader_background(source_path: &str) -> Result<String, String> {
+// png/jpg/webp 且 ≤8MB：阅读背景与自定义封面共用校验，返回小写扩展名
+fn validate_image_file(source_path: &str) -> Result<String, String> {
     let ext = Path::new(source_path)
         .extension()
         .and_then(|e| e.to_str())
@@ -492,7 +493,7 @@ fn validate_reader_background(source_path: &str) -> Result<String, String> {
 
 // core takes bg_dir so tests can run against a tempdir instead of real appdata
 fn store_reader_background(bg_dir: &Path, source_path: &str) -> Result<String, String> {
-    let ext = validate_reader_background(source_path)?;
+    let ext = validate_image_file(source_path)?;
     fs::create_dir_all(bg_dir).map_err(|e| format!("failed to create bg dir: {e}"))?;
     let final_bg = bg_dir.join(format!("bg.{ext}"));
     let tmp_bg = bg_dir.join(format!("bg.{ext}.part"));
@@ -517,6 +518,39 @@ pub fn save_reader_background(app: tauri::AppHandle, source_path: String) -> Res
     let bg_dir = app_paths::library_dir(&app)?.join("bg");
     let name = store_reader_background(&bg_dir, &source_path)?;
     Ok(format!("library/bg/{name}"))
+}
+
+// core takes covers_dir so tests can run against a tempdir instead of real appdata
+fn store_book_cover(covers_dir: &Path, book_id: &str, source_path: &str) -> Result<String, String> {
+    let ext = validate_image_file(source_path)?;
+    fs::create_dir_all(covers_dir).map_err(|e| format!("failed to create covers dir: {e}"))?;
+    let final_cover = covers_dir.join(format!("{book_id}.{ext}"));
+    let tmp_cover = covers_dir.join(format!("{book_id}.{ext}.part"));
+    atomic_copy_to(source_path, &tmp_cover, &final_cover)
+        .map_err(|e| format!("failed to save cover: {e}"))?;
+    // single slot per book: drop stale {book_id}.* of other extensions, best-effort
+    let keep = format!("{book_id}.{ext}");
+    if let Ok(entries) = fs::read_dir(covers_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(&format!("{book_id}.")) && name.as_ref() != keep.as_str() {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(format!("library/covers/{keep}"))
+}
+
+#[tauri::command]
+pub fn set_book_cover(app: tauri::AppHandle, book_id: String, source_path: String) -> Result<String, String> {
+    let conn = db::open_db(&app)?;
+    // 仅确认书存在（uuid 为文件名，不存在即报错）；无封面书同样可设
+    let _ = fetch_book_by_id(&conn, &book_id).map_err(|e| format!("failed to fetch book: {e}"))?;
+    let cover_path = store_book_cover(&app_paths::covers_dir(&app)?, &book_id, &source_path)?;
+    conn.execute("UPDATE books SET cover_path = ?2 WHERE id = ?1", params![book_id, cover_path])
+        .map_err(|e| format!("failed to update book: {e}"))?;
+    Ok(cover_path)
 }
 
 #[cfg(test)]
@@ -783,6 +817,41 @@ mod tests {
         assert_eq!(store_reader_background(&dir, jpg.to_str().unwrap()).unwrap(), "bg.jpg");
         assert_eq!(fs::read(dir.join("bg.jpg")).unwrap(), b"jpeg");
         assert!(!dir.join("bg.png").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_book_cover_replaces_existing_and_cleans_stale_extensions() {
+        let dir = temp_bg_dir("cover");
+        // 已有其他扩展名的旧封面（残留）
+        fs::write(dir.join("b9.webp"), b"old").unwrap();
+        let png = dir.join("in.png");
+        fs::write(&png, b"png").unwrap();
+        assert_eq!(store_book_cover(&dir, "b9", png.to_str().unwrap()).unwrap(), "library/covers/b9.png");
+        assert_eq!(fs::read(dir.join("b9.png")).unwrap(), b"png");
+        assert!(!dir.join("b9.webp").exists());
+
+        // 大写扩展名也过，且替换后清掉 png 槽位
+        let jpg = dir.join("in.JPG");
+        fs::write(&jpg, b"jpeg").unwrap();
+        assert_eq!(store_book_cover(&dir, "b9", jpg.to_str().unwrap()).unwrap(), "library/covers/b9.jpg");
+        assert_eq!(fs::read(dir.join("b9.jpg")).unwrap(), b"jpeg");
+        assert!(!dir.join("b9.png").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_book_cover_rejects_bad_extension_and_oversize() {
+        let dir = temp_bg_dir("cover-bad");
+        let txt = dir.join("c.txt");
+        fs::write(&txt, b"x").unwrap();
+        assert_eq!(
+            store_book_cover(&dir, "b1", txt.to_str().unwrap()).unwrap_err(),
+            "不支持的图片格式，仅支持 PNG/JPG/WebP"
+        );
+        let big = dir.join("big.png");
+        fs::write(&big, vec![0u8; 8 * 1024 * 1024 + 1]).unwrap();
+        assert_eq!(store_book_cover(&dir, "b1", big.to_str().unwrap()).unwrap_err(), "图片超过 8MB 限制");
         let _ = fs::remove_dir_all(&dir);
     }
 }

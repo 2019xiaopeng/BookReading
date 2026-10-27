@@ -8,8 +8,11 @@ mod txt;
 use std::fs;
 use std::io::Write;
 
-use commands::library::{delete_book, import_book, list_books, repair_book_metadata, save_reader_background, update_book_metadata};
-use commands::images::{import_image_folder, list_image_pages, read_image_page};
+use commands::library::{
+    delete_book, import_book, list_books, repair_book_metadata, save_reader_background, set_book_cover,
+    update_book_metadata,
+};
+use commands::images::{import_image_folder, list_image_pages, list_image_subdirs, read_image_page};
 use commands::annotations::{
     add_bookmark, add_highlight, delete_bookmark, delete_highlight, list_bookmarks, list_highlights,
 };
@@ -62,8 +65,10 @@ pub fn run() {
             import_book,
             import_image_folder,
             list_image_pages,
+            list_image_subdirs,
             read_image_page,
             repair_book_metadata,
+            set_book_cover,
             update_book_metadata,
             delete_book,
             list_bookmarks,

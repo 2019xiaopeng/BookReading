@@ -1,15 +1,25 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const { readAppDataBlobUrlMock } = vi.hoisted(() => ({ readAppDataBlobUrlMock: vi.fn() }));
+const { readAppDataBlobUrlMock, revokeObjectUrlMock } = vi.hoisted(() => ({
+  readAppDataBlobUrlMock: vi.fn(),
+  revokeObjectUrlMock: vi.fn(),
+}));
 
 vi.mock("../tauri/appDataPaths", () => ({
   readAppDataBlobUrl: readAppDataBlobUrlMock,
+  revokeObjectUrl: revokeObjectUrlMock,
   extToMime: (ext: string | null) => `mime/${ext ?? "bin"}`,
 }));
 
 vi.mock("../tauri/frontendLog", () => ({ logFrontend: vi.fn() }));
 
-import { COVER_MAX_ATTEMPTS, coverRetryDelayMs, getCoverUrl, requestCoverUrl } from "./useCoverUrls";
+import {
+  COVER_MAX_ATTEMPTS,
+  coverRetryDelayMs,
+  getCoverUrl,
+  invalidateCoverUrl,
+  requestCoverUrl,
+} from "./useCoverUrls";
 
 describe("coverRetryDelayMs", () => {
   test("backoff is 200/400/800", () => {
@@ -23,6 +33,7 @@ describe("requestCoverUrl", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     readAppDataBlobUrlMock.mockClear();
+    revokeObjectUrlMock.mockClear();
   });
 
   afterEach(() => {
@@ -59,5 +70,22 @@ describe("requestCoverUrl", () => {
     await vi.advanceTimersByTimeAsync(800);
     expect(readAppDataBlobUrlMock).toHaveBeenCalledTimes(COVER_MAX_ATTEMPTS);
     expect(getCoverUrl("library/covers/dead.jpg")).toBeUndefined();
+  });
+
+  test("invalidateCoverUrl revokes the blob, clears the cache and forces a re-fetch", async () => {
+    readAppDataBlobUrlMock.mockResolvedValue("blob:c1");
+    requestCoverUrl("library/covers/c.jpg");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getCoverUrl("library/covers/c.jpg")).toBe("blob:c1");
+
+    invalidateCoverUrl("library/covers/c.jpg");
+    expect(revokeObjectUrlMock).toHaveBeenCalledWith("blob:c1");
+    expect(getCoverUrl("library/covers/c.jpg")).toBeUndefined();
+
+    readAppDataBlobUrlMock.mockResolvedValue("blob:c2");
+    requestCoverUrl("library/covers/c.jpg");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readAppDataBlobUrlMock).toHaveBeenCalledTimes(2);
+    expect(getCoverUrl("library/covers/c.jpg")).toBe("blob:c2");
   });
 });

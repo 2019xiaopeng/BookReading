@@ -8,6 +8,8 @@ export type SelectionRect = { x: number; y: number; w: number; h: number };
 export default function SelectionToolbar(props: {
   open: boolean;
   rect: SelectionRect | null;
+  /** 选区与现有高亮相交：高亮钮切换为"取消高亮"语义 */
+  removeMode?: boolean;
   onHighlight: () => void;
   onFavorite: () => void;
   onNote: () => void;
@@ -76,8 +78,14 @@ export default function SelectionToolbar(props: {
           : { top: -9999, left: -9999, opacity: 0, pointerEvents: "none" }
       }
     >
-      <button type="button" aria-label="高亮" title="高亮" onClick={props.onHighlight}>
-        <IconHighlight />
+      <button
+        type="button"
+        aria-label={props.removeMode ? "取消高亮" : "高亮"}
+        title={props.removeMode ? "取消高亮" : "高亮"}
+        onClick={props.onHighlight}
+        style={props.removeMode ? { borderBottom: "2px solid var(--wr-danger)" } : undefined}
+      >
+        <IconHighlight style={props.removeMode ? { opacity: 0.55 } : undefined} />
       </button>
       <button type="button" aria-label="收藏" title="收藏" onClick={props.onFavorite}>
         <IconQuote />

@@ -15,13 +15,22 @@ import {
   listBookmarks,
   listFavoriteQuotes,
   listHighlights,
+  setBookFavorite,
   setSetting,
   upsertReadingState,
   type Bookmark,
   type FavoriteQuote,
   type Highlight,
 } from "../tauri/invoke";
-import { createReader, type ReaderController, type SearchResult, type SelectionRect, type TocItem } from "../reader/epub/reader";
+import {
+  cfiRangesOverlap,
+  createReader,
+  type ReaderController,
+  type RelocatedPayload,
+  type SearchResult,
+  type SelectionRect,
+  type TocItem,
+} from "../reader/epub/reader";
 import { tocLabelFor } from "../reader/epub/tocLabel";
 import BookmarksPanel from "../reader/components/BookmarksPanel";
 import HighlightsPanel from "../reader/components/HighlightsPanel";
@@ -36,6 +45,7 @@ import {
   imageCfi,
   normalizeImageReaderSettings,
   pagePercent,
+  parseImageCfi,
   turnKeyDirection,
   type ImageReaderSettings,
 } from "../reader/image/layout";
@@ -52,16 +62,18 @@ import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
 import { useElementSize } from "../ui/useElementSize";
+import { useImmersiveChrome } from "../ui/useImmersiveChrome";
 import { getBackgroundUrl } from "../ui/appBackground";
 import { applyPersistedTheme, getTheme, useTheme } from "../ui/theme";
 import {
   IconBookmark,
   IconChevronLeft,
   IconChevronRight,
+  IconHeart,
   IconHighlight,
   IconImage,
   IconList,
-  IconMoon,
+  IconLock,
   IconQuote,
   IconSearch,
   IconSettings,
@@ -92,12 +104,13 @@ export default function ReaderPage() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searched, setSearched] = useState(false);
-  const [isImmersive, setIsImmersive] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selection, setSelection] = useState<{ cfiRange: string; text: string; rect: SelectionRect | null } | null>(null);
   const [noteDraft, setNoteDraft] = useState<{ cfiRange: string; text: string } | null>(null);
   const [noteText, setNoteText] = useState("");
-  const [immersiveHudVisible, setImmersiveHudVisible] = useState(false);
+  const [chapterHref, setChapterHref] = useState("");
+  const [pageBadge, setPageBadge] = useState<{ left: { page: number; total: number } | null; right: { page: number; total: number } | null }>({ left: null, right: null });
+  const [lockToast, setLockToast] = useState(false);
   const [pagerHover, setPagerHover] = useState<"left" | "right" | null>(null);
   const [locationsReady, setLocationsReady] = useState(false);
   const [dragPct, setDragPct] = useState<number | null>(null);
@@ -108,21 +121,21 @@ export default function ReaderPage() {
   const settingsRef = useRef<ReaderSettings>(settings);
   const spreadModeRef = useRef<"none" | "always">("none");
   const locationSearchRef = useRef(location.search);
-  const showImmersiveHudRef = useRef<(holdMs?: number) => void>(() => {});
   const persistTimerRef = useRef<number | null>(null);
   const lastCfiRef = useRef<string | null>(null);
   const restoredRef = useRef(false);
-  const chapterRef = useRef("");
   const settingsTouchedRef = useRef(false);
   const searchSeqRef = useRef(0);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const wheelCooldownRef = useRef(0);
   const wheelAccumRef = useRef(0);
-  const immersiveHudTimerRef = useRef<number | null>(null);
+  const turningRef = useRef(false);
   const imageApiRef = useRef<ImageReaderApi | null>(null);
   const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false });
   const progressRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
+  // 沉浸 chrome：常态栏自动隐藏（3s 无输入淡出），锁定=全藏；抽屉开/加载失败/选区气泡开强制可见
+  const chrome = useImmersiveChrome({ disabled: drawerOpen || !!readerError || !!selection || !!noteDraft });
 
   useEffect(() => {
     let cancelled = false;
@@ -164,7 +177,8 @@ export default function ReaderPage() {
     return out;
   }, [toc]);
 
-  const chapterLabel = () => tocLabelFor(flatToc, chapterRef.current);
+  // 章名随 relocated 更新；toc 晚到时 memo 重算自动补上
+  const chapterTitle = useMemo(() => tocLabelFor(flatToc, chapterHref) ?? "正文", [flatToc, chapterHref]);
 
   const searchRows = useMemo(
     () => searchResults.map((r) => ({ ...r, chapter: tocLabelFor(flatToc, r.sectionHref) ?? "正文" })),
@@ -221,7 +235,17 @@ export default function ReaderPage() {
       if (!book) return;
       if (book.format === "images") {
         setImagePage(null);
+        lastCfiRef.current = null; // 换书后旧 CFI 不得进 img 书签/进度
         setTocLoading(false);
+        // B4: 漫画书签复用 BookmarksPanel，加载 img:N 书签并放行 loaded 态
+        try {
+          const bm = await listBookmarks(book.id);
+          if (cancelled) return;
+          setBookmarks(bm);
+        } catch (e) {
+          logFrontend(`reader: bookmarks load failed ${book.id} ${String(e)}`);
+        }
+        setAnnotationsLoaded(true);
         return;
       }
       if (!containerRef.current) return;
@@ -231,18 +255,30 @@ export default function ReaderPage() {
       setReaderError(null);
       setLocationsReady(false);
       setDragPct(null);
+      setPageBadge({ left: null, right: null });
+      setChapterHref("");
       restoredRef.current = false;
       setAnnotationsLoaded(false);
       setToc([]);
       setTocLoading(true);
 
-      const onRelocated = ({ cfi, percent, href }: { cfi: string; percent: number | null; href: string }) => {
+      const onRelocated = (payload: RelocatedPayload) => {
         if (cancelled) return;
+        const { cfi, percent, href } = payload;
         lastCfiRef.current = cfi;
-        chapterRef.current = href;
+        setChapterHref(href);
         if (typeof percent === "number") setPercent(percent);
         setDragPct(null);
         setSelection(null);
+        // 视觉页码徽标（epub paginated 专属；scrolled 无分页语义，image 书不走此回调）
+        if (settingsRef.current.readingMode === "paginated") {
+          const left = payload.pageStart;
+          const right =
+            payload.pageEnd && (payload.endSectionIndex !== payload.sectionIndex || payload.pageEnd.page !== left?.page) ? payload.pageEnd : null;
+          setPageBadge({ left, right });
+        } else {
+          setPageBadge({ left: null, right: null });
+        }
         if (!restoredRef.current) return;
 
         if (persistTimerRef.current) {
@@ -381,6 +417,11 @@ export default function ReaderPage() {
     if (settings.readingMode !== "scrolled") controllerRef.current.setSpreadMode(spreadMode);
   }, [theme, settings.fontSizePercent, settings.lineHeight, settings.layoutMode, spreadMode, settings.readingMode]);
 
+  // 字号/行距变化后重排：章内页码（displayed.total）随新分页更新
+  useEffect(() => {
+    controllerRef.current?.resize();
+  }, [settings.fontSizePercent, settings.lineHeight]);
+
   useEffect(() => {
     controllerRef.current?.setReadingMode(settings.readingMode);
   }, [settings.readingMode]);
@@ -404,43 +445,18 @@ export default function ReaderPage() {
     };
   }, [settings.reader_bg, isImageBook]);
 
+  // 锁定切换后纸面高度变化：epub.js Stage 不感知容器变高（iframe 维持旧高度→底部空白），布局稳定后强制重排
   useEffect(() => {
-    if (isImmersive) setDrawerOpen(false);
-    if (!isImmersive) {
-      showImmersiveHudRef.current = () => {};
-      setImmersiveHudVisible(false);
-      if (immersiveHudTimerRef.current) {
-        window.clearTimeout(immersiveHudTimerRef.current);
-        immersiveHudTimerRef.current = null;
-      }
-      return;
-    }
+    const t = window.setTimeout(() => controllerRef.current?.resize(), 250);
+    return () => window.clearTimeout(t);
+  }, [chrome.locked]);
 
-    const showHud = (holdMs = 2500) => {
-      setImmersiveHudVisible(true);
-      if (immersiveHudTimerRef.current) window.clearTimeout(immersiveHudTimerRef.current);
-      immersiveHudTimerRef.current = window.setTimeout(() => {
-        setImmersiveHudVisible(false);
-        immersiveHudTimerRef.current = null;
-      }, holdMs);
-    };
-    showImmersiveHudRef.current = showHud;
-
-    const onMouseMove = (e: MouseEvent) => {
-      if (e.clientY <= 56) showHud();
-    };
-
-    window.addEventListener("mousemove", onMouseMove);
-    showHud();
-    return () => {
-      showImmersiveHudRef.current = () => {};
-      window.removeEventListener("mousemove", onMouseMove);
-      if (immersiveHudTimerRef.current) {
-        window.clearTimeout(immersiveHudTimerRef.current);
-        immersiveHudTimerRef.current = null;
-      }
-    };
-  }, [isImmersive]);
+  useEffect(() => {
+    if (!chrome.locked) return;
+    setLockToast(true);
+    const t = window.setTimeout(() => setLockToast(false), 2500);
+    return () => window.clearTimeout(t);
+  }, [chrome.locked]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -450,7 +466,6 @@ export default function ReaderPage() {
 
       if (e.ctrlKey && e.key.toLowerCase() === "f" && !imageCtxRef.current.active) {
         e.preventDefault();
-        setIsImmersive(false);
         setSideTab("search");
         setDrawerOpen(true);
         requestAnimationFrame(() => searchInputRef.current?.focus());
@@ -459,19 +474,14 @@ export default function ReaderPage() {
 
       if (e.ctrlKey && e.key.toLowerCase() === "d") {
         e.preventDefault();
-        setIsImmersive((v) => !v);
+        chrome.setLocked(!chrome.locked);
         return;
       }
 
-      if (e.ctrlKey && e.key.toLowerCase() === "b" && !imageCtxRef.current.active) {
+      if (e.ctrlKey && e.key.toLowerCase() === "b") {
         e.preventDefault();
-        const cfi = lastCfiRef.current;
-        if (!book || !cfi) return;
-        void (async () => {
-          const bm = await addBookmark(book.id, cfi, chapterLabel());
-          setBookmarks((prev) => (prev.some((x) => x.cfi === bm.cfi) ? prev : [bm, ...prev]));
-          setSideTab("bookmarks");
-        })();
+        addBookmarkHere();
+        setSideTab("bookmarks");
         return;
       }
 
@@ -495,14 +505,20 @@ export default function ReaderPage() {
       }
 
       if (e.key === "Escape") {
+        // Esc 顺序语义：关抽屉 > 解除锁定 > 唤醒栏 > 无操作
         if (drawerOpen) {
           e.preventDefault();
           setDrawerOpen(false);
           return;
         }
-        if (isImmersive) {
+        if (chrome.locked) {
           e.preventDefault();
-          setIsImmersive(false);
+          chrome.setLocked(false);
+          return;
+        }
+        if (!chrome.visible) {
+          e.preventDefault();
+          chrome.wake();
           return;
         }
       }
@@ -510,7 +526,7 @@ export default function ReaderPage() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [book, drawerOpen, isImmersive, settings.pageAnimation, settings.readingMode, toc]);
+  }, [book, drawerOpen, chrome.locked, chrome.visible, chrome.wake, chrome.setLocked, chapterTitle, settings.pageAnimation, settings.readingMode]);
 
   useEffect(() => {
     const el = viewerRef.current;
@@ -520,7 +536,8 @@ export default function ReaderPage() {
       if (drawerOpen) return;
       // epub 滚动模式下 wheel 交给 iframe 原生滚动
       if (!imageCtxRef.current.active && settingsRef.current.readingMode !== "paginated") return;
-      if (imageCtxRef.current.active && imageCtxRef.current.webtoon) return;
+      // 条漫原生滚动；B5 缩放态平移交 ImageReader 内部处理
+      if (imageCtxRef.current.active && (imageCtxRef.current.webtoon || imageApiRef.current?.zoomed?.())) return;
       const now = Date.now();
       if (now - wheelCooldownRef.current < 300) return;
       if (Math.abs(e.deltaY) < Math.abs(e.deltaX) * 1.2) return;
@@ -574,10 +591,11 @@ export default function ReaderPage() {
     setSelection(null);
     setNoteDraft(null);
     if (imageCtxRef.current.active) {
-      imageApiRef.current?.turn(direction);
+      // B5 缩放态平移由 ImageReader 内部处理，禁翻页
+      if (!imageApiRef.current?.zoomed?.()) imageApiRef.current?.turn(direction);
       return;
     }
-    // epub 滚动模式无分页语义：footer/HUD/键盘的 上一页/下一页 统一改为上一章/下一章（wheel 仍留给 iframe 原生滚动）
+    // epub 滚动模式无分页语义：键盘/滚轮/热区统一改为上一章/下一章（wheel 仍留给 iframe 原生滚动）
     if (settingsRef.current.readingMode !== "paginated") {
       controllerRef.current?.chapterNav(direction === "next" ? 1 : -1);
       return;
@@ -613,34 +631,81 @@ export default function ReaderPage() {
     }
 
     if (settings.pageAnimation === "slide") {
-      el.style.transition = "transform 180ms ease";
-      el.style.transform = direction === "next" ? "translateX(-2%)" : "translateX(2%)";
-      await run();
-      requestAnimationFrame(() => {
-        el.style.transform = "translateX(0)";
-      });
+      // 整页平移：动画节点为 epub 渲染容器（纸框/背景纱不动，内容整页滑出+滑入）
+      const paper = containerRef.current;
+      if (!paper) {
+        await run();
+        return;
+      }
+      // 快速连翻：动画进行中直接瞬时跳页，不排队、永不卡死
+      if (turningRef.current) {
+        await run();
+        return;
+      }
+      turningRef.current = true;
+      try {
+        const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+        paper.style.transition = "transform 150ms ease-in";
+        paper.style.transform = `translateX(${direction === "next" ? "-100%" : "100%"})`;
+        await wait(150); // 旧页整幅滑出屏外后再换内容
+        await run();
+        paper.style.transition = "none";
+        paper.style.transform = `translateX(${direction === "next" ? "100%" : "-100%"})`;
+        void paper.offsetHeight; // 强制 reflow 提交入场起点
+        paper.style.transition = "transform 240ms cubic-bezier(0.2, 0, 0, 1)";
+        paper.style.transform = "translateX(0)";
+        await wait(260); // 兜底等待，不依赖 transitionend
+        paper.style.transition = "";
+        paper.style.transform = "";
+      } finally {
+        turningRef.current = false;
+      }
       return;
     }
 
     await run();
   }
 
+  /** footer 上一章/下一章（epub 两模式统一；image 书 footer 仍是页翻，走 animateTurn） */
+  function navChapter(direction: "next" | "prev") {
+    setSelection(null);
+    setNoteDraft(null);
+    controllerRef.current?.chapterNav(direction === "next" ? 1 : -1);
+  }
+
   function openDrawer(tab: typeof sideTab) {
     setSideTab(tab);
-    setIsImmersive(false);
     setDrawerOpen(true);
     if (tab === "search") requestAnimationFrame(() => searchInputRef.current?.focus());
+  }
+
+  // B4: 书签统一入口——image 书记 img:N + “第N页”，epub 记 CFI + 章名
+  function addBookmarkHere() {
+    const cfi = lastCfiRef.current;
+    if (!book || !cfi) return;
+    const imgPage = imageCtxRef.current.active ? parseImageCfi(cfi) : null;
+    void (async () => {
+      const bm = await addBookmark(book.id, cfi, imgPage !== null ? `第${imgPage + 1}页` : chapterTitle);
+      setBookmarks((prev) => (prev.some((x) => x.cfi === bm.cfi) ? prev : [bm, ...prev]));
+    })();
   }
 
   function locate(target?: string) {
     setSelection(null);
     setNoteDraft(null);
+    // B4: img:N 书签在漫画模式分流到 goToPage（此时无 epub controller）
+    const imgPage = imageCtxRef.current.active ? parseImageCfi(target) : null;
+    if (imgPage !== null) {
+      imageApiRef.current?.goToPage(imgPage);
+      return;
+    }
     void controllerRef.current?.display(target);
   }
 
   // locations 就绪后进度条可拖/可点（点击=零位移拖动，同一路径）
   const sliderReady = locationsReady && !isImageBook && !readerError;
-  const scrolledNav = !isImageBook && settings.readingMode === "scrolled";
+  // 选区与现有高亮相交 → 气泡高亮钮切换为"取消高亮"
+  const overlappingHighlights = selection ? highlights.filter((h) => cfiRangesOverlap(h.cfi_range, selection.cfiRange)) : [];
 
   function pctFromClientX(clientX: number): number | null {
     const el = progressRef.current;
@@ -704,13 +769,28 @@ export default function ReaderPage() {
                 ? "页面"
                 : "阅读设置";
 
+  // 栏淡出/淡入：仅 opacity+transform，高度保留（无 layout 变化，不触发 epub resize/relocated 抖动）
+  const chromeBarStyle = (dy: number): React.CSSProperties => ({
+    transition: "opacity 200ms ease, transform 200ms ease",
+    ...(chrome.visible ? null : { opacity: 0, transform: `translateY(${dy}px)`, pointerEvents: "none" as const }),
+  });
+
+  const pageBadgeStyle = (side: "left" | "right"): React.CSSProperties => ({
+    position: "absolute",
+    bottom: 6,
+    ...(side === "left" ? { left: 10 } : { right: 10 }),
+    fontSize: 11,
+    color: "var(--wr-muted)",
+    fontVariantNumeric: "tabular-nums",
+  });
+
   return (
     <div
       data-theme={theme}
       className="wr-reader-root"
     >
-      {!isImmersive ? (
-        <div className="wr-topbar wr-reader-topbar">
+      {!chrome.locked ? (
+        <div className="wr-topbar wr-reader-topbar" style={chromeBarStyle(-8)}>
           <button className="wr-btn" onClick={() => navigate("/")}>
             返回书库
           </button>
@@ -742,27 +822,48 @@ export default function ReaderPage() {
               </button>
             </>
           ) : null}
-          {isImageBook ? (
-            <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("pages")}>
-              <IconImage />
-              页面
-            </button>
+          {isImageBook && book ? (
+            <>
+              <button
+                className="wr-btn wr-icon-btn"
+                aria-pressed={book.is_favorite}
+                onClick={() => {
+                  const next = !book.is_favorite;
+                  setBook({ ...book, is_favorite: next });
+                  void setBookFavorite(book.id, next);
+                }}
+              >
+                <IconHeart fill={book.is_favorite ? "currentColor" : "none"} aria-hidden />
+                收藏
+              </button>
+              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("bookmarks")}>
+                <IconBookmark />
+                书签
+              </button>
+              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("pages")}>
+                <IconImage />
+                页面
+              </button>
+            </>
           ) : null}
           <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("settings")}>
             <IconSettings />
             设置
           </button>
-          <button className="wr-btn wr-icon-btn" onClick={() => setIsImmersive(true)}>
-            <IconMoon />
-            沉浸
+          <button
+            className="wr-btn wr-icon-btn"
+            aria-pressed={chrome.locked}
+            title="锁定沉浸：隐藏所有栏，Esc 解锁"
+            onClick={() => chrome.setLocked(true)}
+          >
+            <IconLock />
+            锁定
           </button>
           <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
             {typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
           </div>
         </div>
-      ) : (
-        <div style={{ height: 8 }} />
-      )}
+      ) : null}
 
       <div className="wr-reader-stage">
         <div
@@ -770,7 +871,7 @@ export default function ReaderPage() {
           className="wr-reader-viewer"
         >
           <Drawer
-            open={drawerOpen && !isImmersive}
+            open={drawerOpen}
             title={drawerTitle}
             onClose={() => {
               setDrawerOpen(false);
@@ -830,14 +931,7 @@ export default function ReaderPage() {
               <BookmarksPanel
                 items={bookmarks}
                 loaded={annotationsLoaded}
-                onAdd={() => {
-                  const cfi = lastCfiRef.current;
-                  if (!book || !cfi) return;
-                  void (async () => {
-                    const bm = await addBookmark(book.id, cfi, chapterLabel());
-                    setBookmarks((prev) => (prev.some((x) => x.cfi === bm.cfi) ? prev : [bm, ...prev]));
-                  })();
-                }}
+                onAdd={addBookmarkHere}
                 onOpen={(cfi) => locate(cfi)}
                 onDelete={(id) => {
                   if (!window.confirm("确定删除该书签吗？")) return;
@@ -974,7 +1068,10 @@ export default function ReaderPage() {
             ) : null}
           </Drawer>
 
-          <div className={isImageBook ? "wr-reader-paper-wrap wr-paper-image" : "wr-reader-paper-wrap"}>
+          <div
+            className={isImageBook ? "wr-reader-paper-wrap wr-paper-image" : "wr-reader-paper-wrap"}
+            style={isImageBook ? undefined : { position: "relative", ...(chrome.locked ? { padding: "0 6px" } : null) }}
+          >
             {isImageBook && book ? (
               <ImageReader
                 key={book.id}
@@ -988,6 +1085,29 @@ export default function ReaderPage() {
               />
             ) : (
               <>
+                {chrome.locked ? null : (
+                  // 纸面上方章节小字（占顶部 18px padding 带，零 layout 影响）
+                  <div
+                    aria-hidden="true"
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: 18,
+                      lineHeight: "18px",
+                      textAlign: "center",
+                      fontSize: 12,
+                      color: "var(--wr-muted)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    {chapterTitle}
+                  </div>
+                )}
                 {!readerError && (!book || tocLoading) ? (
                   <div className="wr-muted" style={{ padding: 16, margin: "auto" }}>
                     加载中…
@@ -1007,6 +1127,27 @@ export default function ReaderPage() {
                 >
                   {bgUrl ? <div className="wr-reader-bg-veil" aria-hidden="true" /> : null}
                   <div ref={containerRef} style={{ height: "100%", position: "relative" }} />
+                  {pageBadge.left || pageBadge.right ? (
+                    <div aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 2 }}>
+                      {pageBadge.right ? (
+                        <>
+                          {pageBadge.left ? (
+                            <span style={pageBadgeStyle("left")}>
+                              {pageBadge.left.page}/{pageBadge.left.total}
+                            </span>
+                          ) : null}
+                          <span style={pageBadgeStyle("right")}>
+                            {pageBadge.right.page}/{pageBadge.right.total}
+                          </span>
+                        </>
+                      ) : pageBadge.left ? (
+                        // 单页：只右下角一枚
+                        <span style={pageBadgeStyle("right")}>
+                          {pageBadge.left.page}/{pageBadge.left.total}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </>
             )}
@@ -1068,9 +1209,23 @@ export default function ReaderPage() {
           <SelectionToolbar
             open={!!selection && !drawerOpen && !readerError}
             rect={selection?.rect ?? null}
+            removeMode={overlappingHighlights.length > 0}
             onHighlight={() => {
               const s = selection;
               if (!book || !s) return;
+              if (overlappingHighlights.length > 0) {
+                const dead = overlappingHighlights;
+                void (async () => {
+                  for (const h of dead) {
+                    await deleteHighlight(h.id);
+                    controllerRef.current?.removeHighlight(h.cfi_range);
+                  }
+                  const ids = new Set(dead.map((h) => h.id));
+                  setHighlights((prev) => prev.filter((h) => !ids.has(h.id)));
+                  setSelection(null);
+                })();
+                return;
+              }
               void (async () => {
                 const h = await addHighlight(book.id, s.cfiRange, HIGHLIGHT_COLOR, s.text);
                 setHighlights((prev) => (prev.some((x) => x.cfi_range === h.cfi_range) ? prev : [h, ...prev]));
@@ -1146,10 +1301,11 @@ export default function ReaderPage() {
         </div>
       </div>
 
-      {!isImmersive ? (
+      {!chrome.locked ? (
         <div
           className="wr-reader-footer"
           style={{
+            ...chromeBarStyle(8),
             display: "flex",
             alignItems: "center",
             gap: 10,
@@ -1157,13 +1313,19 @@ export default function ReaderPage() {
             borderTop: "1px solid var(--wr-hairline)",
           }}
         >
-          <button className="wr-btn wr-icon-btn" onClick={() => void animateTurn("prev")}>
+          <button
+            className="wr-btn wr-icon-btn"
+            onClick={() => (isImageBook ? void animateTurn("prev") : navChapter("prev"))}
+          >
             <IconChevronLeft />
-            {scrolledNav ? "上一章" : "上一页"}
+            {isImageBook ? "上一页" : "上一章"}
           </button>
-          <button className="wr-btn wr-icon-btn" onClick={() => void animateTurn("next")}>
+          <button
+            className="wr-btn wr-icon-btn"
+            onClick={() => (isImageBook ? void animateTurn("next") : navChapter("next"))}
+          >
             <IconChevronRight />
-            {scrolledNav ? "下一章" : "下一页"}
+            {isImageBook ? "下一页" : "下一章"}
           </button>
           <div
             ref={progressRef}
@@ -1211,69 +1373,25 @@ export default function ReaderPage() {
         </div>
       ) : null}
 
-      {isImmersive ? (
+      {chrome.locked && lockToast ? (
         <div
-          onMouseEnter={() => showImmersiveHudRef.current(10_000)}
-          onMouseLeave={() => showImmersiveHudRef.current(900)}
-          className="wr-immersive-hud"
+          role="status"
           style={{
-            pointerEvents: immersiveHudVisible ? "auto" : "none",
-            opacity: immersiveHudVisible ? 1 : 0,
-            transform: immersiveHudVisible ? "translateY(0)" : "translateY(-6px)",
-            visibility: immersiveHudVisible ? "visible" : "hidden",
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            fontSize: 12,
+            color: "var(--wr-muted)",
+            background: "var(--panel-solid)",
+            border: "1px solid var(--wr-hairline)",
+            borderRadius: 999,
+            padding: "6px 14px",
+            boxShadow: "var(--shadow-sm)",
+            pointerEvents: "none",
           }}
         >
-          <div className="wr-immersive-hud-card">
-            <div className="wr-muted" style={{ fontSize: 12, padding: "0 6px" }}>
-              Esc 退出 · 移到顶部唤出
-            </div>
-            <button
-              className="wr-btn"
-              onClick={() => {
-                showImmersiveHudRef.current();
-                setIsImmersive(false);
-              }}
-            >
-              退出沉浸
-            </button>
-            <div style={{ display: "flex", gap: 10 }}>
-              {!isImageBook ? (
-                <button
-                  className="wr-btn wr-icon-btn"
-                  onClick={() => {
-                    showImmersiveHudRef.current();
-                    openDrawer("toc");
-                  }}
-                >
-                  <IconList />
-                  目录
-                </button>
-              ) : null}
-              <button
-                className="wr-btn wr-icon-btn"
-                onClick={() => {
-                  showImmersiveHudRef.current();
-                  void animateTurn("prev");
-                }}
-              >
-                <IconChevronLeft />
-                {scrolledNav ? "上一章" : "上一页"}
-              </button>
-              <button
-                className="wr-btn wr-icon-btn"
-                onClick={() => {
-                  showImmersiveHudRef.current();
-                  void animateTurn("next");
-                }}
-              >
-                <IconChevronRight />
-                {scrolledNav ? "下一章" : "下一页"}
-              </button>
-            </div>
-            <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums", paddingRight: 6 }}>
-              {typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
-            </div>
-          </div>
+          已锁定 · Esc 解锁
         </div>
       ) : null}
     </div>

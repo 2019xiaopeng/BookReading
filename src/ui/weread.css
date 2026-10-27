@@ -313,6 +313,49 @@
   color: var(--wr-muted);
 }
 
+/* 书架 nav 下的分组子列表（全部/未分组/各分组，数据与书库 chips 同源） */
+.wr-nav-groups {
+  display: grid;
+  gap: 2px;
+  padding-left: 12px;
+}
+
+.wr-nav-group-btn {
+  text-align: left;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--wr-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.wr-nav-group-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--wr-ink);
+}
+
+[data-theme="dark"] .wr-nav-group-btn:hover,
+[data-theme="darkcontrast"] .wr-nav-group-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.wr-nav-group-btn[aria-current="page"] {
+  background: rgba(var(--wr-accent-rgb), 0.12);
+  color: var(--wr-ink);
+}
+
+.wr-nav-group-btn:focus-visible {
+  outline: 2px solid var(--wr-ink);
+  outline-offset: 1px;
+  border-color: rgba(var(--wr-accent-rgb), 0.4);
+}
+
 .wr-side-bottom {
   margin-top: auto;
   padding: 12px;
@@ -663,6 +706,8 @@
   height: 100%;
   border-radius: 0;
   border-left: 1px solid var(--wr-hairline);
+  /* B2a：抽屉实色化——半透明面板上文字发虚，--panel-solid 六主题自适配 */
+  background: var(--panel-solid);
   box-shadow: var(--wr-shadow);
   display: grid;
   grid-template-rows: 62px 1fr;
@@ -673,32 +718,6 @@
   padding: 14px;
   overflow: auto;
   min-height: 0;
-}
-
-.wr-immersive-hud {
-  position: fixed;
-  left: 16px;
-  right: 16px;
-  top: 10px;
-  z-index: var(--wr-z-hud);
-  transition: opacity 160ms ease, transform 160ms ease;
-}
-
-.wr-immersive-hud-card {
-  border-radius: 999px;
-  padding: 10px;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  justify-content: space-between;
-  box-shadow: var(--wr-paper-shadow);
-  background: rgba(251, 250, 247, 0.86);
-  backdrop-filter: blur(12px);
-}
-
-[data-theme="dark"] .wr-immersive-hud-card,
-[data-theme="darkcontrast"] .wr-immersive-hud-card {
-  background: rgba(16, 18, 20, 0.62);
 }
 
 @keyframes wr-fade-in {
@@ -742,6 +761,25 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 14px;
+}
+
+/* 书架密度档位：列宽由 density.ts 内联注入，此处只联动封面/卡列尺寸（standard=默认不动） */
+.wr-book-grid--compact .wr-cover {
+  width: 52px;
+  height: 76px;
+}
+
+.wr-book-grid--compact .wr-book-card {
+  grid-template-columns: 52px 1fr;
+}
+
+.wr-book-grid--large .wr-cover {
+  width: 96px;
+  height: 138px;
+}
+
+.wr-book-grid--large .wr-book-card {
+  grid-template-columns: 96px 1fr;
 }
 
 .wr-book-card {
@@ -858,6 +896,13 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  /* hover/focus 时让位右上角工具钮（28px×2+gap+边距），标题永不压字；:has 限定有工具钮的卡（书架），收藏卡不空让位 */
+  transition: padding-right 150ms ease;
+}
+
+.wr-book-card:has(.wr-card-tools):hover .wr-title,
+.wr-book-card:has(.wr-card-tools):focus-within .wr-title {
+  padding-right: 68px;
 }
 
 .wr-author {
@@ -941,7 +986,7 @@
   padding: 0;
   border: 1px solid var(--wr-hairline);
   border-radius: 8px;
-  background: var(--wr-paper);
+  background: var(--panel-solid);
   color: var(--wr-ink);
   cursor: pointer;
   transition: background 150ms ease, transform 150ms ease;
@@ -963,11 +1008,6 @@
 .wr-mini-btn[data-pinned="true"] {
   border-color: rgba(var(--wr-accent-rgb), 0.5);
   color: var(--wr-accent);
-}
-
-[data-theme="dark"] .wr-mini-btn,
-[data-theme="darkcontrast"] .wr-mini-btn {
-  background: rgba(255, 255, 255, 0.08);
 }
 
 [data-theme="dark"] .wr-mini-btn:hover,

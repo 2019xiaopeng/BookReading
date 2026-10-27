@@ -3,11 +3,13 @@ import { describe, expect, test } from "vitest";
 import {
   buildSpreads,
   clampPage,
+  clampZoomScale,
   defaultImageReaderSettings,
   displayOrder,
   imageCfi,
   normalizeImageReaderSettings,
   pagePercent,
+  panClamp,
   parseImageCfi,
   slideDirection,
   spreadIndexForPage,
@@ -121,7 +123,41 @@ describe("normalizeImageReaderSettings", () => {
       layout: "double",
       rtl: true,
       mode: "webtoon",
+      pageAnimation: "slide",
+      webtoonWidth: 75,
     });
+  });
+
+  test("batch5: pageAnimation keeps only none/slide, missing falls back to slide", () => {
+    expect(normalizeImageReaderSettings({ pageAnimation: "none" }).pageAnimation).toBe("none");
+    expect(normalizeImageReaderSettings({ pageAnimation: "fade" }).pageAnimation).toBe("slide");
+    expect(normalizeImageReaderSettings({}).pageAnimation).toBe("slide");
+  });
+
+  test("batch5: webtoonWidth clamps to 40-100, non-numbers fall back to 75", () => {
+    expect(normalizeImageReaderSettings({ webtoonWidth: 30 }).webtoonWidth).toBe(40);
+    expect(normalizeImageReaderSettings({ webtoonWidth: 120 }).webtoonWidth).toBe(100);
+    expect(normalizeImageReaderSettings({ webtoonWidth: "80" }).webtoonWidth).toBe(75);
+    expect(normalizeImageReaderSettings({ webtoonWidth: 62 }).webtoonWidth).toBe(62);
+  });
+});
+
+describe("zoom helpers", () => {
+  test("clampZoomScale holds the 0.5-4x range", () => {
+    expect(clampZoomScale(1)).toBe(1);
+    expect(clampZoomScale(0.3)).toBe(0.5);
+    expect(clampZoomScale(4.5)).toBe(4);
+    expect(clampZoomScale(0.5)).toBe(0.5);
+    expect(clampZoomScale(4)).toBe(4);
+  });
+
+  test("panClamp locks fitting axes at 0 and clamps to grown content edges", () => {
+    expect(panClamp(30, 40, 800, 600, 800, 600, 1)).toEqual({ tx: 0, ty: 0 });
+    expect(panClamp(999, 999, 800, 600, 800, 600, 2)).toEqual({ tx: 400, ty: 300 });
+    expect(panClamp(-999, -999, 800, 600, 800, 600, 2)).toEqual({ tx: -400, ty: -300 });
+    // tall strip (webtoon): vertical slack grows with the content, not the viewport
+    expect(panClamp(0, 99999, 800, 600, 800, 6000, 2)).toEqual({ tx: 0, ty: 5700 });
+    expect(panClamp(0, 999, 800, 600, 800, 6000, 2)).toEqual({ tx: 0, ty: 999 });
   });
 });
 

@@ -1,20 +1,28 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import type { Book, UpdateBookMetadataRequest } from "../tauri/invoke";
 import {
   deleteBook,
+  getSettings,
   importBook,
   listBooks,
+  listImageSubdirs,
   repairBookMetadata,
+  saveReaderBackground,
+  setBookCover,
   setBookFavorite,
+  setSetting,
   updateBookMetadata,
 } from "../tauri/invoke";
 import { importImageFolder } from "../reader/image/api";
 import { needsMetadataRepair } from "../library/metadataRepair";
-import { useCoverUrls } from "../library/useCoverUrls";
+import { DENSITY_PRESETS, normalizeLibraryDensity, type LibraryDensity } from "../library/density";
+import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "../library/useCoverUrls";
+import { notifyBackgroundChanged, resetBackgroundCache } from "../ui/appBackground";
+import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
 import AppShell from "../ui/AppShell";
 import { IconBook, IconImage, IconMore, IconPin, IconRefresh } from "../ui/icons";
@@ -48,12 +56,14 @@ type PromptState = {
 
 export default function LibraryPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [groupFilter, setGroupFilter] = useState("全部");
   const [sortKey, setSortKey] = useState<SortKey>("recent");
   const [sortAsc, setSortAsc] = useState(false);
+  const [density, setDensity] = useState<LibraryDensity>("standard");
   // session-only groups created via 新建分组 but not yet holding any book (groups otherwise derive from books)
   const [extraGroups, setExtraGroups] = useState<string[]>([]);
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -97,7 +107,20 @@ export default function LibraryPage() {
 
   useEffect(() => {
     refresh();
+    getSettings()
+      .then((m) => setDensity(normalizeLibraryDensity(m.library_density)))
+      .catch(() => {});
   }, []);
+
+  // 侧栏分组导航写 URL（/?group=…），与 AppShell 同源；chips 点击仍是本地态不写 URL
+  useEffect(() => {
+    setGroupFilter(searchParams.get("group") ?? "全部");
+  }, [searchParams]);
+
+  function changeDensity(v: LibraryDensity) {
+    setDensity(v);
+    void setSetting("library_density", v);
+  }
 
   useEffect(() => {
     const pending: Promise<void>[] = [];
@@ -256,6 +279,83 @@ export default function LibraryPage() {
       await refresh();
     } finally {
       setLoading(false);
+    }
+  }
+
+  // 批量导入：选父目录 → 每个一级子文件夹各导入一本漫画（空/无图目录服务端已过滤），失败逐个记日志不中断
+  async function onBatchImportImages() {
+    if (loading) return;
+    const parent = await open({ directory: true, multiple: false, title: "选择漫画父目录（每个一级子文件夹导入一本）" });
+    if (!parent || Array.isArray(parent)) return;
+    setLoading(true);
+    try {
+      const dirs = await listImageSubdirs(parent);
+      if (dirs.length === 0) {
+        window.alert("该目录下没有包含图片的一级子文件夹");
+        return;
+      }
+      const failed: string[] = [];
+      for (const dir of dirs) {
+        try {
+          await importImageFolder(dir, null); // title=null → 取子目录名
+        } catch (e) {
+          failed.push(dir);
+          logFrontend(`ui: batch import failed ${dir} ${String(e)}`);
+        }
+      }
+      window.alert(`导入 ${dirs.length - failed.length} 本，失败 ${failed.length} 个`);
+      await refresh();
+    } catch (e) {
+      window.alert(`批量导入失败：${String(e)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // 全局背景：链路复用阅读器（saveReaderBackground→resetBackgroundCache→写 settings），应用即预览
+  async function applyGlobalBackground(bg: ReaderBackground) {
+    try {
+      await setSetting("reader_bg", JSON.stringify(bg));
+      resetBackgroundCache();
+      notifyBackgroundChanged();
+    } catch (e) {
+      window.alert(`设置背景失败：${String(e)}`);
+    }
+  }
+
+  async function onSetGlobalBackground() {
+    const picked = await open({
+      multiple: false,
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (typeof picked !== "string") return;
+    try {
+      const path = await saveReaderBackground(picked);
+      await applyGlobalBackground({ type: "image", path });
+    } catch (e) {
+      window.alert(`设置背景失败：${String(e)}`);
+    }
+  }
+
+  function onResetGlobalBackground() {
+    void applyGlobalBackground({ type: "preset" });
+  }
+
+  // 自定义封面：无封面书同样可用（Rust 端 UPDATE 即插即用）；repair 只补缺失不会覆盖
+  async function onSetCover(book: Book) {
+    const picked = await open({
+      multiple: false,
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (typeof picked !== "string") return;
+    try {
+      const newPath = await setBookCover(book.id, picked);
+      if (book.cover_path) invalidateCoverUrl(book.cover_path);
+      // 同路径替换时 wantedKey 不变，hook 不会自发重取，显式重取新封面
+      requestCoverUrl(newPath);
+      await refresh();
+    } catch (e) {
+      window.alert(`设置封面失败：${String(e)}`);
     }
   }
 
@@ -422,6 +522,19 @@ export default function LibraryPage() {
             {sortAsc ? "↑ 升序" : "↓ 降序"}
           </button>
         </div>
+        <div className="wr-seg" role="group" aria-label="书架密度" style={{ marginLeft: "auto" }}>
+          {(Object.keys(DENSITY_PRESETS) as LibraryDensity[]).map((d) => (
+            <button
+              key={d}
+              className="wr-seg-btn"
+              data-active={density === d}
+              aria-pressed={density === d}
+              onClick={() => changeDensity(d)}
+            >
+              {DENSITY_PRESETS[d].label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {groups.length > 0 ? (
@@ -456,7 +569,8 @@ export default function LibraryPage() {
       ) : null}
 
       <div
-        className="wr-book-grid"
+        className={density === "standard" ? "wr-book-grid" : `wr-book-grid wr-book-grid--${density}`}
+        style={{ gridTemplateColumns: DENSITY_PRESETS[density].grid }}
         onContextMenu={(e) => {
           if ((e.target as HTMLElement).closest(".wr-book-card")) return;
           e.preventDefault();
@@ -530,7 +644,11 @@ export default function LibraryPage() {
 
         {booksFiltered.length === 0 ? (
           <div className="wr-muted" style={{ padding: 16, gridColumn: "1 / -1" }}>
-            {query.trim() ? "没有匹配的书籍" : "书架还是空的，从左下角导入第一本书，或在空白处右键"}
+            {query.trim()
+              ? "没有匹配的书籍"
+              : groupFilter !== "全部"
+                ? "该分组暂无书籍"
+                : "书架还是空的，从左下角导入第一本书，或在空白处右键"}
           </div>
         ) : null}
       </div>
@@ -548,6 +666,15 @@ export default function LibraryPage() {
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onImportImages(); }}>
                 导入漫画
               </button>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onBatchImportImages(); }}>
+                批量导入漫画
+              </button>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onSetGlobalBackground(); }}>
+                设置全局背景
+              </button>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onResetGlobalBackground(); }}>
+                恢复默认背景
+              </button>
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu();setSortAsc((v) => !v); }}>
                 {sortAsc ? "切换为降序" : "切换为升序"}
               </button>
@@ -562,6 +689,9 @@ export default function LibraryPage() {
               </button>
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onNote(menu.book); }}>
                 备注
+              </button>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onSetCover(menu.book); }}>
+                设置封面
               </button>
               <button
                 className="wr-menu-item"

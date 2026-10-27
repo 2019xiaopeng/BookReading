@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { IconBook, IconPalette, IconSearch, IconStar } from "./icons";
-import { getBackgroundUrl } from "./appBackground";
+import { getBackgroundUrl, subscribeBackground } from "./appBackground";
 import { applyPersistedTheme, setTheme, THEME_SWATCHES, useTheme } from "./theme";
-import { getSettings } from "../tauri/invoke";
+import { getSettings, listBooks } from "../tauri/invoke";
 import { normalizeReaderBackground } from "../reader/settings/normalize";
 
 // 六个 30px 色块 + 5*8 间距 + 12 内边距 + 2 边框
@@ -30,13 +30,16 @@ export default function AppShell(props: {
   const theme = useTheme();
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const [themeMenu, setThemeMenu] = useState<{ x: number; y: number } | null>(null);
+  const [groups, setGroups] = useState<string[]>([]);
   const themeBtnRef = useRef<HTMLButtonElement | null>(null);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
+  const [searchParams] = useSearchParams();
+  const activeGroup = props.active === "library" ? searchParams.get("group") : null;
 
-  // 启动纠偏：DB 主题覆盖 localStorage 缓存；同一份 settings 顺带解析全局背景
+  // 启动纠偏：DB 主题覆盖 localStorage 缓存；同一份 settings 顺带解析全局背景；书架换背景后广播重读，即时换肤
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    const load = async () => {
       try {
         const map = await getSettings();
         if (cancelled) return;
@@ -45,9 +48,36 @@ export default function AppShell(props: {
       } catch {
         // DB 不可达：维持缓存主题与默认底色
       }
-    })();
+    };
+    void load();
+    const off = subscribeBackground(() => void load());
     return () => {
       cancelled = true;
+      off();
+    };
+  }, []);
+
+  // 侧栏分组：与书库 chips 同源（books.group_name）；挂载+窗口聚焦刷新，会话新建的空组不入侧栏
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const list = await listBooks();
+        if (cancelled) return;
+        setGroups(
+          [...new Set(list.map((b) => b.group_name).filter((g): g is string => !!g))].sort((a, b) =>
+            a.localeCompare(b, "zh"),
+          ),
+        );
+      } catch {
+        // DB 不可达：侧栏不渲染分组
+      }
+    };
+    void load();
+    window.addEventListener("focus", load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", load);
     };
   }, []);
 
@@ -117,6 +147,35 @@ export default function AppShell(props: {
             </div>
             <div className="wr-nav-sub">最近阅读、导入与管理</div>
           </button>
+          {groups.length > 0 ? (
+            <div className="wr-nav-groups" role="group" aria-label="书架分组">
+              <button
+                className="wr-nav-group-btn"
+                aria-current={!activeGroup ? "page" : undefined}
+                onClick={() => navigate("/")}
+              >
+                全部
+              </button>
+              <button
+                className="wr-nav-group-btn"
+                aria-current={activeGroup === "未分组" ? "page" : undefined}
+                onClick={() => navigate(`/?group=${encodeURIComponent("未分组")}`)}
+              >
+                未分组
+              </button>
+              {groups.map((g) => (
+                <button
+                  key={g}
+                  className="wr-nav-group-btn"
+                  title={g}
+                  aria-current={activeGroup === g ? "page" : undefined}
+                  onClick={() => navigate(`/?group=${encodeURIComponent(g)}`)}
+                >
+                  {g}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <button className="wr-nav-btn" data-active={props.active === "favorites"} aria-current={props.active === "favorites" ? "page" : undefined} onClick={() => navigate("/favorites")}>
             <div className="wr-nav-title">
               <IconStar />

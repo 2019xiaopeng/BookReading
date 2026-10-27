@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { extToMime, readAppDataBlobUrl } from "../tauri/appDataPaths";
+import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../tauri/appDataPaths";
 import { logFrontend } from "../tauri/frontendLog";
 
 // Module-level cache: blob URLs live for the whole app session, so covers survive
@@ -23,6 +23,15 @@ export function getCoverUrl(path: string): string | undefined {
 
 function notify(path: string) {
   for (const l of listeners) l(path);
+}
+
+// 自定义封面替换/删除后：回收旧 blob、清缓存并通知；failedAttempts 一并清除让此前失败的可重试
+export function invalidateCoverUrl(path: string): void {
+  const url = urlCache.get(path);
+  if (url) revokeObjectUrl(url);
+  urlCache.delete(path);
+  failedAttempts.delete(path);
+  notify(path);
 }
 
 export function requestCoverUrl(path: string): void {
@@ -67,7 +76,14 @@ export function useCoverUrls(items: { cover_path?: string | null }[]): Record<st
     const onLoaded = (path: string) => {
       setCoverUrls((prev) => {
         const url = urlCache.get(path);
-        if (!url || prev[path] === url) return prev;
+        if (!url) {
+          // invalidate 通知：缓存已无此 path，同步从 state 删 key（含从未加载成功的情况）
+          if (!(path in prev)) return prev;
+          const next = { ...prev };
+          delete next[path];
+          return next;
+        }
+        if (prev[path] === url) return prev;
         return { ...prev, [path]: url };
       });
     };

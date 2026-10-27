@@ -312,6 +312,25 @@ pub fn read_image_page(app: tauri::AppHandle, book_id: String, index: usize) -> 
     }
 }
 
+// 批量导入：父目录的一级子目录，仅保留"直接含图片"的（空/纯文本目录服务端跳过），目录名自然序
+#[tauri::command]
+pub fn list_image_subdirs(parent: String) -> Result<Vec<String>, String> {
+    let dir = PathBuf::from(&parent);
+    if !dir.is_dir() {
+        return Err(format!("{}: 不是文件夹", dir.display()));
+    }
+    let mut subs: Vec<String> = fs::read_dir(&dir)
+        .map_err(|e| format!("failed to read dir {}: {e}", dir.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .filter(|p| folder_image_files(p).map_or(false, |f| !f.is_empty()))
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+    subs.sort_by(|a, b| nat_cmp(a, b));
+    Ok(subs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,5 +381,29 @@ mod tests {
         assert_eq!(read_cbz_page(&path, 1).unwrap(), b"one");
         assert!(read_cbz_page(&path, 2).is_err());
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn list_image_subdirs_keeps_only_image_dirs_in_natural_order() {
+        let parent = std::env::temp_dir().join(format!("bookreading-subdirs-{}", Uuid::new_v4()));
+        for sub in ["vol10", "vol2", "empty", "texts"] {
+            fs::create_dir_all(parent.join(sub)).unwrap();
+        }
+        fs::write(parent.join("vol2").join("a.png"), b"x").unwrap();
+        fs::write(parent.join("vol10").join("b.jpg"), b"x").unwrap();
+        fs::write(parent.join("texts").join("n.txt"), b"x").unwrap();
+        // 根下散文件与深层图片均不算：只看一级子目录是否"直接含图"
+        fs::write(parent.join("loose.png"), b"x").unwrap();
+        fs::create_dir_all(parent.join("texts").join("inner")).unwrap();
+        fs::write(parent.join("texts").join("inner").join("deep.png"), b"x").unwrap();
+
+        let subs = list_image_subdirs(parent.to_string_lossy().to_string()).unwrap();
+        let names: Vec<String> = subs
+            .iter()
+            .map(|p| Path::new(p).file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["vol2", "vol10"]);
+        assert!(list_image_subdirs(parent.join("missing").to_string_lossy().to_string()).is_err());
+        let _ = fs::remove_dir_all(&parent);
     }
 }

@@ -226,3 +226,23 @@ export function IconPalette(props: P) {
   );
 }
 
+export function IconLock(props: P) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...props}>
+      <rect x="5" y="10.5" width="14" height="9.5" rx="2.2" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="12" cy="15.2" r="1.4" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function IconLockOpen(props: P) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...props}>
+      <rect x="5" y="10.5" width="14" height="9.5" rx="2.2" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M15.5 10.5V8a3.5 3.5 0 0 0-6.87-.9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="12" cy="15.2" r="1.4" fill="currentColor" />
+    </svg>
+  );
+}
+

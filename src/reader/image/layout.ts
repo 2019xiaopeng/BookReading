@@ -1,12 +1,15 @@
 export type ImageFit = "height" | "width" | "original";
 export type ImagePageLayout = "single" | "double";
 export type ImageReadMode = "paged" | "webtoon";
+export type ImagePageAnimation = "none" | "slide";
 
 export type ImageReaderSettings = {
   fit: ImageFit;
   layout: ImagePageLayout;
   rtl: boolean;
   mode: ImageReadMode;
+  pageAnimation: ImagePageAnimation;
+  webtoonWidth: number; // percent of the strip width, 40-100
 };
 
 export type TurnDirection = "prev" | "next";
@@ -18,6 +21,8 @@ export const defaultImageReaderSettings: ImageReaderSettings = {
   layout: "single",
   rtl: false,
   mode: "paged",
+  pageAnimation: "slide",
+  webtoonWidth: 75,
 };
 
 export function normalizeImageReaderSettings(raw: unknown): ImageReaderSettings {
@@ -30,11 +35,14 @@ export function normalizeImageReaderSettings(raw: unknown): ImageReaderSettings 
     }
   }
   const o = (typeof v === "object" && v !== null ? v : {}) as Record<string, unknown>;
+  const width = typeof o.webtoonWidth === "number" && Number.isFinite(o.webtoonWidth) ? o.webtoonWidth : 75;
   return {
     fit: o.fit === "width" || o.fit === "original" ? o.fit : "height",
     layout: o.layout === "double" ? "double" : "single",
     rtl: o.rtl === true,
     mode: o.mode === "webtoon" ? "webtoon" : "paged",
+    pageAnimation: o.pageAnimation === "none" ? "none" : "slide",
+    webtoonWidth: Math.min(100, Math.max(40, width)),
   };
 }
 
@@ -112,4 +120,31 @@ export function pagePercent(page: number, pageCount: number): number {
 export function clampPage(page: number, pageCount: number): number {
   if (pageCount <= 0) return 0;
   return Math.min(pageCount - 1, Math.max(0, Math.floor(page)));
+}
+
+/** B5: Ctrl+wheel zoom range. */
+export const ZOOM_MIN = 0.5;
+export const ZOOM_MAX = 4;
+
+export function clampZoomScale(s: number): number {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s));
+}
+
+/**
+ * B5: pan clamp per axis — slack is (content*scale - view)/2, so a content axis
+ * larger than the viewport (tall webtoon strip, fit-width page) stays pannable
+ * end to end; an axis that fits locks at 0 (stays centered).
+ */
+export function panClamp(
+  tx: number,
+  ty: number,
+  viewW: number,
+  viewH: number,
+  contentW: number,
+  contentH: number,
+  scale: number,
+): { tx: number; ty: number } {
+  const mx = Math.max(0, (contentW * scale - viewW) / 2);
+  const my = Math.max(0, (contentH * scale - viewH) / 2);
+  return { tx: Math.min(mx, Math.max(-mx, tx)), ty: Math.min(my, Math.max(-my, ty)) };
 }

@@ -1,4 +1,4 @@
-import ePub from "epubjs";
+import ePub, { EpubCFI } from "epubjs";
 
 import type { ReadingMode, Theme } from "../settings/types";
 import { readAppDataFile } from "../../tauri/appDataPaths";
@@ -57,11 +57,65 @@ export type SearchResult = {
   percent?: number;
 };
 
+/** 章内视觉页码（relocated 的 displayed；0.3.93 paginated 才有分页语义，缺失容错 null） */
+export type PageEdge = { page: number; total: number };
+
 export type RelocatedPayload = {
   cfi: string;
   percent: number | null;
   href: string;
+  /** location.start.index（spine 序号） */
+  sectionIndex: number;
+  /** location.end.index；页码徽标仅在跨章/跨页时补右角 */
+  endSectionIndex: number;
+  pageStart: PageEdge | null;
+  pageEnd: PageEdge | null;
 };
+
+function pageEdge(edge: any): PageEdge | null {
+  const d = edge?.displayed;
+  return typeof d?.page === "number" && typeof d?.total === "number" && d.total > 0 ? { page: d.page, total: d.total } : null;
+}
+
+/** range CFI 边缘的位置键：[spinePos, ...path.steps.index, ...edge.steps.index, terminal.offset]，字典序可比 */
+function cfiKey(cfi: any, edge: "start" | "end"): number[] | null {
+  const path = cfi?.path;
+  if (!Array.isArray(path?.steps)) return null;
+  // 非 range 退化为 path 本身（terminal 在 path 上，steps 不得重复拼接）
+  const e = cfi?.range ? cfi[edge] : path;
+  if (!e) return null;
+  const idx = (s: any) => (typeof s?.index === "number" ? s.index : 0);
+  const steps = e === path ? path.steps : [...path.steps, ...(Array.isArray(e.steps) ? e.steps : [])];
+  return [
+    typeof cfi.spinePos === "number" ? cfi.spinePos : -1,
+    ...steps.map(idx),
+    typeof e.terminal?.offset === "number" ? e.terminal.offset : -1,
+  ];
+}
+
+function keyCmp(a: number[], b: number[]): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+  }
+  return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
+}
+
+/** 选区与现有高亮的 range CFI 是否相交（闭区间；解析失败按不相交处理）。 */
+export function cfiRangesOverlap(a: string, b: string): boolean {
+  try {
+    const A: any = new EpubCFI(a);
+    const B: any = new EpubCFI(b);
+    const as = cfiKey(A, "start");
+    const ae = cfiKey(A, "end");
+    const bs = cfiKey(B, "start");
+    const be = cfiKey(B, "end");
+    if (!as || !ae || !bs || !be) return false;
+    return keyCmp(as, be) <= 0 && keyCmp(bs, ae) <= 0;
+  } catch {
+    return false;
+  }
+}
 
 export type ReaderController = {
   next: () => Promise<void>;
@@ -76,6 +130,8 @@ export type ReaderController = {
   setReadingMode: (mode: ReadingMode) => void;
   addHighlight: (cfiRange: string) => void;
   removeHighlight: (cfiRange: string) => void;
+  /** 强制重排（容器尺寸变化/字号行距变化后刷新章内页码）；clear+display 当前 CFI */
+  resize: () => void;
   search: (query: string) => Promise<SearchResult[]>;
   destroy: () => void;
 };
@@ -237,7 +293,17 @@ export async function createReader(opts: {
         ? (book.locations.percentageFromCfi(cfi) as number)
         : null;
     const href = String(location?.start?.href ?? "").split("#")[0];
-    opts.onRelocated?.({ cfi, percent, href });
+    const sectionIndex = typeof location?.start?.index === "number" ? location.start.index : -1;
+    const endSectionIndex = typeof location?.end?.index === "number" ? location.end.index : sectionIndex;
+    opts.onRelocated?.({
+      cfi,
+      percent,
+      href,
+      sectionIndex,
+      endSectionIndex,
+      pageStart: pageEdge(location?.start),
+      pageEnd: pageEdge(location?.end),
+    });
   };
   rendition.on("relocated", onRelocated);
 
@@ -397,9 +463,20 @@ export async function createReader(opts: {
     },
     removeHighlight: (cfiRange: string) => {
       try {
-        rendition.annotations.remove(cfiRange);
+        // annotations.remove 以 encodeURI(cfiRange+type) 为 hash，不传 type 拼上 "undefined" 永不命中（DB 删了渲染层残留）
+        rendition.annotations.remove(cfiRange, "highlight");
       } catch (e) {
         logOnce("reader.removeHighlight", `reader: removeHighlight failed ${String(e)}`);
+      }
+    },
+    resize: () => {
+      try {
+        // 同尺寸下 rendition.resize() 会被 manager 提前返回（不重排页码），统一走 clear+display 当前 CFI；
+        // scrolled 模式 spread 必须保持 none（与 setSpreadMode 跳过逻辑一致）
+        const cfi = rendition.currentLocation?.()?.start?.cfi;
+        applySpreadMode(rendition, currentFlow === "scrolled" ? "none" : lastSpreadMode, typeof cfi === "string" ? cfi : undefined);
+      } catch (e) {
+        logOnce("reader.resize", `reader: resize failed ${String(e)}`);
       }
     },
     search: async (query: string) => {

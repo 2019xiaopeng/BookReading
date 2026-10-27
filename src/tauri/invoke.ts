@@ -68,6 +68,16 @@ export async function saveReaderBackground(sourcePath: string): Promise<string> 
   return invoke<string>("save_reader_background", { sourcePath });
 }
 
+// 批量导入用：父目录下"直接含图片"的一级子目录（服务端过滤空/无图目录，自然序）
+export async function listImageSubdirs(parent: string): Promise<string[]> {
+  return invoke<string[]>("list_image_subdirs", { parent });
+}
+
+// 自定义封面：校验+复制到 covers/{book_id}.{ext}，更新 books.cover_path，返回新 cover_path
+export async function setBookCover(bookId: string, sourcePath: string): Promise<string> {
+  return invoke<string>("set_book_cover", { bookId, sourcePath });
+}
+
 export type ReadingState = {
   book_id: string;
   cfi: string;

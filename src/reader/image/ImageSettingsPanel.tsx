@@ -1,4 +1,5 @@
-import type { ImageFit, ImagePageLayout, ImageReadMode, ImageReaderSettings } from "./layout";
+import { setTheme, THEME_SWATCHES, useTheme } from "../../ui/theme";
+import type { ImageFit, ImagePageAnimation, ImagePageLayout, ImageReadMode, ImageReaderSettings } from "./layout";
 
 type Props = {
   value: ImageReaderSettings;
@@ -32,6 +33,7 @@ function Seg<T extends string>(props: { label: string; value: T; options: SegOpt
 
 export default function ImageSettingsPanel({ value, onChange }: Props) {
   const webtoon = value.mode === "webtoon";
+  const theme = useTheme();
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -83,6 +85,63 @@ export default function ImageSettingsPanel({ value, onChange }: Props) {
         ]}
         onPick={(d) => onChange({ ...value, rtl: d === "rtl" })}
       />
+
+      <Seg
+        label="翻页动画"
+        value={value.pageAnimation}
+        options={[
+          { value: "none", text: "无", disabled: webtoon },
+          { value: "slide", text: "滑动", disabled: webtoon },
+        ]}
+        onPick={(pageAnimation: ImagePageAnimation) => onChange({ ...value, pageAnimation })}
+      />
+
+      <Seg
+        label="条漫宽度"
+        value={String(value.webtoonWidth)}
+        options={[
+          { value: "62", text: "A4感", disabled: !webtoon },
+          { value: "75", text: "适中", disabled: !webtoon },
+          { value: "92", text: "宽", disabled: !webtoon },
+        ]}
+        onPick={(w) => onChange({ ...value, webtoonWidth: Number(w) })}
+      />
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <input
+          type="range"
+          aria-label="条漫宽度"
+          aria-valuetext={`${value.webtoonWidth}%`}
+          min={40}
+          max={100}
+          step={1}
+          value={value.webtoonWidth}
+          disabled={!webtoon}
+          onChange={(e) => onChange({ ...value, webtoonWidth: Number(e.currentTarget.value) })}
+        />
+        <div style={{ color: "var(--wr-muted)", fontVariantNumeric: "tabular-nums" }}>{value.webtoonWidth}%</div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div className="wr-muted">主题</div>
+        <div role="group" aria-label="主题" style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
+          {THEME_SWATCHES.map((s) => {
+            const active = theme === s.value;
+            return (
+              <button
+                key={s.value}
+                type="button"
+                className="wr-swatch-btn"
+                data-selected={active}
+                aria-label={s.label}
+                aria-pressed={active}
+                title={s.label}
+                onClick={() => setTheme(s.value)}
+                style={{ background: s.color }}
+              />
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
