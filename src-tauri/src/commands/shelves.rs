@@ -87,7 +87,7 @@ fn shelf_exists(conn: &Connection, id: i64) -> Result<bool, String> {
 }
 
 // IN (?,?,...) 占位符；ids 为空时调用方应直接短路
-fn in_clause(n: usize) -> String {
+pub(crate) fn in_clause(n: usize) -> String {
     format!("({})", vec!["?"; n].join(","))
 }
 
@@ -142,6 +142,10 @@ fn list_trash_db(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
             sort_order: row.get(13)?,
             deleted_at: row.get(14)?,
             reading_percent: None,
+            description: None,
+            content_chars: None,
+            file_size: None,
+            tags: Vec::new(),
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)

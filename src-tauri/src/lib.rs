@@ -26,6 +26,10 @@ use commands::shelves::{
     create_shelf, delete_books, delete_shelf, list_shelves, list_trash, move_books_to_shelf, move_shelf,
     purge_books, rename_shelf, restore_books, set_books_order, set_shelf_order, set_trash_retention_days,
 };
+use commands::tags::{
+    add_tags_to_books, compute_book_stats, create_tag, delete_tag, list_tags, merge_tags, recolor_tag,
+    rename_tag, set_book_tags,
+};
 
 fn append_startup_log(app: &tauri::AppHandle, line: &str) {
     let dir = match app_paths::app_data_dir(app) {
@@ -88,6 +92,15 @@ pub fn run() {
             purge_books,
             list_trash,
             set_trash_retention_days,
+            list_tags,
+            create_tag,
+            rename_tag,
+            recolor_tag,
+            merge_tags,
+            delete_tag,
+            set_book_tags,
+            add_tags_to_books,
+            compute_book_stats,
             list_bookmarks,
             add_bookmark,
             delete_bookmark,

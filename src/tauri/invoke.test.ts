@@ -10,25 +10,34 @@ import {
   addBookmark,
   addFavoriteQuote,
   addHighlight,
+  addTagsToBooks,
+  computeBookStats,
   createShelf,
+  createTag,
   deleteBook,
   deleteBookmark,
   deleteBooks,
   deleteFavoriteQuote,
   deleteHighlight,
   deleteShelf,
+  deleteTag,
   getReadingState,
   listBookmarks,
   listFavoriteQuotes,
   listHighlights,
+  listTags,
   listTrash,
+  mergeTags,
   moveBooksToShelf,
   moveShelf,
   purgeBooks,
+  recolorTag,
   renameShelf,
+  renameTag,
   repairBookMetadata,
   restoreBooks,
   setBookFavorite,
+  setBookTags,
   setBooksOrder,
   setShelfOrder,
   setTrashRetentionDays,
@@ -159,5 +168,43 @@ describe("tauri invoke arg casing", () => {
     hoisted.invokeMock.mockResolvedValueOnce(null);
     await setTrashRetentionDays(7);
     expect(hoisted.invokeMock).toHaveBeenLastCalledWith("set_trash_retention_days", { days: 7 });
+  });
+
+  test("tag commands use camelCase keys", async () => {
+    hoisted.invokeMock.mockResolvedValueOnce([]);
+    await listTags();
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("list_tags");
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await createTag("科幻", "#1971c2");
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("create_tag", { name: "科幻", color: "#1971c2" });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await renameTag(3, "小说");
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("rename_tag", { id: 3, name: "小说" });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await recolorTag(3, null);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("recolor_tag", { id: 3, color: null });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await mergeTags(1, 2);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("merge_tags", { fromId: 1, toId: 2 });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await deleteTag(3);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("delete_tag", { id: 3 });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await setBookTags("b1", [1, 2]);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("set_book_tags", { bookId: "b1", tagIds: [1, 2] });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await addTagsToBooks(["b1", "b2"], [3]);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("add_tags_to_books", { bookIds: ["b1", "b2"], tagIds: [3] });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await computeBookStats("b1");
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("compute_book_stats", { bookId: "b1" });
   });
 });

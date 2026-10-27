@@ -20,6 +20,11 @@ function b(partial: Partial<Book>): Book {
     shelf_id: null,
     sort_order: null,
     deleted_at: null,
+    page_count: null,
+    description: null,
+    content_chars: null,
+    file_size: null,
+    tags: [],
     ...partial,
   };
 }

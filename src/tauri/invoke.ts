@@ -13,9 +13,28 @@ export type Book = {
   reading_percent: number | null;
   is_favorite: boolean;
   format: string | null;
+  page_count: number | null;
   shelf_id: number | null;
   sort_order: number | null;
   deleted_at: number | null;
+  description: string | null;
+  content_chars: number | null;
+  file_size: number | null;
+  tags: BookTagBrief[];
+};
+
+export type BookTagBrief = {
+  id: number;
+  name: string;
+  color: string | null;
+};
+
+export type Tag = {
+  id: number;
+  name: string;
+  color: string | null;
+  sort_order: number;
+  book_count: number;
 };
 
 export type Shelf = {
@@ -39,6 +58,8 @@ export type UpdateBookMetadataRequest = {
   title?: string;
   note?: string;
   pinned?: boolean;
+  author?: string;
+  description?: string;
 };
 
 export async function listBooks(): Promise<Book[]> {
@@ -95,6 +116,42 @@ export async function listTrash(): Promise<Book[]> {
 
 export async function setTrashRetentionDays(days: number): Promise<void> {
   return invoke<void>("set_trash_retention_days", { days });
+}
+
+export async function listTags(): Promise<Tag[]> {
+  return invoke<Tag[]>("list_tags");
+}
+
+export async function createTag(name: string, color: string | null): Promise<Tag> {
+  return invoke<Tag>("create_tag", { name, color });
+}
+
+export async function renameTag(id: number, name: string): Promise<void> {
+  return invoke<void>("rename_tag", { id, name });
+}
+
+export async function recolorTag(id: number, color: string | null): Promise<void> {
+  return invoke<void>("recolor_tag", { id, color });
+}
+
+export async function mergeTags(fromId: number, toId: number): Promise<void> {
+  return invoke<void>("merge_tags", { fromId, toId });
+}
+
+export async function deleteTag(id: number): Promise<void> {
+  return invoke<void>("delete_tag", { id });
+}
+
+export async function setBookTags(bookId: string, tagIds: number[]): Promise<void> {
+  return invoke<void>("set_book_tags", { bookId, tagIds });
+}
+
+export async function addTagsToBooks(bookIds: string[], tagIds: number[]): Promise<void> {
+  return invoke<void>("add_tags_to_books", { bookIds, tagIds });
+}
+
+export async function computeBookStats(bookId: string): Promise<Book> {
+  return invoke<Book>("compute_book_stats", { bookId });
 }
 
 export async function importBook(req: ImportBookRequest): Promise<Book> {

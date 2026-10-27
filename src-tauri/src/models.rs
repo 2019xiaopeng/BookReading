@@ -18,6 +18,28 @@ pub struct Book {
     pub shelf_id: Option<i64>,
     pub sort_order: Option<i64>,
     pub deleted_at: Option<i64>,
+    pub description: Option<String>,
+    pub content_chars: Option<i64>,
+    pub file_size: Option<i64>,
+    // 仅 list_books（fetch_books）填充；其余构造点为空
+    #[serde(default)]
+    pub tags: Vec<BookTagBrief>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookTagBrief {
+    pub id: i64,
+    pub name: String,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tag {
+    pub id: i64,
+    pub name: String,
+    pub color: Option<String>,
+    pub sort_order: i64,
+    pub book_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +66,9 @@ pub struct UpdateBookMetadataRequest {
     pub title: Option<String>,
     pub note: Option<String>,
     pub pinned: Option<bool>,
+    // author/description 沿用 note 语义：None 不改、Some("") 清除
+    pub author: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

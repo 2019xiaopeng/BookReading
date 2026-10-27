@@ -209,6 +209,10 @@ fn import_folder(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) 
         shelf_id: None,
         sort_order: None,
         deleted_at: None,
+        description: None,
+        content_chars: None,
+        file_size: None,
+        tags: Vec::new(),
     };
 
     let conn = db::open_db(app)?;
@@ -277,6 +281,10 @@ fn import_cbz(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) -> 
         shelf_id: None,
         sort_order: None,
         deleted_at: None,
+        description: None,
+        content_chars: None,
+        file_size: None,
+        tags: Vec::new(),
     };
 
     let conn = db::open_db(app)?;

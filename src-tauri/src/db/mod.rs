@@ -88,6 +88,8 @@ mod tests {
             .collect();
 
         assert!(names.contains(&"books".to_string()));
+        assert!(names.contains(&"tags".to_string()));
+        assert!(names.contains(&"book_tags".to_string()));
         assert!(names.contains(&"reading_state".to_string()));
         assert!(names.contains(&"bookmarks".to_string()));
         assert!(names.contains(&"highlights".to_string()));

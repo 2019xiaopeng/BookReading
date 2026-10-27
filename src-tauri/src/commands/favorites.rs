@@ -44,6 +44,10 @@ fn list_favorite_books_db(conn: &Connection) -> Result<Vec<Book>, rusqlite::Erro
             shelf_id: row.get(10)?,
             sort_order: row.get(11)?,
             deleted_at: row.get(12)?,
+            description: None,
+            content_chars: None,
+            file_size: None,
+            tags: Vec::new(),
         })
     })?;
 

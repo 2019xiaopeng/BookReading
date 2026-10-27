@@ -3,8 +3,9 @@ import type { DragEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import type { Book, Shelf, UpdateBookMetadataRequest } from "../tauri/invoke";
+import type { Book, Shelf, Tag, UpdateBookMetadataRequest } from "../tauri/invoke";
 import {
+  addTagsToBooks,
   createShelf,
   deleteBooks,
   deleteShelf,
@@ -13,6 +14,7 @@ import {
   listBooks,
   listImageSubdirs,
   listShelves,
+  listTags,
   listTrash,
   moveBooksToShelf,
   moveShelf,
@@ -31,6 +33,9 @@ import {
 } from "../tauri/invoke";
 import { importImageFolder } from "../reader/image/api";
 import { needsMetadataRepair } from "../library/metadataRepair";
+import { readingStatus, READING_STATUS_LABELS, type ReadingStatus } from "../library/readingStatus";
+import BookDetailsDialog from "../library/BookDetailsDialog";
+import { BatchTagDialog, ManageTagsDialog, TagFilterMenu } from "../library/TagDialogs";
 import {
   countByShelf,
   descendantIds,
@@ -83,6 +88,7 @@ export default function LibraryPage() {
   const [searchParams] = useSearchParams();
   const [books, setBooks] = useState<Book[]>([]);
   const [shelves, setShelves] = useState<Shelf[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [trash, setTrash] = useState<Book[]>([]);
   const [retentionDays, setRetentionDays] = useState(30);
   const [loading, setLoading] = useState(false);
@@ -90,6 +96,11 @@ export default function LibraryPage() {
   const [sortKey, setSortKey] = useState<SortKey>("recent");
   const [sortAsc, setSortAsc] = useState(false);
   const [density, setDensity] = useState<LibraryDensity>("standard");
+  const [tagFilter, setTagFilter] = useState<Set<number>>(new Set());
+  const [statusFilter, setStatusFilter] = useState<"all" | ReadingStatus>("all");
+  const [detailsBook, setDetailsBook] = useState<Book | null>(null);
+  const [batchTags, setBatchTags] = useState(false);
+  const [manageTagsOpen, setManageTagsOpen] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [prompt, setPrompt] = useState<PromptState | null>(null);
   const [moveDialog, setMoveDialog] = useState<MoveDialog | null>(null);
@@ -128,7 +139,22 @@ export default function LibraryPage() {
     let list = shelfBooks;
     const q = query.trim().toLowerCase();
     if (q) {
-      list = list.filter((b) => `${formatTitle(b)} ${formatAuthor(b)}`.toLowerCase().includes(q));
+      // 搜索匹配：书名 + 作者 + 文件名（library_path basename）
+      list = list.filter((b) => {
+        const file = b.library_path.split(/[\\/]/).pop() ?? "";
+        return `${formatTitle(b)} ${formatAuthor(b)} ${file}`.toLowerCase().includes(q);
+      });
+    }
+    if (tagFilter.size > 0) {
+      // 标签多选 = AND：选中标签全部命中
+      const wanted = [...tagFilter];
+      list = list.filter((b) => {
+        const ids = b.tags.map((t) => t.id);
+        return wanted.every((id) => ids.includes(id));
+      });
+    }
+    if (statusFilter !== "all") {
+      list = list.filter((b) => readingStatus(b.reading_percent) === statusFilter);
     }
     const dir = sortAsc ? 1 : -1;
     return [...list].sort((a, b) => {
@@ -140,12 +166,13 @@ export default function LibraryPage() {
       if (sortKey === "added") return dir * (a.added_at - b.added_at);
       return dir * ((a.last_opened_at ?? a.added_at) - (b.last_opened_at ?? b.added_at));
     });
-  }, [shelfBooks, query, sortKey, sortAsc]);
+  }, [shelfBooks, query, tagFilter, statusFilter, sortKey, sortAsc]);
 
   async function refresh() {
-    const [list, shelfList] = await Promise.all([listBooks(), listShelves()]);
+    const [list, shelfList, tagList] = await Promise.all([listBooks(), listShelves(), listTags()]);
     setBooks(list);
     setShelves(shelfList);
+    setTags(tagList);
   }
 
   async function refreshTrash() {
@@ -874,6 +901,27 @@ export default function LibraryPage() {
       )}
 
       {!trashView ? (
+        <div className="wr-filter-row" role="group" aria-label="筛选">
+          <TagFilterMenu tags={tags} selected={tagFilter} onChange={setTagFilter} />
+          <select
+            className="wr-select"
+            style={{ padding: "7px 10px" }}
+            value={statusFilter}
+            aria-label="阅读状态"
+            onChange={(e) => setStatusFilter(e.currentTarget.value as "all" | ReadingStatus)}
+          >
+            <option value="all">全部状态</option>
+            <option value="unread">{READING_STATUS_LABELS.unread}</option>
+            <option value="reading">{READING_STATUS_LABELS.reading}</option>
+            <option value="finished">{READING_STATUS_LABELS.finished}</option>
+          </select>
+          <button className="wr-btn" onClick={() => setManageTagsOpen(true)}>
+            管理标签
+          </button>
+        </div>
+      ) : null}
+
+      {!trashView ? (
         <div className="wr-group-row" role="group" aria-label="书架路径">
           <button
             className="wr-group-chip"
@@ -1155,6 +1203,9 @@ export default function LibraryPage() {
           <button className="wr-btn" onClick={() => void onBatchFavorite()} disabled={selected.size === 0}>
             收藏
           </button>
+          <button className="wr-btn" onClick={() => setBatchTags(true)} disabled={selected.size === 0}>
+            打标签
+          </button>
           <button className="wr-btn wr-btn-danger" onClick={() => void onBatchDelete()} disabled={selected.size === 0}>
             删除
           </button>
@@ -1195,6 +1246,9 @@ export default function LibraryPage() {
             </>
           ) : menu.kind === "book" ? (
             <>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); setDetailsBook(menu.book); }}>
+                详情
+              </button>
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onRenameBook(menu.book); }}>
                 重命名
               </button>
@@ -1328,6 +1382,38 @@ export default function LibraryPage() {
             </div>
           </div>
         </div>
+      ) : null}
+      {detailsBook ? (
+        <BookDetailsDialog
+          book={detailsBook}
+          tags={tags}
+          shelves={shelves}
+          onClose={() => setDetailsBook(null)}
+          onChanged={() => void refresh()}
+        />
+      ) : null}
+
+      {batchTags ? (
+        <BatchTagDialog
+          tags={tags}
+          bookCount={selected.size}
+          onClose={() => setBatchTags(false)}
+          onConfirm={(ids) => {
+            setBatchTags(false);
+            void (async () => {
+              try {
+                await addTagsToBooks([...selected], ids);
+                await refresh();
+              } catch (e) {
+                await showAlert("打标签失败", String(e));
+              }
+            })();
+          }}
+        />
+      ) : null}
+
+      {manageTagsOpen ? (
+        <ManageTagsDialog tags={tags} onClose={() => setManageTagsOpen(false)} onChanged={() => void refresh()} />
       ) : null}
     </AppShell>
   );
