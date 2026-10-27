@@ -1,10 +1,6 @@
-import type { Theme } from "../settings/types";
 import type { ImageFit, ImagePageLayout, ImageReadMode, ImageReaderSettings } from "./layout";
 
 type Props = {
-    /** dropped in batch4 B1: comic reader follows the global six-theme tokens; A5 removes the call-site props */
-  theme?: Theme;
-  onThemeChange?: (theme: Theme) => void;
   value: ImageReaderSettings;
   onChange: (next: ImageReaderSettings) => void;
 };

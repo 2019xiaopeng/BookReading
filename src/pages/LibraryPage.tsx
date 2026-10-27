@@ -175,13 +175,18 @@ export default function LibraryPage() {
     };
   }, [menu]);
 
-  // clamp menu into the viewport before paint, then focus the first item (ARIA menu pattern)
+  // clamp menu into the viewport before paint, then focus the first item (ARIA menu pattern); resize re-clamps
   useLayoutEffect(() => {
     if (!menu || !menuRef.current) return;
     const el = menuRef.current;
-    el.style.left = `${Math.max(8, Math.min(menu.x, window.innerWidth - el.offsetWidth - 8))}px`;
-    el.style.top = `${Math.max(8, Math.min(menu.y, window.innerHeight - el.offsetHeight - 8))}px`;
+    const clamp = () => {
+      el.style.left = `${Math.max(8, Math.min(menu.x, window.innerWidth - el.offsetWidth - 8))}px`;
+      el.style.top = `${Math.max(8, Math.min(menu.y, window.innerHeight - el.offsetHeight - 8))}px`;
+    };
+    clamp();
     el.querySelector<HTMLElement>("button")?.focus();
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
   }, [menu]);
 
   function submitPrompt() {

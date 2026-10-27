@@ -15,12 +15,25 @@ export default function SelectionToolbar(props: {
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  // 退场：关闭时保留最后选区矩形播 wr-fade-out，150ms 后真正卸载（reduced-motion 直接卸载）
+  const [exiting, setExiting] = useState(false);
+  const rectRef = useRef<SelectionRect | null>(null);
+  if (props.open && props.rect) rectRef.current = props.rect;
 
-  useLayoutEffect(() => {
-    if (!props.open || !props.rect || !ref.current) {
-      setPos(null);
+  useEffect(() => {
+    if (props.open) {
+      setExiting(false);
       return;
     }
+    if (!rectRef.current) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    setExiting(true);
+    const t = window.setTimeout(() => setExiting(false), 150);
+    return () => window.clearTimeout(t);
+  }, [props.open]);
+
+  useLayoutEffect(() => {
+    if (!props.open || !props.rect || !ref.current) return; // 退场期间保留最后位置
     const el = ref.current;
     const { x, y, w, h } = props.rect;
     const bw = el.offsetWidth || 132;
@@ -48,12 +61,13 @@ export default function SelectionToolbar(props: {
     };
   }, [props.open, props.rect, props.onClose]);
 
-  if (!props.open || !props.rect) return null;
+  const rect = props.open && props.rect ? props.rect : exiting ? rectRef.current : null;
+  if (!rect) return null;
 
   return (
     <div
       ref={ref}
-      className="wr-selection-bubble"
+      className={props.open ? "wr-selection-bubble" : "wr-selection-bubble wr-fade-out"}
       role="toolbar"
       aria-label="划选操作"
       style={

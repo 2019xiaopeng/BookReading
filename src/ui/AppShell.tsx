@@ -1,11 +1,16 @@
-import type { ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { IconBook, IconSearch, IconStar } from "./icons";
-import type { Theme } from "../reader/settings/types";
+import { IconBook, IconPalette, IconSearch, IconStar } from "./icons";
+import { getBackgroundUrl } from "./appBackground";
+import { applyPersistedTheme, setTheme, THEME_SWATCHES, useTheme } from "./theme";
+import { getSettings } from "../tauri/invoke";
+import { normalizeReaderBackground } from "../reader/settings/normalize";
+
+// 六个 30px 色块 + 5*8 间距 + 12 内边距 + 2 边框
+const THEME_MENU_WIDTH = 234;
 
 export default function AppShell(props: {
   active: "library" | "favorites" | "reader";
-  theme?: Theme;
   title: string;
   search?: {
     value: string;
@@ -22,10 +27,76 @@ export default function AppShell(props: {
   children: ReactNode;
 }) {
   const navigate = useNavigate();
-  const theme = props.theme ?? "light";
+  const theme = useTheme();
+  const [bgUrl, setBgUrl] = useState<string | null>(null);
+  const [themeMenu, setThemeMenu] = useState<{ x: number; y: number } | null>(null);
+  const themeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const themeMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // 启动纠偏：DB 主题覆盖 localStorage 缓存；同一份 settings 顺带解析全局背景
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const map = await getSettings();
+        if (cancelled) return;
+        applyPersistedTheme(map.theme);
+        setBgUrl(await getBackgroundUrl(normalizeReaderBackground(map.reader_bg)));
+      } catch {
+        // DB 不可达：维持缓存主题与默认底色
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // close the theme menu on outside pointerdown / Escape
+  useEffect(() => {
+    if (!themeMenu) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (themeBtnRef.current?.contains(e.target as Node)) return;
+      if (themeMenuRef.current?.contains(e.target as Node)) return;
+      setThemeMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setThemeMenu(null);
+        themeBtnRef.current?.focus();
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [themeMenu]);
+
+  useLayoutEffect(() => {
+    if (themeMenu) themeMenuRef.current?.querySelector<HTMLElement>("button")?.focus();
+  }, [themeMenu]);
+
+  function openThemeMenu() {
+    const r = themeBtnRef.current?.getBoundingClientRect();
+    setThemeMenu(
+      r
+        ? { x: Math.max(8, r.right - THEME_MENU_WIDTH), y: r.bottom + 6 }
+        : { x: 8, y: 8 },
+    );
+  }
+
+  // 全局背景：cover 居中铺满 + 半透明主题色纱保证六主题下内容对比度（底色 var(--wr-bg) 仍兜底）
+  const shellStyle: CSSProperties | undefined = bgUrl
+    ? {
+        backgroundImage: `linear-gradient(color-mix(in srgb, var(--wr-bg) 88%, transparent), color-mix(in srgb, var(--wr-bg) 88%, transparent)), url("${bgUrl}")`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+      }
+    : undefined;
 
   return (
-    <div className="wr-shell" data-theme={theme}>
+    <div className="wr-shell" style={shellStyle}>
       <div className="wr-panel wr-side">
         <div className="wr-side-top">
           <div className="wr-brand">
@@ -63,8 +134,8 @@ export default function AppShell(props: {
           {props.search ? (
             <div className="wr-search">
               <span className="wr-search-icon" aria-hidden>
-              <IconSearch />
-            </span>
+                <IconSearch />
+              </span>
               <input
                 className="wr-search-input"
                 value={props.search.value}
@@ -95,9 +166,48 @@ export default function AppShell(props: {
               ))}
             </div>
           ) : null}
+
+          <button
+            ref={themeBtnRef}
+            className="wr-btn wr-icon-btn"
+            aria-label="切换主题"
+            aria-expanded={!!themeMenu}
+            title="切换主题"
+            style={{ marginLeft: props.search ? undefined : "auto" }}
+            onClick={openThemeMenu}
+          >
+            <IconPalette />
+          </button>
         </div>
         <div style={{ minHeight: 0, overflow: "auto" }}>{props.children}</div>
       </div>
+
+      {themeMenu ? (
+        <div
+          ref={themeMenuRef}
+          className="wr-menu"
+          role="group"
+          aria-label="主题"
+          style={{ left: themeMenu.x, top: themeMenu.y, display: "grid", gridTemplateColumns: "repeat(6, 30px)", gap: 8 }}
+        >
+          {THEME_SWATCHES.map((s) => (
+            <button
+              key={s.value}
+              type="button"
+              className="wr-swatch-btn"
+              data-selected={theme === s.value}
+              aria-label={s.label}
+              aria-pressed={theme === s.value}
+              title={s.label}
+              onClick={() => {
+                setTheme(s.value);
+                setThemeMenu(null);
+              }}
+              style={{ background: s.color }}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

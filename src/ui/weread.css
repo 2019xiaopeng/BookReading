@@ -648,33 +648,6 @@
   background: rgba(16, 18, 20, 0.62);
 }
 
-.wr-selection {
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: 16px;
-  z-index: var(--wr-z-selection);
-  animation: wr-fade-in 160ms ease both;
-}
-
-.wr-selection-bar {
-  padding: 10px;
-  border-radius: 999px;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  box-shadow: var(--wr-paper-shadow-soft);
-}
-
-.wr-selection-text {
-  flex: 1;
-  min-width: 0;
-  color: var(--wr-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .wr-drawer-overlay {
   position: absolute;
   inset: 0;
@@ -735,6 +708,20 @@
   to {
     opacity: 1;
   }
+}
+
+@keyframes wr-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* 气泡等退场：JS 150ms 后卸载，动画 forwards 保持终态 */
+.wr-fade-out {
+  animation: wr-fade-out 150ms ease forwards;
 }
 
 @keyframes wr-slide-in {
@@ -1014,6 +1001,12 @@
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .wr-menu {
+    animation: none;
+  }
+}
+
 .wr-menu-item {
   display: flex;
   align-items: center;
@@ -1066,17 +1059,13 @@
   animation: wr-menu-in 150ms ease both;
 }
 
-/* group chips row: horizontal scroll, never wraps; drop target highlight for DnD */
+/* group chips row: horizontal scroll (thin, perceivable), never wraps; drop target highlight for DnD */
 .wr-group-row {
   display: flex;
   gap: 8px;
   padding: 12px 18px 0;
   overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.wr-group-row::-webkit-scrollbar {
-  display: none;
+  scrollbar-width: thin;
 }
 
 .wr-group-chip {

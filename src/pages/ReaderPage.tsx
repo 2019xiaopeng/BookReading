@@ -47,13 +47,13 @@ import {
   normalizePageAnimation,
   normalizeReaderBackground,
   normalizeReadingMode,
-  normalizeTheme,
 } from "../reader/settings/normalize";
 import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
-import { extToMime, readAppDataBlobUrl, revokeObjectUrl } from "../tauri/appDataPaths";
 import Drawer from "../ui/Drawer";
 import { useElementSize } from "../ui/useElementSize";
+import { getBackgroundUrl } from "../ui/appBackground";
+import { applyPersistedTheme, getTheme, useTheme } from "../ui/theme";
 import {
   IconBookmark,
   IconChevronLeft,
@@ -67,13 +67,11 @@ import {
   IconSettings,
 } from "../ui/icons";
 
-// single-slot blob URL cache for the custom reader background (revoked on swap or unmount)
-let readerBgCache: { path: string; url: string } | null = null;
-
 export default function ReaderPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { bookId } = useParams();
+  const theme = useTheme();
   const [book, setBook] = useState<Book | null>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [tocLoading, setTocLoading] = useState(true);
@@ -82,10 +80,7 @@ export default function ReaderPage() {
   const [retryKey, setRetryKey] = useState(0);
   const [annotationsLoaded, setAnnotationsLoaded] = useState(false);
   const [percent, setPercent] = useState<number | null>(null);
-  const [settings, setSettings] = useState<ReaderSettings>(() => ({
-    ...defaultSettings,
-    theme: normalizeTheme(localStorage.getItem("wr-theme")),
-  }));
+  const [settings, setSettings] = useState<ReaderSettings>(defaultSettings);
   const [imageSettings, setImageSettings] = useState<ImageReaderSettings>(defaultImageReaderSettings);
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const [imagePage, setImagePage] = useState<{ page: number; pageCount: number } | null>(null);
@@ -181,10 +176,6 @@ export default function ReaderPage() {
   }, [settings]);
 
   useEffect(() => {
-    localStorage.setItem("wr-theme", settings.theme);
-  }, [settings.theme]);
-
-  useEffect(() => {
     spreadModeRef.current = spreadMode;
   }, [spreadMode]);
 
@@ -202,13 +193,12 @@ export default function ReaderPage() {
       const map = await getSettings();
       if (cancelled) return;
       if (settingsTouchedRef.current) return;
-      const theme = normalizeTheme(map.theme);
+      applyPersistedTheme(map.theme);
       const fontSizePercent = Number(map.fontSizePercent ?? defaultSettings.fontSizePercent);
       const pageAnimation = normalizePageAnimation(map.pageAnimation);
       const layoutMode = normalizeLayoutMode(map.layoutMode);
       const lineHeight = normalizeLineHeight(map.lineHeight);
       setSettings({
-        theme,
         fontSizePercent: Number.isFinite(fontSizePercent)
           ? Math.min(200, Math.max(80, fontSizePercent))
           : defaultSettings.fontSizePercent,
@@ -319,7 +309,7 @@ export default function ReaderPage() {
       }
 
       controllerRef.current = ctrl;
-      ctrl.setTheme(settingsRef.current.theme);
+      ctrl.setTheme(getTheme());
       ctrl.setFontSizePercent(settingsRef.current.fontSizePercent);
       ctrl.setLineHeight(settingsRef.current.lineHeight);
       if (settingsRef.current.readingMode !== "scrolled") ctrl.setSpreadMode(spreadModeRef.current);
@@ -384,38 +374,27 @@ export default function ReaderPage() {
 
   useEffect(() => {
     if (!controllerRef.current) return;
-    controllerRef.current.setTheme(settings.theme);
+    controllerRef.current.setTheme(theme);
     controllerRef.current.setFontSizePercent(settings.fontSizePercent);
     controllerRef.current.setLineHeight(settings.lineHeight);
     // scrolled 模式下分栏失效，跳过 spread 以免与 epubjs scrolled 冲突
     if (settings.readingMode !== "scrolled") controllerRef.current.setSpreadMode(spreadMode);
-  }, [settings.theme, settings.fontSizePercent, settings.lineHeight, settings.layoutMode, spreadMode, settings.readingMode]);
+  }, [theme, settings.fontSizePercent, settings.lineHeight, settings.layoutMode, spreadMode, settings.readingMode]);
 
   useEffect(() => {
     controllerRef.current?.setReadingMode(settings.readingMode);
   }, [settings.readingMode]);
 
+  // 阅读纸面叠加全局背景（单槽缓存与壳共用）；preset 时缓存一并释放
   useEffect(() => {
-    const bg = settings.reader_bg;
-    if (isImageBook || bg.type !== "image") {
+    if (isImageBook) {
       setBgUrl(null);
       return;
     }
-    if (readerBgCache?.path === bg.path) {
-      setBgUrl(readerBgCache.url);
-      return;
-    }
     let cancelled = false;
-    const ext = bg.path.split(".").pop() ?? "";
-    void readAppDataBlobUrl(bg.path, extToMime(ext))
+    getBackgroundUrl(settings.reader_bg)
       .then((url) => {
-        if (cancelled) {
-          revokeObjectUrl(url);
-          return;
-        }
-        if (readerBgCache) revokeObjectUrl(readerBgCache.url);
-        readerBgCache = { path: bg.path, url };
-        setBgUrl(url);
+        if (!cancelled) setBgUrl(url);
       })
       .catch((e) => {
         logFrontend(`reader: bg load failed ${String(e)}`);
@@ -424,13 +403,6 @@ export default function ReaderPage() {
       cancelled = true;
     };
   }, [settings.reader_bg, isImageBook]);
-
-  useEffect(() => {
-    return () => {
-      revokeObjectUrl(readerBgCache?.url ?? null);
-      readerBgCache = null;
-    };
-  }, []);
 
   useEffect(() => {
     if (isImmersive) setDrawerOpen(false);
@@ -575,7 +547,6 @@ export default function ReaderPage() {
 
   async function persistSettings(next: ReaderSettings) {
     settingsTouchedRef.current = true;
-    await setSetting("theme", next.theme);
     await setSetting("fontSizePercent", String(next.fontSizePercent));
     await setSetting("pageAnimation", next.pageAnimation);
     await setSetting("layoutMode", next.layoutMode);
@@ -735,7 +706,7 @@ export default function ReaderPage() {
 
   return (
     <div
-      data-theme={settings.theme}
+      data-theme={theme}
       className="wr-reader-root"
     >
       {!isImmersive ? (
@@ -807,12 +778,6 @@ export default function ReaderPage() {
           >
             {sideTab === "settings" && isImageBook ? (
               <ImageSettingsPanel
-                theme={settings.theme}
-                onThemeChange={(t) => {
-                  setSettings((prev) => ({ ...prev, theme: t }));
-                  settingsTouchedRef.current = true;
-                  void setSetting("theme", t);
-                }}
                 value={imageSettings}
                 onChange={(next) => {
                   setImageSettings(next);
@@ -1015,8 +980,8 @@ export default function ReaderPage() {
                 key={book.id}
                 book={book}
                 settings={imageSettings}
-                theme={settings.theme}
                 onRelocated={handleImageRelocated}
+                theme={theme}
                 onApi={(api) => {
                   imageApiRef.current = api;
                 }}

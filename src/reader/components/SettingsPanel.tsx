@@ -2,25 +2,18 @@ import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { saveReaderBackground } from "../../tauri/invoke";
-import type { ReaderSettings, Theme } from "../settings/types";
-
-const THEME_SWATCHES: { value: Theme; label: string; color: string }[] = [
-  { value: "light", label: "白色", color: "#ffffff" },
-  { value: "sepia", label: "米黄", color: "#fffaf0" },
-  { value: "green", label: "护眼", color: "#c8e6c4" },
-  { value: "gray", label: "纸灰", color: "#d9d9d6" },
-  // dark 的纸面 token 是半透明白，色块用壳底色代表夜间阅读面
-  { value: "dark", label: "夜间", color: "#0f1214" },
-  { value: "darkcontrast", label: "夜间高对比", color: "#050505" },
-];
+import { resetBackgroundCache } from "../../ui/appBackground";
+import { setTheme, THEME_SWATCHES, useTheme } from "../../ui/theme";
+import type { ReaderSettings } from "../settings/types";
 
 export default function SettingsPanel(props: {
   value: ReaderSettings;
-  /** 阅读页的背景图 URL（模块级单缓存，面板预览复用，不再自建 objectURL） */
+  /** 全局背景图 URL（模块级单缓存，面板预览复用，不再自建 objectURL） */
   bgUrl: string | null;
   onChange: (next: ReaderSettings) => void;
 }) {
   const v = props.value;
+  const theme = useTheme();
   const scrolled = v.readingMode === "scrolled";
   const [bgBusy, setBgBusy] = useState(false);
   const [bgError, setBgError] = useState<string | null>(null);
@@ -35,6 +28,7 @@ export default function SettingsPanel(props: {
       });
       if (typeof picked !== "string") return;
       const path = await saveReaderBackground(picked);
+      resetBackgroundCache(); // 后端覆写同一路径，旧 blob 必须作废，onChange 触发的重读才会取到新图
       props.onChange({ ...v, reader_bg: { type: "image", path } });
     } catch (e) {
       setBgError(String(e));
@@ -75,7 +69,7 @@ export default function SettingsPanel(props: {
         <div className="wr-muted">主题</div>
         <div role="group" aria-label="主题" style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
           {THEME_SWATCHES.map((s) => {
-            const active = v.theme === s.value;
+            const active = theme === s.value;
             return (
               <button
                 key={s.value}
@@ -85,7 +79,7 @@ export default function SettingsPanel(props: {
                 aria-label={s.label}
                 aria-pressed={active}
                 title={s.label}
-                onClick={() => props.onChange({ ...v, theme: s.value })}
+                onClick={() => setTheme(s.value)}
                 style={{ background: s.color }}
               />
             );
@@ -173,7 +167,7 @@ export default function SettingsPanel(props: {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <div className="wr-muted">背景图</div>
+        <div className="wr-muted">全局背景</div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button type="button" className="wr-btn" onClick={() => void pickBackground()} disabled={bgBusy}>
             选择图片

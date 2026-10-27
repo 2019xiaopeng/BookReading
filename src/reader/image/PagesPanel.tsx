@@ -10,8 +10,8 @@ type Props = {
   getResidentUrl?: (page: number) => string | undefined;
 };
 
-// shortcut: thumbnails are full-size blobs (no Rust downscale), a small LRU bounds memory; reader cache untouched
-const THUMB_LIMIT = 60;
+// shortcut: thumbnails are full-size blobs (no Rust downscale); LRU hard cap 24 张（内存红线，超出即回收）; reader cache untouched
+const THUMB_LIMIT = 24;
 const thumbs = new Map<string, string>(); // `${bookId}:${page}` -> object URL, LRU by insertion order
 
 export default function PagesPanel({ bookId, pageCount, currentPage, goTo, getResidentUrl }: Props) {

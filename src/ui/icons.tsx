@@ -210,3 +210,19 @@ export function IconRefresh(props: P) {
   );
 }
 
+export function IconPalette(props: P) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M12 20.5a8.5 8.5 0 1 1 8.5-8.5c0 2.2-1.8 3.5-3.8 3.5h-1.3c-1 0-1.8.8-1.8 1.8 0 .5.2.9.5 1.3.3.4.5.8.5 1.2 0 .4-.3.7-.7.7Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="10.5" r="1.2" fill="currentColor" />
+      <circle cx="12" cy="7.6" r="1.2" fill="currentColor" />
+      <circle cx="15.9" cy="9.9" r="1.2" fill="currentColor" />
+    </svg>
+  );
+}
+
