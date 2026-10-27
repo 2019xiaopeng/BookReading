@@ -619,7 +619,7 @@ export default function LibraryPage() {
               autoFocus
               aria-label={prompt.title}
               value={prompt.value}
-              onChange={(e) => setPrompt((prev) => (prev ? { ...prev, value: e.currentTarget.value } : prev))}
+              onChange={(e) => { const v = e.currentTarget.value; setPrompt((prev) => (prev ? { ...prev, value: v } : prev)); }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") submitPrompt();
               }}
