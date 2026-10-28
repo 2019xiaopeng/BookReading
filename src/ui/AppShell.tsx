@@ -218,7 +218,13 @@ export default function AppShell(props: {
             </div>
             <div className="wr-nav-sub">书籍与收藏句子</div>
           </button>
-          <button className="wr-nav-btn" data-active={trashActive} aria-current={trashActive ? "page" : undefined} onClick={() => navigate("/?trash=1")}>
+          <button
+            className="wr-nav-btn"
+            data-drop="trash"
+            data-active={trashActive}
+            aria-current={trashActive ? "page" : undefined}
+            onClick={() => navigate("/?trash=1")}
+          >
             <div className="wr-nav-title">
               <IconTrash />
               回收站

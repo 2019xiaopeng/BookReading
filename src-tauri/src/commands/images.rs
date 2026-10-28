@@ -140,6 +140,38 @@ fn trim_title(v: Option<String>) -> Option<String> {
     v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+// 漫画命名元数据（批次15）：剥离开头的前导 (...) 段（汉化组等发布标记，不作元数据）后
+// 匹配 "[作者] 标题"；纯前导括号无中括号时保持原名不解析
+fn parse_name_meta(name: &str) -> Option<(String, String)> {
+    let mut s = name.trim();
+    loop {
+        let t = s.trim_start();
+        let Some(rest) = t.strip_prefix('(') else { break };
+        let Some(close) = rest.find(')') else { break };
+        s = rest[close + 1..].trim_start();
+    }
+    let after = s.strip_prefix('[')?;
+    let close = after.find(']')?;
+    let author = after[..close].trim();
+    let title = after[close + 1..].trim();
+    if author.is_empty() || title.is_empty() {
+        return None;
+    }
+    Some((author.to_string(), title.to_string()))
+}
+
+// 显式 title_opt 优先（不解析括号，作者留空）；否则文件夹名/CBZ 文件名（去扩展）解析
+fn resolve_comic_meta(base: Option<&str>, title_opt: Option<String>) -> (Option<String>, Option<String>) {
+    if let Some(t) = trim_title(title_opt) {
+        return (Some(t), None);
+    }
+    let name = base.map(str::trim).filter(|s| !s.is_empty());
+    match name.and_then(parse_name_meta) {
+        Some((author, title)) => (Some(title), Some(author)),
+        None => (name.map(str::to_string), None),
+    }
+}
+
 #[tauri::command]
 pub fn import_image_folder(
     app: tauri::AppHandle,
@@ -185,16 +217,15 @@ fn import_folder(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) 
     atomic_copy_to(&pages[0].to_string_lossy(), &tmp_cover_abs, &final_cover_abs)
         .map_err(|e| format!("failed to copy cover: {e}"))?;
 
-    let title = trim_title(title_opt).or_else(|| {
-        src.file_name()
-            .and_then(|s| s.to_str())
-            .and_then(|s| trim_title(Some(s.to_string())))
-    });
+    let (title, author) = resolve_comic_meta(
+        src.file_name().and_then(|s| s.to_str()),
+        title_opt,
+    );
 
     let book = Book {
         id: book_id.clone(),
         title,
-        author: None,
+        author,
         cover_path: Some(format!("library/covers/{book_id}.{ext}")),
         // 原地引用：存源目录绝对路径，删除书时不碰源目录
         library_path: src.to_string_lossy().to_string(),
@@ -258,16 +289,15 @@ fn import_cbz(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) -> 
         return Err(format!("failed to write cover: {e}"));
     }
 
-    let title = trim_title(title_opt).or_else(|| {
-        src.file_stem()
-            .and_then(|s| s.to_str())
-            .and_then(|s| trim_title(Some(s.to_string())))
-    });
+    let (title, author) = resolve_comic_meta(
+        src.file_stem().and_then(|s| s.to_str()),
+        title_opt,
+    );
 
     let book = Book {
         id: book_id.clone(),
         title,
-        author: None,
+        author,
         cover_path: Some(format!("library/covers/{book_id}.{ext}")),
         library_path: format!("library/books/{book_id}.cbz"),
         added_at: now_ts(),
@@ -348,6 +378,61 @@ pub fn list_image_subdirs(parent: String) -> Result<Vec<String>, String> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn comic_meta_parses_bracket_author_title() {
+        assert_eq!(
+            resolve_comic_meta(Some("[作者A] 标题B"), None),
+            (Some("标题B".to_string()), Some("作者A".to_string()))
+        );
+        assert_eq!(
+            resolve_comic_meta(Some("[A]B"), None),
+            (Some("B".to_string()), Some("A".to_string()))
+        );
+    }
+
+    #[test]
+    fn comic_meta_plain_names_stay_whole() {
+        assert_eq!(
+            resolve_comic_meta(Some("第01卷 漫画名"), None),
+            (Some("第01卷 漫画名".to_string()), None)
+        );
+        assert_eq!(
+            resolve_comic_meta(Some("[ ]标题"), None),
+            (Some("[ ]标题".to_string()), None)
+        );
+        assert_eq!(resolve_comic_meta(None, None), (None, None));
+    }
+
+    #[test]
+    fn comic_meta_title_opt_wins() {
+        assert_eq!(
+            resolve_comic_meta(Some("[A]B"), Some("显式标题".to_string())),
+            (Some("显式标题".to_string()), None)
+        );
+        // 空白 title_opt 视为未传，回退解析文件名
+        assert_eq!(
+            resolve_comic_meta(Some("[A]B"), Some("  ".to_string())),
+            (Some("B".to_string()), Some("A".to_string()))
+        );
+    }
+
+    #[test]
+    fn comic_meta_leading_parens_dropped_before_bracket() {
+        assert_eq!(
+            resolve_comic_meta(Some("(汉化组) [A] B"), None),
+            (Some("B".to_string()), Some("A".to_string()))
+        );
+        assert_eq!(
+            resolve_comic_meta(Some("(X)(Y) [A]B"), None),
+            (Some("B".to_string()), Some("A".to_string()))
+        );
+        // 无中括号：不剥离不解析，整名作标题
+        assert_eq!(
+            resolve_comic_meta(Some("(X) 普通名"), None),
+            (Some("(X) 普通名".to_string()), None)
+        );
+    }
 
     #[test]
     fn nat_cmp_sorts_digit_runs_numerically() {

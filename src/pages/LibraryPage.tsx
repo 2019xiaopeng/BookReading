@@ -93,6 +93,9 @@ export default function LibraryPage() {
   const [trash, setTrash] = useState<Book[]>([]);
   const [retentionDays, setRetentionDays] = useState(30);
   const [loading, setLoading] = useState(false);
+  // 导入按钮各自独立 busy 文案：loading 共用于防并发（任一导入中其余导入入口全禁），
+  // "导入中…"只显示在实际触发的那颗上；删除/收藏等其它 loading 操作不再误显导入中
+  const [importing, setImporting] = useState<"books" | "images" | null>(null);
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("recent");
   const [sortAsc, setSortAsc] = useState(false);
@@ -336,6 +339,7 @@ export default function LibraryPage() {
   async function onImport() {
     if (loading) return;
     setLoading(true);
+    setImporting("books");
     try {
       const selected = await open({
         multiple: true,
@@ -347,12 +351,14 @@ export default function LibraryPage() {
       await runImports(paths);
     } finally {
       setLoading(false);
+      setImporting(null);
     }
   }
 
   async function onImportImages() {
     if (loading) return;
     setLoading(true);
+    setImporting("images");
     try {
       const dir = await open({ directory: true, multiple: false, title: "选择漫画文件夹" });
       if (!dir || Array.isArray(dir)) return;
@@ -377,14 +383,17 @@ export default function LibraryPage() {
       }
     } finally {
       setLoading(false);
+      setImporting(null);
     }
   }
 
   // 批量导入：选父目录 → 每个一级子文件夹各导入一本漫画（空/无图目录服务端已过滤）
   async function onBatchImportImages() {
+    if (loading) return;
     const parent = await open({ directory: true, multiple: false, title: "选择漫画父目录（每个一级子文件夹导入一本）" });
     if (!parent || Array.isArray(parent)) return;
     setLoading(true);
+    setImporting("images");
     try {
       const dirs = await listImageSubdirs(parent);
       if (dirs.length === 0) {
@@ -396,6 +405,7 @@ export default function LibraryPage() {
       await showAlert("批量导入失败", String(e));
     } finally {
       setLoading(false);
+      setImporting(null);
     }
   }
 
@@ -657,6 +667,25 @@ export default function LibraryPage() {
     }
   }
 
+  // 拖书卡到侧栏“回收站”导航项 = 软删入回收站（确认后与 onDeleteBook 同链路；广播同步其他窗口）
+  async function dropOnTrash(bookId: string) {
+    const ok = await showConfirm("移入回收站", "将 1 本书移入回收站？可在回收站恢复。", {
+      danger: true,
+      confirmText: "删除",
+    });
+    if (!ok) return;
+    setLoading(true);
+    try {
+      await deleteBooks([bookId]);
+      await refresh();
+      window.dispatchEvent(new Event(BOOKS_CHANGED_EVENT));
+    } catch (e) {
+      await showAlert("删除失败", String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function dropOnBook(bookId: string, target: Book) {
     if (sortKey !== "custom" || bookId === target.id) return;
     const rest = booksFiltered.map((b) => b.id).filter((id) => id !== bookId);
@@ -670,6 +699,8 @@ export default function LibraryPage() {
     const mode = target.dataset.drop;
     if (drag.kind === "book") {
       if (mode === "shelf") return true;
+      // 侧栏“回收站”项：拖入=软删；回收站视图内无拖拽源，这里再挡一层防自删困惑
+      if (mode === "trash") return !trashView;
       return mode === "book" && sortKey === "custom" && drag.id !== target.dataset.bookId;
     }
     // 拖书架：目标=书架卡（移入其内）或面包屑（移到该层，""=根）
@@ -752,6 +783,7 @@ export default function LibraryPage() {
       const shelfId = sid && sid !== "" ? Number(sid) : null;
       if (drag.kind === "book") {
         if (target.dataset.drop === "shelf") dropOnShelf(drag, shelfId);
+        else if (target.dataset.drop === "trash") void dropOnTrash(drag.id);
         else {
           const targetBook = booksFiltered.find((b) => b.id === target.dataset.bookId);
           if (targetBook) dropOnBook(drag.id, targetBook);
@@ -900,11 +932,11 @@ export default function LibraryPage() {
           </button>
           <button className="wr-small-btn wr-primary" onClick={onImportImages} disabled={loading}>
             <IconImage />
-            <span>导入漫画</span>
+            <span>{importing === "images" ? "导入中…" : "导入漫画"}</span>
           </button>
           <button className="wr-small-btn wr-primary" onClick={onImport} disabled={loading}>
             <IconBook />
-            <span>{loading ? "导入中…" : "导入图书"}</span>
+            <span>{importing === "books" ? "导入中…" : "导入图书"}</span>
           </button>
         </>
       }

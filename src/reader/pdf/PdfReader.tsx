@@ -10,19 +10,19 @@ import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import type { Book } from "../../tauri/invoke";
 import { getReadingState } from "../../tauri/invoke";
 import type { Theme } from "../settings/types";
-import { IconRefresh } from "../../ui/icons";
+import { IconPause, IconPlay, IconRefresh } from "../../ui/icons";
 import { useElementSize } from "../../ui/useElementSize";
 import { loadPdf, pdfLoadErrorMessage, renderPdfPage } from "./api";
+import { autoScrollStep, type ImageReaderSettings } from "../image/layout";
 import {
   clampPage,
   clampZoomScale,
   panClamp,
   parsePdfCfi,
-  type PdfReaderSettings,
   type TurnDirection,
 } from "./layout";
 
-/** 与 ImageReaderApi 同形（消费面对齐 ReaderPage）：PDF 无常驻 blob 页（位图是 canvas）、无自动滚动，对应桩为占位 */
+/** 与 ImageReaderApi 同形（消费面对齐 ReaderPage）：PDF 无常驻 blob 页（位图是 canvas），getPageUrl 为占位桩 */
 export type PdfReaderApi = {
   turn: (direction: TurnDirection) => void;
   goToPage: (page: number) => void;
@@ -30,13 +30,14 @@ export type PdfReaderApi = {
   /** 页面面板缩略图：小尺寸渲染→objectURL；不可用返回 undefined */
   renderThumb: (page: number) => Promise<string | undefined>;
   zoomed: () => boolean;
+  /** 批次15：连续滚动（webtoon 枚举）空格播放/暂停，与条漫同语义 */
   toggleAutoScroll: () => void;
   autoActive: () => boolean;
 };
 
 type Props = {
   book: Book;
-  settings: PdfReaderSettings;
+  settings: ImageReaderSettings;
   theme: Theme;
   onRelocated: (page: number, pageCount: number) => void;
   onApi: (api: PdfReaderApi) => void;
@@ -65,6 +66,9 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
   const [tick, setTick] = useState(0); // 位图缓存版本：缓存变动后触发重画
   const [zoom, setZoom] = useState({ scale: 1, tx: 0, ty: 0 });
   const zoomed = zoom.scale !== 1;
+  // 批次15：连续滚动自动滚动（复制条漫 B11/B12 实现，速度共用 image_reader_settings）
+  const [autoScroll, setAutoScroll] = useState(false);
+  const [autoEndToast, setAutoEndToast] = useState(false);
 
   const docRef = useRef<PDFDocumentProxy | null>(null);
   const destroyRef = useRef<(() => Promise<void>) | null>(null);
@@ -85,6 +89,8 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
   const reportedRef = useRef<number | null>(null);
   const settingsRef = useRef(settings);
   const onRelocatedRef = useRef(onRelocated);
+  const autoSpeedRef = useRef(settings.autoScrollSpeed);
+  const autoScrollRef = useRef(false);
   const stageSize = useElementSize(stageRef);
 
   useEffect(() => {
@@ -94,14 +100,21 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
     onRelocatedRef.current = onRelocated;
   }, [onRelocated]);
   useEffect(() => {
+    autoSpeedRef.current = settings.autoScrollSpeed;
+  }, [settings.autoScrollSpeed]);
+  useEffect(() => {
+    autoScrollRef.current = autoScroll;
+  }, [autoScroll]);
+  useEffect(() => {
     zoomRef.current = zoom;
   }, [zoom]);
   useEffect(() => {
     pageCountRef.current = pageCount;
   }, [pageCount]);
 
-  // 模式切换：复位缩放（分页/滚动的缩放几何不同，各模式从 1x 重新开始）
+  // 模式切换：停自动滚动 + 复位缩放（分页/滚动的缩放几何不同，各模式从 1x 重新开始）
   useEffect(() => {
+    setAutoScroll(false);
     if (zoomRef.current.scale !== 1) setZoom({ scale: 1, tx: 0, ty: 0 });
   }, [settings.mode]);
 
@@ -203,7 +216,7 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
     const stage = stageRef.current;
     const s = settingsRef.current;
     if (!stage || stage.clientWidth <= 0 || stage.clientHeight <= 0) return 0;
-    if (s.mode === "scroll" || s.fit === "width") return stage.clientWidth / dim.w;
+    if (s.mode === "webtoon" || s.fit === "width") return stage.clientWidth / dim.w;
     if (s.fit === "height") return stage.clientHeight / dim.h;
     return 1; // original
   }
@@ -256,7 +269,7 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
   // 预载窗口（当前 ±2 常驻，窗口外回收）——与漫画 LRU 语义一致
   useEffect(() => {
     if (doc === null) return;
-    const current = settings.mode === "scroll" ? anchor : page;
+    const current = settings.mode === "webtoon" ? anchor : page;
     const want = new Set<number>();
     for (let i = current - PRELOAD_PAGES; i <= current + PRELOAD_PAGES; i++) {
       if (i >= 0 && i < pageCount) want.add(i);
@@ -275,7 +288,7 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
   }, [doc, page, anchor, settings.mode, dims, tick]);
 
   // ---- 进度上报（relocated 语义对齐漫画）----
-  const activePage = settings.mode === "scroll" ? anchor : page;
+  const activePage = settings.mode === "webtoon" ? anchor : page;
   useEffect(() => {
     if (doc === null || pageCount === 0) return;
     if (reportedRef.current === activePage) return;
@@ -286,7 +299,7 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
 
   // ---- 滚动模式：可见页锚定 + 初始落位 ----
   useEffect(() => {
-    if (settings.mode !== "scroll" || doc === null) return;
+    if (settings.mode !== "webtoon" || doc === null) return;
     const root = scrollRef.current;
     if (!root) return;
     root.focus({ preventScroll: true });
@@ -295,7 +308,7 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
   }, [settings.mode, doc]);
 
   useEffect(() => {
-    if (settings.mode !== "scroll" || doc === null) return;
+    if (settings.mode !== "webtoon" || doc === null) return;
     const root = scrollRef.current;
     if (!root || typeof IntersectionObserver === "undefined") return;
     const visible = new Set<number>();
@@ -318,14 +331,55 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
     return () => observer.disconnect();
   }, [settings.mode, doc]);
 
+  // 批次15 自动滚动（复制条漫实现）：rAF 按帧距浮点累积 scrollTop；滚轮/键盘/指针=用户接管即停；
+  // 空格/↑/↓ 已被 ReaderPage 接管为播放暂停与调速键，不算“用户接管”；到底自动停并轻提示
+  useEffect(() => {
+    if (!autoScroll) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    let raf = 0;
+    let last = performance.now();
+    let accum = 0;
+    const stop = () => setAutoScroll(false);
+    const onUserInput = (e: Event) => {
+      const k = (e as KeyboardEvent).key;
+      if (k === " " || k === "ArrowUp" || k === "ArrowDown") return;
+      stop();
+    };
+    el.addEventListener("wheel", onUserInput, { passive: true });
+    el.addEventListener("keydown", onUserInput);
+    el.addEventListener("pointerdown", onUserInput, { passive: true });
+    const tick = (now: number) => {
+      const dt = Math.min(0.1, (now - last) / 1000); // 后台页回来的大间隔不做跳变
+      last = now;
+      const step = autoScrollStep(accum, autoSpeedRef.current, dt);
+      accum = step.accum;
+      if (step.px > 0) el.scrollTop += step.px;
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) {
+        stop();
+        setAutoEndToast(true);
+        window.setTimeout(() => setAutoEndToast(false), 1500);
+        return;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener("wheel", onUserInput);
+      el.removeEventListener("keydown", onUserInput);
+      el.removeEventListener("pointerdown", onUserInput);
+    };
+  }, [autoScroll]);
+
   // ---- 缩放/平移（复制漫画实现：光标锚点缩放 + 平移钳制 + 复原保持位置） ----
   function panDims() {
     const stage = stageRef.current;
     if (!stage) return { vw: 0, vh: 0, cw: 0, ch: 0 };
     const vw = stage.clientWidth;
     const vh = stage.clientHeight;
-    const content = settings.mode === "scroll" ? wrapRef.current : fitRef.current;
-    if (settings.mode === "scroll") return { vw, vh, cw: content?.clientWidth ?? vw, ch: content?.clientHeight ?? vh };
+    const content = settings.mode === "webtoon" ? wrapRef.current : fitRef.current;
+    if (settings.mode === "webtoon") return { vw, vh, cw: content?.clientWidth ?? vw, ch: content?.clientHeight ?? vh };
     return { vw, vh, cw: content?.scrollWidth || vw, ch: content?.scrollHeight || vh };
   }
 
@@ -333,7 +387,7 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
     const z = zoomRef.current;
     if (z.scale === 1) return;
     const sc = scrollRef.current;
-    if (settings.mode === "scroll" && sc && sc.clientHeight > 0) {
+    if (settings.mode === "webtoon" && sc && sc.clientHeight > 0) {
       const center = sc.scrollTop + sc.clientHeight / 2 - z.ty / z.scale;
       let best: HTMLElement | null = null;
       let bestD = Infinity;
@@ -413,9 +467,10 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
   useEffect(() => {
     onApi({
       turn: (direction: TurnDirection) => {
+        setAutoScroll(false); // 手动翻页停自动滚动
         const wasZoomed = zoomRef.current.scale !== 1;
         if (wasZoomed) resetZoom();
-        if (settings.mode === "scroll") {
+        if (settings.mode === "webtoon") {
           const el = scrollRef.current;
           if (!el) return;
           const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -430,10 +485,11 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
         setPage((prev) => Math.min(pageCountRef.current - 1, Math.max(0, prev + (direction === "next" ? 1 : -1))));
       },
       goToPage: (p: number) => {
+        setAutoScroll(false);
         const target = clampPage(p, pageCountRef.current);
         const wasZoomed = zoomRef.current.scale !== 1;
         if (wasZoomed) resetZoom();
-        if (settings.mode === "scroll") {
+        if (settings.mode === "webtoon") {
           const el = pageElsRef.current.get(target);
           if (!el) return;
           const opts = {
@@ -463,8 +519,13 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
         }
       },
       zoomed: () => zoomRef.current.scale !== 1,
-      toggleAutoScroll: () => undefined,
-      autoActive: () => false,
+      toggleAutoScroll: () => {
+        if (settings.mode !== "webtoon") return;
+        // 缩放态容器锁滚：允许暂停、不允许启动
+        if (!autoScrollRef.current && zoomRef.current.scale !== 1) return;
+        setAutoScroll((v) => !v);
+      },
+      autoActive: () => settings.mode === "webtoon" && autoScrollRef.current,
     });
   }, [onApi, settings.mode, doc]);
 
@@ -474,7 +535,7 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
     const stage = stageRef.current;
     const vh2 = (stage?.clientHeight ?? 0) / 2;
     zoomOrigin =
-      settings.mode === "scroll"
+      settings.mode === "webtoon"
         ? `center ${(scrollRef.current?.scrollTop ?? 0) + vh2}px`
         : `${(fitRef.current?.scrollLeft ?? 0) + (stage?.clientWidth ?? 0) / 2}px ${(fitRef.current?.scrollTop ?? 0) + vh2}px`;
   }
@@ -503,6 +564,19 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
     <button type="button" aria-label="复原缩放" title="复原缩放" onClick={resetZoom} style={HUD_FLOAT}>
       <IconRefresh />
       复原
+    </button>
+  ) : null;
+  // 批次15：连续滚动自动滚动 HUD（同条漫：缩放态隐藏，暂停不受限）
+  const autoBtn = !zoomed ? (
+    <button
+      type="button"
+      aria-pressed={autoScroll}
+      title={autoScroll ? "暂停自动滚动" : "自动滚动"}
+      onClick={() => setAutoScroll((v) => !v)}
+      style={HUD_FLOAT}
+    >
+      {autoScroll ? <IconPause /> : <IconPlay />}
+      {autoScroll ? "暂停" : "自动"}
     </button>
   ) : null;
 
@@ -540,7 +614,7 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
           </span>
           <div className="wr-state-title">加载中</div>
         </div>
-      ) : settings.mode === "scroll" ? (
+      ) : settings.mode === "webtoon" ? (
         <>
           <div
             className="wr-image-webtoon"
@@ -562,7 +636,8 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
                   <div
                     key={i}
                     data-page={i}
-                    style={{ width: "100%", marginInline: "auto" }}
+                    // 批次15：连续滚动宽度档与条漫共用（webtoonWidth 百分比居中）
+                    style={{ width: `${settings.webtoonWidth}%`, marginInline: "auto" }}
                     ref={(el) => {
                       if (el) pageElsRef.current.set(i, el);
                       else pageElsRef.current.delete(i);
@@ -591,7 +666,30 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
               })}
             </div>
           </div>
-          <div style={HUD_GROUP}>{resetBtn}</div>
+          <div style={HUD_GROUP}>
+            {resetBtn}
+            {autoBtn}
+          </div>
+          {autoEndToast ? (
+            <div
+              role="status"
+              style={{
+                position: "absolute",
+                bottom: 56,
+                left: "50%",
+                transform: "translateX(-50%)",
+                fontSize: 12,
+                color: "var(--wr-muted)",
+                background: "var(--wr-bg)",
+                border: "1px solid var(--wr-hairline)",
+                borderRadius: 999,
+                padding: "4px 12px",
+                pointerEvents: "none",
+              }}
+            >
+              已到底部，自动滚动停止
+            </div>
+          ) : null}
         </>
       ) : (
         <>

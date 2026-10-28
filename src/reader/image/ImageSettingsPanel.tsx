@@ -4,6 +4,8 @@ import type { ImageFit, ImagePageAnimation, ImagePageLayout, ImageReadMode, Imag
 type Props = {
   value: ImageReaderSettings;
   onChange: (next: ImageReaderSettings) => void;
+  /** 批次15：PDF 并轨漫画交互——共用本面板与 image_reader_settings；未实现项（单双页/RTL/翻页动画）置灰 */
+  pdf?: boolean;
 };
 
 type SegOption<T extends string> = { value: T; text: string; disabled?: boolean };
@@ -31,13 +33,16 @@ function Seg<T extends string>(props: { label: string; value: T; options: SegOpt
   );
 }
 
-export default function ImageSettingsPanel({ value, onChange }: Props) {
+export default function ImageSettingsPanel({ value, onChange, pdf = false }: Props) {
   const webtoon = value.mode === "webtoon";
+  // 连续滚动（webtoon 枚举）下分页专属项本就置灰；pdf 再叠加 PDF 未实现项
+  const off = webtoon || pdf;
   const theme = useTheme();
+  const widthLabel = pdf ? "滚动宽度" : "条漫宽度";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ fontWeight: 600 }}>漫画设置</div>
+      <div style={{ fontWeight: 600 }}>{pdf ? "PDF 设置" : "漫画设置"}</div>
 
 
       <Seg
@@ -45,13 +50,13 @@ export default function ImageSettingsPanel({ value, onChange }: Props) {
         value={value.mode}
         options={[
           { value: "paged", text: "翻页" },
-          { value: "webtoon", text: "条漫" },
+          { value: "webtoon", text: pdf ? "连续滚动" : "条漫" },
         ]}
         onPick={(mode: ImageReadMode) => onChange({ ...value, mode })}
       />
       {webtoon ? (
         <div className="wr-muted" style={{ fontSize: 12 }}>
-          条漫模式按页宽连续滚动，方向键滚动一屏
+          {pdf ? "连续滚动按页宽整页排列，方向键滚动一屏，空格自动滚动" : "条漫模式按页宽连续滚动，方向键滚动一屏"}
         </div>
       ) : null}
 
@@ -70,8 +75,8 @@ export default function ImageSettingsPanel({ value, onChange }: Props) {
         label="单双页"
         value={value.layout}
         options={[
-          { value: "single", text: "单页", disabled: webtoon },
-          { value: "double", text: "双页", disabled: webtoon },
+          { value: "single", text: "单页", disabled: off },
+          { value: "double", text: "双页", disabled: off },
         ]}
         onPick={(layout: ImagePageLayout) => onChange({ ...value, layout })}
       />
@@ -80,8 +85,8 @@ export default function ImageSettingsPanel({ value, onChange }: Props) {
         label="阅读方向"
         value={value.rtl ? "rtl" : "ltr"}
         options={[
-          { value: "ltr", text: "从左到右", disabled: webtoon },
-          { value: "rtl", text: "从右到左", disabled: webtoon },
+          { value: "ltr", text: "从左到右", disabled: off },
+          { value: "rtl", text: "从右到左", disabled: off },
         ]}
         onPick={(d) => onChange({ ...value, rtl: d === "rtl" })}
       />
@@ -90,14 +95,14 @@ export default function ImageSettingsPanel({ value, onChange }: Props) {
         label="翻页动画"
         value={value.pageAnimation}
         options={[
-          { value: "none", text: "无", disabled: webtoon },
-          { value: "slide", text: "滑动", disabled: webtoon },
+          { value: "none", text: "无", disabled: off },
+          { value: "slide", text: "滑动", disabled: off },
         ]}
         onPick={(pageAnimation: ImagePageAnimation) => onChange({ ...value, pageAnimation })}
       />
 
       <Seg
-        label="条漫宽度"
+        label={widthLabel}
         value={String(value.webtoonWidth)}
         options={[
           { value: "62", text: "A4感", disabled: !webtoon },
@@ -109,7 +114,7 @@ export default function ImageSettingsPanel({ value, onChange }: Props) {
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <input
           type="range"
-          aria-label="条漫宽度"
+          aria-label={widthLabel}
           aria-valuetext={`${value.webtoonWidth}%`}
           min={40}
           max={100}
@@ -137,7 +142,7 @@ export default function ImageSettingsPanel({ value, onChange }: Props) {
           step={10}
           value={value.autoScrollSpeed}
           disabled={!webtoon}
-          title={webtoon ? undefined : "仅条漫模式可用"}
+          title={webtoon ? undefined : "仅连续滚动模式可用"}
           onChange={(e) => onChange({ ...value, autoScrollSpeed: Number(e.currentTarget.value) })}
         />
       </div>

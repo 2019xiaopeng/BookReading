@@ -52,14 +52,7 @@ import {
   type ImageReaderSettings,
 } from "../reader/image/layout";
 import PdfReader from "../reader/pdf/PdfReader";
-import PdfSettingsPanel from "../reader/pdf/PdfSettingsPanel";
-import {
-  defaultPdfReaderSettings,
-  normalizePdfReaderSettings,
-  parsePdfCfi,
-  pdfCfi,
-  type PdfReaderSettings,
-} from "../reader/pdf/layout";
+import { parsePdfCfi, pdfCfi } from "../reader/pdf/layout";
 import { defaultSettings, HIGHLIGHT_COLOR } from "../reader/settings/defaults";
 import type { ReaderSettings } from "../reader/settings/types";
 import { normalizeLayoutMode, resolveSpreadMode } from "../reader/settings/layoutMode";
@@ -115,7 +108,6 @@ export default function ReaderPage() {
   const [percent, setPercent] = useState<number | null>(null);
   const [settings, setSettings] = useState<ReaderSettings>(defaultSettings);
   const [imageSettings, setImageSettings] = useState<ImageReaderSettings>(defaultImageReaderSettings);
-  const [pdfSettings, setPdfSettings] = useState<PdfReaderSettings>(defaultPdfReaderSettings);
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const [imagePage, setImagePage] = useState<{ page: number; pageCount: number } | null>(null);
   const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings" | "pages">("toc");
@@ -162,7 +154,8 @@ export default function ReaderPage() {
   const wheelAccumRef = useRef(0);
   const turningRef = useRef(false);
   const imageApiRef = useRef<PageReaderApi | null>(null);
-  // 漫画/PDF 皆为“视觉书”：webtoon=原生滚动容器（条漫/PDF 连续滚动，滚轮转发不翻页）；autoscroll 仅条漫有播放语义
+  // 漫画/PDF 皆为“视觉书”：webtoon=原生滚动容器（条漫/PDF 连续滚动共用 webtoon 枚举，滚轮转发不翻页）；
+  // 批次15 起空格自动滚动对 PDF 连续滚动同样开放
   const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false, autoscroll: false });
   const progressRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
@@ -199,7 +192,7 @@ export default function ReaderPage() {
     !selection &&
     !noteDraft &&
     (isVisualBook || settings.readingMode === "paginated") &&
-    !((isImageBook && imageSettings.mode === "webtoon") || (isPdfBook && pdfSettings.mode === "scroll"));
+    !(isVisualBook && imageSettings.mode === "webtoon");
 
   const flatToc = useMemo(() => {
     const out: TocItem[] = [];
@@ -230,13 +223,14 @@ export default function ReaderPage() {
   }, [spreadMode]);
 
   useEffect(() => {
+    const continuous = isVisualBook && imageSettings.mode === "webtoon";
     imageCtxRef.current = {
       active: isVisualBook,
       rtl: isImageBook && imageSettings.rtl,
-      webtoon: (isImageBook && imageSettings.mode === "webtoon") || (isPdfBook && pdfSettings.mode === "scroll"),
-      autoscroll: isImageBook && imageSettings.mode === "webtoon",
+      webtoon: continuous,
+      autoscroll: continuous,
     };
-  }, [isVisualBook, isImageBook, isPdfBook, imageSettings, pdfSettings]);
+  }, [isVisualBook, isImageBook, imageSettings]);
 
   useEffect(() => {
     locationSearchRef.current = location.search;
@@ -268,7 +262,6 @@ export default function ReaderPage() {
         reader_font: normalizeReaderFont(map.reader_font),
       });
       setImageSettings(normalizeImageReaderSettings(map.image_reader_settings));
-      setPdfSettings(normalizePdfReaderSettings(map.pdf_reader_settings));
     })();
     return () => {
       cancelled = true;
@@ -562,7 +555,7 @@ export default function ReaderPage() {
 
       if (imageCtxRef.current.active) {
         // B12 条漫：空格=自动滚动播放/暂停（缩放态、输入焦点除外，不再触发原生下跳）；
-        // 播放中 ↑/↓=速度 ±10（实时生效+轻提示当前速度）——PDF 连续滚动无自动滚动，不占用空格
+        // 播放中 ↑/↓=速度 ±10（实时生效+轻提示当前速度）——批次15 起 PDF 连续滚动同享空格自动滚动
         if (imageCtxRef.current.autoscroll && !imageApiRef.current?.zoomed?.()) {
           if (e.key === " ") {
             e.preventDefault();
@@ -1074,24 +1067,14 @@ export default function ReaderPage() {
               setDrawerOpen(false);
             }}
           >
-            {sideTab === "settings" && isImageBook ? (
+            {sideTab === "settings" && isVisualBook ? (
               <ImageSettingsPanel
                 value={imageSettings}
+                pdf={isPdfBook}
                 onChange={(next) => {
                   setImageSettings(next);
                   settingsTouchedRef.current = true;
                   void setSetting("image_reader_settings", JSON.stringify(next));
-                }}
-              />
-            ) : null}
-
-            {sideTab === "settings" && isPdfBook ? (
-              <PdfSettingsPanel
-                value={pdfSettings}
-                onChange={(next) => {
-                  setPdfSettings(next);
-                  settingsTouchedRef.current = true;
-                  void setSetting("pdf_reader_settings", JSON.stringify(next));
                 }}
               />
             ) : null}
@@ -1328,7 +1311,7 @@ export default function ReaderPage() {
                 <PdfReader
                   key={book.id}
                   book={book}
-                  settings={pdfSettings}
+                  settings={imageSettings}
                   onRelocated={handleImageRelocated}
                   theme={theme}
                   onApi={(api) => {

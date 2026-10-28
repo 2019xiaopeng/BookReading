@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { defaultPdfReaderSettings, normalizePdfReaderSettings, pagePercent, parsePdfCfi, pdfCfi } from "./layout";
+import { pagePercent, parsePdfCfi, pdfCfi } from "./layout";
 
 describe("pdf cfi", () => {
   test("round trip pdf:N", () => {
@@ -25,20 +25,5 @@ describe("pdf cfi", () => {
     expect(pagePercent(9, 10)).toBe(0.9);
     expect(pagePercent(99, 10)).toBe(1);
     expect(pagePercent(0, 0)).toBe(0);
-  });
-});
-
-describe("normalizePdfReaderSettings", () => {
-  test("defaults and json string input", () => {
-    expect(normalizePdfReaderSettings(null)).toEqual(defaultPdfReaderSettings);
-    expect(normalizePdfReaderSettings("{}")).toEqual(defaultPdfReaderSettings);
-    expect(normalizePdfReaderSettings(JSON.stringify({ fit: "width", mode: "scroll" }))).toEqual({
-      fit: "width",
-      mode: "scroll",
-    });
-  });
-
-  test("unknown values fall back to defaults", () => {
-    expect(normalizePdfReaderSettings({ fit: "nope", mode: "webtoon" })).toEqual(defaultPdfReaderSettings);
   });
 });

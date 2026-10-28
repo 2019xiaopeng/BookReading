@@ -352,6 +352,13 @@
   color: var(--wr-ink);
 }
 
+/* 批次15：书卡拖到侧栏“回收站”项 = 移入回收站（drop-target 高亮语义同书卡） */
+.wr-nav-btn.drop-target {
+  border-color: var(--wr-accent);
+  box-shadow: 0 0 0 3px rgba(var(--wr-accent-rgb), 0.25);
+  color: var(--wr-ink);
+}
+
 .wr-nav-title {
   font-weight: 650;
   color: inherit;
