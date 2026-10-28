@@ -208,17 +208,35 @@ pub fn list_shelves(app: tauri::AppHandle) -> Result<Vec<Shelf>, String> {
     list_shelves_db(&conn).map_err(|e| format!("failed to list shelves: {e}"))
 }
 
-#[tauri::command]
-pub fn create_shelf(app: tauri::AppHandle, name: String, parent_id: Option<i64>) -> Result<Shelf, String> {
+// 同级（同 parent）下名称唯一，大小写不敏感（COLLATE NOCASE）；exclude_id 用于改名时跳过自身
+fn sibling_name_taken(
+    conn: &Connection,
+    parent_id: Option<i64>,
+    name: &str,
+    exclude_id: Option<i64>,
+) -> Result<bool, String> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM shelves WHERE parent_id IS ?1 AND name = ?2 COLLATE NOCASE AND id != ?3",
+            params![parent_id, name, exclude_id.unwrap_or(-1)],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("failed to check shelf name: {e}"))?;
+    Ok(n > 0)
+}
+
+fn create_shelf_db(conn: &Connection, name: String, parent_id: Option<i64>) -> Result<Shelf, String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("书架名称不能为空".to_string());
     }
-    let conn = db::open_db(&app)?;
     if let Some(pid) = parent_id {
-        if !shelf_exists(&conn, pid)? {
+        if !shelf_exists(conn, pid)? {
             return Err(format!("书架 {pid} 不存在"));
         }
+    }
+    if sibling_name_taken(conn, parent_id, &name, None)? {
+        return Err("同级已存在同名书架".to_string());
     }
     let next_order: i64 = conn
         .query_row(
@@ -233,23 +251,33 @@ pub fn create_shelf(app: tauri::AppHandle, name: String, parent_id: Option<i64>)
     )
     .map_err(|e| format!("failed to create shelf: {e}"))?;
     let id = conn.last_insert_rowid();
-    fetch_shelf(&conn, id)
+    fetch_shelf(conn, id)
 }
 
-#[tauri::command]
-pub fn rename_shelf(app: tauri::AppHandle, id: i64, name: String) -> Result<(), String> {
+fn rename_shelf_db(conn: &Connection, id: i64, name: String) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("书架名称不能为空".to_string());
     }
-    let conn = db::open_db(&app)?;
-    let n = conn
-        .execute("UPDATE shelves SET name = ?2 WHERE id = ?1", params![id, name])
-        .map_err(|e| format!("failed to rename shelf: {e}"))?;
-    if n == 0 {
-        return Err(format!("书架 {id} 不存在"));
+    let shelf = fetch_shelf(conn, id)?;
+    if sibling_name_taken(conn, shelf.parent_id, &name, Some(id))? {
+        return Err("同级已存在同名书架".to_string());
     }
+    conn.execute("UPDATE shelves SET name = ?2 WHERE id = ?1", params![id, name])
+        .map_err(|e| format!("failed to rename shelf: {e}"))?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn create_shelf(app: tauri::AppHandle, name: String, parent_id: Option<i64>) -> Result<Shelf, String> {
+    let conn = db::open_db(&app)?;
+    create_shelf_db(&conn, name, parent_id)
+}
+
+#[tauri::command]
+pub fn rename_shelf(app: tauri::AppHandle, id: i64, name: String) -> Result<(), String> {
+    let conn = db::open_db(&app)?;
+    rename_shelf_db(&conn, id, name)
 }
 
 #[tauri::command]
@@ -394,6 +422,40 @@ mod tests {
         )
         .unwrap();
         conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn create_shelf_rejects_duplicate_sibling_name_case_insensitive() {
+        let conn = setup();
+        create_shelf_db(&conn, "Novel".into(), None).unwrap();
+        // 同级重名（仅大小写不同）拒绝
+        assert_eq!(
+            create_shelf_db(&conn, "novel".into(), None).unwrap_err(),
+            "同级已存在同名书架"
+        );
+        // 不同父级下同名放行
+        let parent = add_shelf(&conn, "P", None);
+        assert!(create_shelf_db(&conn, "Novel".into(), Some(parent)).is_ok());
+    }
+
+    #[test]
+    fn rename_shelf_rejects_sibling_clash_but_allows_own_name() {
+        let conn = setup();
+        let a = add_shelf(&conn, "A", None);
+        let b = add_shelf(&conn, "B", None);
+
+        // 改成同级已有名字（大小写不敏感）拒绝
+        assert_eq!(
+            rename_shelf_db(&conn, b, "a".into()).unwrap_err(),
+            "同级已存在同名书架"
+        );
+        // 改回自身（含大小写变化）不撞车
+        rename_shelf_db(&conn, b, "b".into()).unwrap();
+        let name: String = conn
+            .query_row("SELECT name FROM shelves WHERE id = ?1", [b], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "b");
+        let _ = a;
     }
 
     #[test]

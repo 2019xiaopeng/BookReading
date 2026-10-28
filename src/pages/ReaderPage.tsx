@@ -61,6 +61,7 @@ import {
   normalizeReaderBackground,
   normalizeReaderFont,
   normalizeReadingMode,
+  normalizeTurnSpeedMs,
 } from "../reader/settings/normalize";
 import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
@@ -236,6 +237,7 @@ export default function ReaderPage() {
           ? Math.min(200, Math.max(80, fontSizePercent))
           : defaultSettings.fontSizePercent,
         pageAnimation,
+        turnSpeedMs: normalizeTurnSpeedMs(map.turnSpeedMs),
         layoutMode,
         lineHeight,
         fontFamily,
@@ -706,6 +708,7 @@ export default function ReaderPage() {
     settingsTouchedRef.current = true;
     await setSetting("fontSizePercent", String(next.fontSizePercent));
     await setSetting("pageAnimation", next.pageAnimation);
+    await setSetting("turnSpeedMs", String(next.turnSpeedMs));
     await setSetting("layoutMode", next.layoutMode);
     await setSetting("lineHeight", String(next.lineHeight));
     await setSetting("fontFamily", next.fontFamily);
@@ -774,8 +777,11 @@ export default function ReaderPage() {
       return;
     }
 
+    // 翻页速度可调：turnSpeedMs=260 时与旧固定时值一致（fade 180 / slide 出150 入240 / 兜底260）
+    const k = settings.turnSpeedMs / 260;
+
     if (settings.pageAnimation === "fade") {
-      el.style.transition = "opacity 180ms ease";
+      el.style.transition = `opacity ${Math.round(180 * k)}ms ease`;
       el.style.opacity = "0.35";
       await run();
       requestAnimationFrame(() => {
@@ -799,16 +805,18 @@ export default function ReaderPage() {
       turningRef.current = true;
       try {
         const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
-        paper.style.transition = "transform 150ms ease-in";
+        const outMs = Math.round(150 * k);
+        const inMs = Math.round(240 * k);
+        paper.style.transition = `transform ${outMs}ms ease-in`;
         paper.style.transform = `translateX(${direction === "next" ? "-100%" : "100%"})`;
-        await wait(150); // 旧页整幅滑出屏外后再换内容
+        await wait(outMs); // 旧页整幅滑出屏外后再换内容
         await run();
         paper.style.transition = "none";
         paper.style.transform = `translateX(${direction === "next" ? "100%" : "-100%"})`;
         void paper.offsetHeight; // 强制 reflow 提交入场起点
-        paper.style.transition = "transform 240ms cubic-bezier(0.2, 0, 0, 1)";
+        paper.style.transition = `transform ${inMs}ms cubic-bezier(0.2, 0, 0, 1)`;
         paper.style.transform = "translateX(0)";
-        await wait(260); // 兜底等待，不依赖 transitionend
+        await wait(Math.round(260 * k)); // 兜底等待，不依赖 transitionend
         paper.style.transition = "";
         paper.style.transform = "";
       } finally {
@@ -1273,6 +1281,7 @@ export default function ReaderPage() {
                 key={book.id}
                 book={book}
                 settings={imageSettings}
+                turnSpeedMs={settings.turnSpeedMs}
                 onRelocated={handleImageRelocated}
                 theme={theme}
                 onApi={(api) => {

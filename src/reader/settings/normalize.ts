@@ -70,3 +70,10 @@ export function normalizeLineHeight(v: unknown): number {
   if (!Number.isFinite(n)) return 1.9;
   return Math.min(2.2, Math.max(1.5, Math.round(n * 10) / 10));
 }
+
+/** 翻页动画时长钳制 150-600ms，默认 260（=slide 入场基准） */
+export function normalizeTurnSpeedMs(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 260;
+  return Math.min(600, Math.max(150, Math.round(n)));
+}

@@ -45,6 +45,8 @@ type Props = {
   settings: ImageReaderSettings;
   /** 跟随全局六主题（ReaderPage 传入；组件内部 token 化由批次4 B 区接线） */
   theme: Theme;
+  /** 翻页滑动过渡时长（ms），与 epub 翻页动画同源；缺省 260≈CSS 里的 250ms */
+  turnSpeedMs?: number;
   onRelocated: (page: number, pageCount: number) => void;
   onApi: (api: ImageReaderApi) => void;
 };
@@ -60,7 +62,7 @@ function mimeFor(name: string): string {
   return "application/octet-stream";
 }
 
-export default function ImageReader({ book, theme, settings, onRelocated, onApi }: Props) {
+export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, onRelocated, onApi }: Props) {
   const [pages, setPages] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [spreadIndex, setSpreadIndex] = useState<number | null>(null);
@@ -710,7 +712,7 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
         className="wr-image-fit wr-image-fit--out"
         data-fit={settings.fit}
         aria-hidden="true"
-        style={{ "--slide-dir": snap.dir } as CSSProperties}
+        style={{ "--slide-dir": snap.dir, animationDuration: `${turnSpeedMs}ms` } as CSSProperties}
         onAnimationEnd={() => setSnap(null)}
       >
         {displayOrder(snap.pages, settings.rtl).map((p) =>
@@ -723,7 +725,8 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
       data-fit={settings.fit}
       ref={fitRef}
       style={{
-        ...(snap ? ({ "--slide-dir": snap.dir } as CSSProperties) : null),
+        // 滑动过渡时长与 epub 翻页速度同源（覆盖 weread.css 的 250ms）
+        ...(snap ? ({ "--slide-dir": snap.dir, animationDuration: `${turnSpeedMs}ms` } as CSSProperties) : null),
         // zoomed: pan/translate the whole layer and suppress the fit=width/original overflow scroll
         ...(zoomed
           ? { transform: zoomTransform, transformOrigin: zoomOrigin, overflow: "hidden" as const }

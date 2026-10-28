@@ -9,6 +9,7 @@ import {
   normalizeReaderFont,
   normalizeReadingMode,
   normalizeTheme,
+  normalizeTurnSpeedMs,
 } from "./normalize";
 
 describe("normalize", () => {
@@ -77,6 +78,15 @@ describe("normalize", () => {
     expect(normalizeLineHeight(1)).toBe(1.5);
   });
 
+  test("normalizeTurnSpeedMs clamps to 150-600 with default 260", () => {
+    expect(normalizeTurnSpeedMs(undefined)).toBe(260);
+    expect(normalizeTurnSpeedMs("abc")).toBe(260);
+    expect(normalizeTurnSpeedMs("300")).toBe(300);
+    expect(normalizeTurnSpeedMs(100)).toBe(150);
+    expect(normalizeTurnSpeedMs(9999)).toBe(600);
+    expect(normalizeTurnSpeedMs(260.4)).toBe(260);
+  });
+
   test("batch2-era stored settings (no new keys) normalize to paginated + preset", () => {
     const stored: Record<string, string> = { theme: "dark", fontSizePercent: "120" };
     expect(normalizeReadingMode(stored.readingMode)).toBe("paginated");
@@ -115,5 +125,6 @@ describe("normalize", () => {
     expect(defaultSettings.reader_bg).toEqual({ type: "preset" });
     expect(defaultSettings.reader_font).toEqual({ type: "preset" });
     expect(defaultSettings.fontFamily).toBe("default");
+    expect(defaultSettings.turnSpeedMs).toBe(260);
   });
 });

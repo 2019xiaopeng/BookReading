@@ -201,14 +201,15 @@ function percentFromCfi(book: any, cfi: string): number | undefined {
   return undefined;
 }
 
-// iframe 内容无法继承宿主 CSS 变量，此处色值与 tokens.css [data-theme] 同步（dark 纸面=--panel-solid、darkcontrast 纸面=--wr-paper）
-const THEME_STYLES: Record<Theme, { paper: string | null; fg: string }> = {
-  light: { paper: null, fg: "#16181a" },
-  sepia: { paper: null, fg: "rgba(38, 29, 18, 0.9)" },
-  green: { paper: null, fg: "#223325" },
-  gray: { paper: null, fg: "#2b2b28" },
-  dark: { paper: "#11151b", fg: "rgba(255, 255, 255, 0.92)" },
-  darkcontrast: { paper: "#050505", fg: "#f5f5f5" },
+// iframe 内容无法继承宿主 CSS 变量，此处色值与 tokens.css / weread.css [data-theme] 同步
+// （dark 纸面=--panel-solid、darkcontrast 纸面=--wr-paper；inkRgb=--wr-ink-rgb，sepia/green/gray 未覆盖沿用默认）
+const THEME_STYLES: Record<Theme, { paper: string | null; fg: string; inkRgb: string }> = {
+  light: { paper: null, fg: "#16181a", inkRgb: "22, 24, 26" },
+  sepia: { paper: null, fg: "rgba(38, 29, 18, 0.9)", inkRgb: "22, 24, 26" },
+  green: { paper: null, fg: "#223325", inkRgb: "22, 24, 26" },
+  gray: { paper: null, fg: "#2b2b28", inkRgb: "22, 24, 26" },
+  dark: { paper: "#11151b", fg: "rgba(255, 255, 255, 0.92)", inkRgb: "255, 255, 255" },
+  darkcontrast: { paper: "#050505", fg: "#f5f5f5", inkRgb: "255, 255, 255" },
 };
 
 // B11 正文字体：default=悦读栈（思源宋优先、回退等线/宋体，未装字体自动落下一步），custom=文件安装的 wr-custom
@@ -286,9 +287,28 @@ export async function createReader(opts: {
     for (const t of Object.keys(THEME_STYLES) as Theme[]) {
       const s = THEME_STYLES[t];
       const opaque = s.paper !== null;
+      // 滚动模式的滚动条在 iframe 内，宿主全局 CSS 管不到：随主题注入镜像 ink 色的滚动条样式。
+      // 8px 轨道 + 2px 透明边框 + background-clip 得 4px 圆角细 thumb；
+      // :has 份用于命中 html 根（iframe 视口滚动条挂在根上，body 类选择器够不着；WebView2 Chromium105+ 支持）
+      const scrollbar = (pseudo: string) =>
+        [
+          `body.${t} ${pseudo}`,
+          `body.${t}${pseudo}`,
+          `html:has(body.${t}) ${pseudo}`,
+          `html:has(body.${t})${pseudo}`,
+        ].join(", ");
       // 规则按主题类作用域（themes.select 靠 body class 切换），避免多主题样式表共存时后者压死前者
       rendition.themes.register(t, {
         ...common,
+        [scrollbar("::-webkit-scrollbar")]: { width: "8px", height: "8px" },
+        [scrollbar("::-webkit-scrollbar-track")]: { background: "transparent" },
+        [scrollbar("::-webkit-scrollbar-thumb")]: {
+          background: `rgba(${s.inkRgb}, 0.28)`,
+          "border-radius": "999px",
+          border: "2px solid transparent",
+          "background-clip": "padding-box",
+        },
+        [scrollbar("::-webkit-scrollbar-thumb:hover")]: { background: `rgba(${s.inkRgb}, 0.45)` },
         [`body.${t}`]: {
           margin: "0 auto",
           padding: "24px 20px",
@@ -348,13 +368,15 @@ export async function createReader(opts: {
   };
   rendition.on("relocated", onRelocated);
 
-  // 超时不置终态：1024 超时后换新 Locations 实例降级 4096 后台重试一次（共享队列复用旧实例会重复追加）
+  // 超时不置终态：1024 超时后换新 Locations 实例降级 4096 后台重试一次。
+  // 同实例二次 generate 不重置 _locations（process 里 concat 追加，1024/4096 混合粒度会毁掉二分查找），
+  // 必须新实例；book.destroy() 置空 locations（用户已离开）时直接放弃重试
   void (async () => {
     for (const [attempt, interval] of [1024, 4096].entries()) {
       try {
         if (attempt > 0) {
           const Ctor = (book.locations as any)?.constructor;
-          if (typeof Ctor !== "function") throw new Error("no Locations ctor");
+          if (typeof Ctor !== "function") return;
           const old = book.locations as any;
           book.locations = new Ctor(book.spine, book.load.bind(book));
           // destroy() 会 q.stop() 终止旧 1024 间隔的 generate 队列，否则两轮全文解析并发白耗主线程

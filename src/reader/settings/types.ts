@@ -12,6 +12,8 @@ export type ReaderSettings = {
   // theme 已提升为应用级（src/ui/theme.ts 单一事实源），不再随阅读设置对象流转
   fontSizePercent: number;
   pageAnimation: PageAnimation;
+  /** 翻页动画时长（ms，150-600）：epub fade/slide 与漫画滑动过渡共用 */
+  turnSpeedMs: number;
   layoutMode: LayoutMode;
   lineHeight: number;
   fontFamily: FontFamily;

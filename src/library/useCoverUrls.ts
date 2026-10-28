@@ -13,69 +13,8 @@ const listeners = new Set<(path: string) => void>();
 
 export const COVER_MAX_ATTEMPTS = 3;
 
-// 卡片显示需求 ~96/192/256px 宽（密度档）× dpr，512 已含 2 倍余量：更大的源图缩到 512
-const COVER_TARGET_PX = 512;
-
 export function coverRetryDelayMs(failedCount: number): number {
   return 200 * 2 ** Math.max(0, failedCount - 1); // 200 / 400 / 800
-}
-
-/** canvas 步进降采样的目标宽度序列：每步 ≤0.5 倍保画质，最后一步落到 target；宽 ≤ target 返回空（用原图） */
-export function planCoverDownscale(width: number, target = COVER_TARGET_PX): number[] {
-  const steps: number[] = [];
-  let w = width;
-  while (Math.floor(w / 2) >= target) {
-    w = Math.floor(w / 2);
-    steps.push(w);
-  }
-  if (w > target) steps.push(target);
-  return steps;
-}
-
-// 会话级显示缩略（不落盘）：源宽 >512 的封面 canvas 高质量步进减半到 512 再 jpeg 0.92，
-// 避免浏览器对大图（如 1480px）一次性低质缩放的涂抹感并省内存；
-// 解码/画布/toBlob 任一步失败返回 null，调用方回退原图 URL
-async function downscaleCoverUrl(originalUrl: string): Promise<string | null> {
-  if (typeof Image === "undefined" || typeof document === "undefined") return null;
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const im = new Image();
-      im.onload = () => resolve(im);
-      im.onerror = () => reject(new Error("cover decode failed"));
-      im.src = originalUrl;
-    });
-    const steps = planCoverDownscale(img.naturalWidth);
-    if (steps.length === 0) return null;
-    // 双 canvas 交替：canvas 改宽高即清空位图，不能同时当源和目标
-    const a = document.createElement("canvas");
-    const b = document.createElement("canvas");
-    let src: CanvasImageSource = img;
-    let dst = a;
-    let srcW = img.naturalWidth;
-    let srcH = img.naturalHeight;
-    for (const w of steps) {
-      const h = Math.max(1, Math.round((srcH * w) / srcW));
-      dst.width = w;
-      dst.height = h;
-      const ctx = dst.getContext("2d");
-      if (!ctx) return null;
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(src, 0, 0, w, h);
-      src = dst;
-      dst = dst === a ? b : a;
-      srcW = w;
-      srcH = h;
-    }
-    const scaled = src as HTMLCanvasElement;
-    const blob = await new Promise<Blob | null>((resolve) => scaled.toBlob(resolve, "image/jpeg", 0.92));
-    if (!blob) return null;
-    const url = URL.createObjectURL(blob);
-    revokeObjectUrl(originalUrl); // 缩略已就绪；原图 blob 此刻仅本函数持有
-    return url;
-  } catch {
-    return null;
-  }
 }
 
 export function getCoverUrl(path: string): string | undefined {
@@ -108,8 +47,7 @@ export function requestCoverUrl(path: string): void {
   void (async () => {
     try {
       const ext = path.split(".").pop() ?? null;
-      const originalUrl = await readAppDataBlobUrl(path, extToMime(ext));
-      const url = (await downscaleCoverUrl(originalUrl)) ?? originalUrl;
+      const url = await readAppDataBlobUrl(path, extToMime(ext));
       failedAttempts.delete(path);
       urlCache.set(path, url);
       notify(path);

@@ -229,6 +229,27 @@ export default function SettingsPanel(props: {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="wr-muted">翻页速度</div>
+          <div style={{ marginLeft: "auto", color: "var(--wr-muted)", fontVariantNumeric: "tabular-nums" }}>
+            {v.turnSpeedMs}ms
+          </div>
+        </div>
+        <input
+          type="range"
+          aria-label="翻页速度"
+          aria-valuetext={`${v.turnSpeedMs}ms`}
+          min={150}
+          max={600}
+          step={10}
+          value={v.turnSpeedMs}
+          disabled={scrolled}
+          aria-disabled={scrolled}
+          onChange={(e) => props.onChange({ ...v, turnSpeedMs: Number(e.currentTarget.value) })}
+        />
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div className="wr-muted">版式</div>
         <select
           className="wr-select"

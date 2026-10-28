@@ -26,7 +26,6 @@ import {
   setBookFavorite,
   setBooksOrder,
   setSetting,
-  setShelfOrder,
   setTrashRetentionDays,
   updateBookMetadata,
 } from "../tauri/invoke";
@@ -645,18 +644,16 @@ export default function LibraryPage() {
     if (drag.kind === "book") {
       void moveDroppedBook(drag.id, shelfId);
       if (shelfId != null) popCard(`shelf:${shelfId}`);
-    } else if (
-      sortKey === "custom" &&
-      shelfId != null &&
-      drag.id !== shelfId &&
-      subShelves.some((s) => s.id === shelfId)
-    ) {
-      const ids = subShelves.map((s) => s.id);
-      const rest = ids.filter((id) => id !== drag.id);
-      const to = rest.indexOf(shelfId);
-      rest.splice(to < 0 ? rest.length : to, 0, drag.id);
-      popCard(`shelf:${drag.id}`);
-      void persistOrder(rest, setShelfOrder);
+    } else if (shelfId !== drag.id) {
+      // 书架拖放：书架卡=移入其内；面包屑=移到该层（“全部”=根）。no-op 父级已在 canDropOn 过滤
+      void (async () => {
+        try {
+          await moveShelf(drag.id, shelfId);
+          await refresh();
+        } catch (e) {
+          await showAlert("移动失败", String(e));
+        }
+      })();
     }
   }
 
@@ -675,10 +672,14 @@ export default function LibraryPage() {
       if (mode === "shelf") return true;
       return mode === "book" && sortKey === "custom" && drag.id !== target.dataset.bookId;
     }
-    if (mode !== "shelf" || sortKey !== "custom") return false;
+    // 拖书架：目标=书架卡（移入其内）或面包屑（移到该层，""=根）
+    if (mode !== "shelf") return false;
     const sid = target.dataset.shelfId;
     const n = sid && sid !== "" ? Number(sid) : null;
-    return n != null && n !== drag.id && subShelves.some((s) => s.id === n);
+    if (n == null || !Number.isFinite(n) || n === drag.id) return false;
+    // 目标即当前父级（含根）是无操作，不亮
+    const parent = shelves.find((s) => s.id === drag.id)?.parent_id ?? null;
+    return n !== parent;
   }
 
   // Tauri2 默认接管 webview 拖放（OS 文件拖入要靠它拿绝对路径），Windows 上 HTML5 DnD 全程红圈；
