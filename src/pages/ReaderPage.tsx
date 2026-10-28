@@ -801,7 +801,7 @@ export default function ReaderPage() {
       return;
     }
 
-    // 翻页速度可调：turnSpeedMs=260 时与旧固定时值一致（fade 180 / slide 出150 入240 / 兜底260）
+    // 翻页速度可调：turnSpeedMs=260 时 fade 180 / slide 入240 / 兜底260（slide 出场见批次17：并行 + 120ms 上限）
     const k = settings.turnSpeedMs / 260;
 
     if (settings.pageAnimation === "fade") {
@@ -829,12 +829,14 @@ export default function ReaderPage() {
       turningRef.current = true;
       try {
         const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
-        const outMs = Math.round(150 * k);
+        // 批次17：出场段与 display 并行（display 异步渲染新页，旧页滑出的同时后台已在画），
+        // 空窗从“出场时长+display 耗时”缩到 max(0, display-出场)；出场再上限 120ms 收紧顺序等待
+        const outMs = Math.min(Math.round(settings.turnSpeedMs * 0.4), 120);
         const inMs = Math.round(240 * k);
         paper.style.transition = `transform ${outMs}ms ease-in`;
         paper.style.transform = `translateX(${direction === "next" ? "-100%" : "100%"})`;
-        await wait(outMs); // 旧页整幅滑出屏外后再换内容
-        await run();
+        const displaying = run();
+        await Promise.all([wait(outMs), displaying]);
         paper.style.transition = "none";
         paper.style.transform = `translateX(${direction === "next" ? "100%" : "-100%"})`;
         void paper.offsetHeight; // 强制 reflow 提交入场起点

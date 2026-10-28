@@ -686,6 +686,29 @@ export default function LibraryPage() {
     });
   }
 
+  // 批次17：拖书架卡到侧栏“回收站”= 删除书架（与右键删除同链路；广播同步其他窗口）
+  async function dropOnTrashShelf(shelfId: number) {
+    const shelf = shelves.find((s) => s.id === shelfId);
+    if (!shelf) return;
+    const ok = await showConfirm(
+      "删除书架",
+      `删除书架《${shelf.name}》？其内书籍将移到上一级，子书架一并删除（与右键删除一致）。`,
+      { danger: true, confirmText: "删除" },
+    );
+    if (!ok) return;
+    setLoading(true);
+    try {
+      await deleteShelf(shelfId);
+      // 删的是当前书架/祖先 → 现有 effect（shelves 更新后 currentShelfId 悬空）自动回根
+      await refresh();
+      window.dispatchEvent(new Event(BOOKS_CHANGED_EVENT));
+    } catch (e) {
+      await showAlert("删除书架失败", String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   // 拖书卡到侧栏“回收站”导航项 = 软删入回收站（确认后与 onDeleteBook 同链路；广播同步其他窗口）
   async function dropOnTrash(bookId: string) {
     const ok = await showConfirm("移入回收站", "将 1 本书移入回收站？可在回收站恢复。", {
@@ -724,7 +747,9 @@ export default function LibraryPage() {
       if (mode === "trash") return !trashView;
       return mode === "book" && sortKey === "custom" && drag.id !== target.dataset.bookId;
     }
-    // 拖书架：目标=书架卡（移入其内）或面包屑（移到该层，""=根）
+    // 拖书架：目标=书架卡（移入其内）或面包屑（移到该层，""=根）或侧栏“回收站”（=删除书架）
+    // 批次17：回收站视图内无拖拽源，仍挡一层防自删困惑（同书卡分支）
+    if (mode === "trash") return !trashView;
     if (mode !== "shelf") return false;
     const sid = target.dataset.shelfId;
     const n = sid && sid !== "" ? Number(sid) : null;
@@ -810,6 +835,8 @@ export default function LibraryPage() {
           const targetBook = booksFiltered.find((b) => b.id === target.dataset.bookId);
           if (targetBook) dropOnBook(drag.id, targetBook);
         }
+      } else if (target.dataset.drop === "trash") {
+        void dropOnTrashShelf(drag.id);
       } else {
         dropOnShelf(drag, shelfId);
       }

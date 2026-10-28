@@ -1916,10 +1916,14 @@ input[type="range"]:focus-visible {
     animation: none;
   }
 }
-/* 批次16：页图入场淡入（预载已解码完成才换页，动画只做视觉缓冲）；reduced-motion 直显 */
+/* 批次16：页图入场淡入（预载已解码完成才换页，动画只做视觉缓冲）；reduced-motion 直显
+   批次17：淡入只作用于“占位→成像”（初始载入/跳页）；相邻翻页由 slide 转场承担，不叠加淡入 */
 .wr-image-fit img,
 .wr-image-webtoon img {
   animation: wr-image-fade-in 120ms ease;
+}
+.wr-image-fit img.wr-img-instant {
+  animation: none;
 }
 @keyframes wr-image-fade-in {
   from {

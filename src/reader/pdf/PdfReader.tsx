@@ -298,14 +298,27 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
   }, [activePage, doc, pageCount]);
 
   // ---- 滚动模式：可见页锚定 + 初始落位 ----
+  // 批次17 修复：doc 提交时后台页尺寸未就绪、占位无高度 → offsetTop≈0，落位被跳过且不重试。
+  // 落位需等恢复页之前所有页的尺寸（它们决定 offsetTop）；后台 loadDims 补全后（dims 变更）一次性跳准。
+  // shortcut: 恢复页之前有个别页尺寸获取失败时会等不到而停在顶部，与修复前行为一致，可滚动自行定位
+  const initialScrollRef = useRef(false);
   useEffect(() => {
-    if (settings.mode !== "webtoon" || doc === null) return;
+    if (settings.mode !== "webtoon") {
+      initialScrollRef.current = false; // 离开滚动模式复位：再次进入时重新锚定当前页
+      return;
+    }
+    if (doc === null) return;
     const root = scrollRef.current;
-    if (!root) return;
+    if (!root || initialScrollRef.current) return;
+    const start = currentPageRef.current;
+    for (let i = 0; i < start; i++) {
+      if (!dimsRef.current[i]) return;
+    }
+    initialScrollRef.current = true;
     root.focus({ preventScroll: true });
-    const target = pageElsRef.current.get(currentPageRef.current);
+    const target = pageElsRef.current.get(start);
     if (target && target.offsetTop > 0) root.scrollTop = target.offsetTop;
-  }, [settings.mode, doc]);
+  }, [settings.mode, doc, dims]);
 
   useEffect(() => {
     if (settings.mode !== "webtoon" || doc === null) return;

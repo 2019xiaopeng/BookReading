@@ -51,8 +51,9 @@ type Props = {
   onApi: (api: ImageReaderApi) => void;
 };
 
-// resident window: at most current +/- 4 pages stay as blobs (批次16 由 ±2 放宽，快速翻页不进空白区)
-const PRELOAD_PAGES = 4;
+// resident window: current +/- 3 pages stay as blobs（批次17 由 ±4 收窄：±4 全量并发解码挤占翻页，
+// 2 与 4 的折中取 3；配合错峰预载后同帧解码量≤1，翻页不再被拖）
+const PRELOAD_PAGES = 3;
 
 function mimeFor(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
@@ -71,6 +72,8 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
   const [failed, setFailed] = useState<Set<number>>(new Set());
   const [anchor, setAnchor] = useState(0);
   const [shownSpread, setShownSpread] = useState<number | null>(null);
+  // 批次17：本次换页是否走“占位→成像”路径（初始载入/跳页）——只有它淡入；相邻翻页由 slide 转场，不叠加淡入
+  const [reveal, setReveal] = useState(true);
   const [snap, setSnap] = useState<{ pages: number[]; urls: Record<number, string>; dir: 1 | -1 } | null>(null);
   const [zoom, setZoom] = useState({ scale: 1, tx: 0, ty: 0 });
   const zoomed = zoom.scale !== 1;
@@ -208,9 +211,11 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
     if (prev === spreadIndex) return;
     shownSpreadRef.current = spreadIndex;
     setShownSpread(spreadIndex);
+    // 批次17：相邻翻页=页间互换，不淡入（slide 已是转场）；初始载入/跳页=占位→成像，保留 120ms 淡入
+    const adjacent = prev !== null && Math.abs(spreadIndex - prev) === 1;
+    setReveal(!adjacent);
     if (
-      prev !== null &&
-      Math.abs(spreadIndex - prev) === 1 &&
+      adjacent &&
       settings.pageAnimation === "slide" &&
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
@@ -290,7 +295,18 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
     }
     for (const p of spreads[shownSpreadRef.current ?? -1] ?? []) want.add(p);
     wantedRef.current = want;
-    for (const p of want) void ensureLoaded(p);
+    // 批次17 预载错峰：当前 spread 立即载入（ensureLoaded 内仍 await decode，保证切换即显），
+    // 其余邻页按距离逐张隔帧（16ms≈一帧）启动——同帧解码量≤1，不再 ±N 全量并发挤占翻页。
+    // 每次翻页重建队列（清旧定时器）：新当前页恒为立即档，未被启动的旧邻页按新距离重排。
+    const currentSpread = settings.mode === "webtoon" ? [anchor] : (spreads[spreadIndex] ?? []);
+    const primary = settings.mode === "webtoon" ? anchor : (spreads[spreadIndex]?.[0] ?? 0);
+    const timers: number[] = [];
+    let order = 0;
+    for (const p of [...want].sort((a, b) => Math.abs(a - primary) - Math.abs(b - primary))) {
+      if (order === 0 || currentSpread.includes(p)) void ensureLoaded(p);
+      else timers.push(window.setTimeout(() => void ensureLoaded(p), order * 16));
+      order++;
+    }
     for (const [i, url] of cacheRef.current) {
       if (!want.has(i)) {
         URL.revokeObjectURL(url);
@@ -305,6 +321,9 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
       }
       return next;
     });
+    return () => {
+      for (const t of timers) window.clearTimeout(t);
+    };
   }, [pages, spreadIndex, spreads, anchor, settings.mode]);
 
   useEffect(() => {
@@ -720,7 +739,9 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
         onAnimationEnd={() => setSnap(null)}
       >
         {displayOrder(snap.pages, settings.rtl).map((p) =>
-          snap.urls[p] ? <img key={p} src={snap.urls[p]} alt="" draggable={false} /> : null,
+          snap.urls[p] ? (
+            <img key={p} src={snap.urls[p]} alt="" className="wr-img-instant" draggable={false} />
+          ) : null,
         )}
       </div>
     ) : null}
@@ -739,7 +760,15 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
     >
       {displayOrder(spreads[shownSpread ?? spreadIndex] ?? spreads[spreadIndex] ?? [], settings.rtl).map((p) =>
         urls[p] ? (
-          <img key={p} src={urls[p]} alt={"第 " + (p + 1) + " 页"} loading="lazy" decoding="async" draggable={false} />
+          <img
+            key={p}
+            src={urls[p]}
+            alt={"第 " + (p + 1) + " 页"}
+            className={reveal ? undefined : "wr-img-instant"}
+            loading="lazy"
+            decoding="async"
+            draggable={false}
+          />
         ) : failed.has(p) ? (
           <button key={p} type="button" className="wr-image-loading wr-image-failed" onClick={() => retry(p)}>
             本页加载失败，点击重试
