@@ -10,7 +10,6 @@ import {
   deleteBooks,
   deleteShelf,
   getSettings,
-  importBook,
   listBooks,
   listImageSubdirs,
   listShelves,
@@ -45,6 +44,7 @@ import {
   trashRemainingDays,
 } from "../library/shelves";
 import { DENSITY_PRESETS, normalizeLibraryDensity, type LibraryDensity } from "../library/density";
+import { BOOKS_CHANGED_EVENT, runImports } from "../library/importRunner";
 import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "../library/useCoverUrls";
 import { notifyBackgroundChanged, resetBackgroundCache } from "../ui/appBackground";
 import type { ReaderBackground } from "../reader/settings/types";
@@ -179,6 +179,13 @@ export default function LibraryPage() {
     setTrash(await listTrash());
   }
 
+  // 拖拽导入（壳层入口）与设置里清理封面后广播：列表/封面元数据可能已变
+  useEffect(() => {
+    const onChanged = () => void refresh();
+    window.addEventListener(BOOKS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(BOOKS_CHANGED_EVENT, onChanged);
+  }, []);
+
   useEffect(() => {
     refresh();
     getSettings()
@@ -310,6 +317,7 @@ export default function LibraryPage() {
     p.onConfirm(v);
   }
 
+  // 导入统一走 importRunner：逐本进度（壳顶进度条）+ 查重 + 四类结果汇总；刷新由 BOOKS_CHANGED_EVENT 监听兜底
   async function onImport() {
     if (loading) return;
     setLoading(true);
@@ -319,60 +327,12 @@ export default function LibraryPage() {
         filters: [{ name: "EPUB / TXT / CBZ", extensions: ["epub", "txt", "cbz"] }],
       });
       if (!selected) return;
-
       const paths = Array.isArray(selected) ? selected : [selected];
       if (paths.length === 0) return;
-
-      const failed: string[] = [];
-      for (const path of paths) {
-        try {
-          if (path.toLowerCase().endsWith(".cbz")) {
-            await importImageFolder(path, null);
-          } else {
-            await importBook({
-              source_path: path,
-              title: null,
-              author: null,
-              cover_bytes_base64: null,
-              cover_ext: null,
-            });
-          }
-        } catch (e) {
-          failed.push(path);
-          logFrontend(`ui: import failed ${path} ${String(e)}`);
-        }
-      }
-
-      if (failed.length) {
-        await showAlert(
-          "部分文件导入失败",
-          `${failed.length} 个文件未导入：\n${failed.join("\n")}\n仅支持 EPUB、TXT（UTF-8/GBK）与 CBZ 漫画`,
-        );
-      }
-
-      await refresh();
+      await runImports(paths);
     } finally {
       setLoading(false);
     }
-  }
-
-  // 逐本导入子目录（批量入口与误选父目录的兜底共用）：单项失败不中断，汇总 成功 N / 失败 M + 失败清单
-  async function importImageDirs(dirs: string[]) {
-    const failed: string[] = [];
-    for (const dir of dirs) {
-      try {
-        await importImageFolder(dir, null); // title=null → 取子目录名
-      } catch (e) {
-        failed.push(String(e)); // 错误串已含目录绝对路径与原因
-        logFrontend(`ui: batch import failed ${dir} ${String(e)}`);
-      }
-    }
-    await showAlert(
-      "批量导入",
-      failed.length === 0
-        ? `成功导入 ${dirs.length} 本`
-        : `成功 ${dirs.length - failed.length} 本，失败 ${failed.length} 个：\n${failed.join("\n")}`,
-    );
   }
 
   async function onImportImages() {
@@ -395,18 +355,17 @@ export default function LibraryPage() {
             `该文件夹内没有直接图片，但包含 ${subdirs.length} 个图片子文件夹。\n按每个子文件夹一本批量导入。`,
             { confirmText: "批量导入" },
           );
-          if (batch) await importImageDirs(subdirs);
+          if (batch) await runImports(subdirs);
         } else {
           await showAlert("导入失败", msg);
         }
       }
-      await refresh();
     } finally {
       setLoading(false);
     }
   }
 
-  // 批量导入：选父目录 → 每个一级子文件夹各导入一本漫画（空/无图目录服务端已过滤），失败逐个记日志不中断
+  // 批量导入：选父目录 → 每个一级子文件夹各导入一本漫画（空/无图目录服务端已过滤）
   async function onBatchImportImages() {
     const parent = await open({ directory: true, multiple: false, title: "选择漫画父目录（每个一级子文件夹导入一本）" });
     if (!parent || Array.isArray(parent)) return;
@@ -417,8 +376,7 @@ export default function LibraryPage() {
         await showAlert("批量导入", "父目录下没有包含图片的一级子文件夹");
         return;
       }
-      await importImageDirs(dirs);
-      await refresh();
+      await runImports(dirs);
     } catch (e) {
       await showAlert("批量导入失败", String(e));
     } finally {

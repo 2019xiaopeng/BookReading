@@ -203,6 +203,47 @@ export type ReadingState = {
   updated_at: number;
 };
 
+// ---- 存储（批次10）----
+
+export type StorageStats = {
+  library_root: string;
+  db_path: string;
+  library_bytes: number;
+  covers_bytes: number;
+  bg_bytes: number;
+  db_bytes: number;
+  logs_bytes: number;
+  trash_count: number;
+};
+
+export async function storageStats(): Promise<StorageStats> {
+  return invoke<StorageStats>("storage_stats");
+}
+
+// 成功返回汇总文案（含"重启生效"提示）；失败抛错且不写设置
+export async function migrateLibraryRoot(newRoot: string): Promise<string> {
+  return invoke<string>("migrate_library_root", { newRoot });
+}
+
+export type ClearCacheResult = { freed_bytes: number };
+
+// 可清类别：covers / bg / logs（books/db 后端拒绝）
+export async function clearCache(categories: string[]): Promise<ClearCacheResult> {
+  return invoke<ClearCacheResult>("clear_cache", { categories });
+}
+
+export type PathInfo = {
+  path: string;
+  name: string;
+  is_dir: boolean;
+  size: number;
+};
+
+// 批量导入前探针：webview 拿不到 is_dir / 文件大小，由主进程补齐
+export async function probePaths(paths: string[]): Promise<PathInfo[]> {
+  return invoke<PathInfo[]>("probe_paths", { paths });
+}
+
 export async function getReadingState(bookId: string): Promise<ReadingState | null> {
   return invoke<ReadingState | null>("get_reading_state", { bookId });
 }

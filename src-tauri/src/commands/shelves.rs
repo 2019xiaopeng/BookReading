@@ -152,7 +152,7 @@ fn list_trash_db(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
 }
 
 // 硬删单本：删复制入库的文件（library/ 相对路径）与封面；文件夹引用书不动源目录。文件失败不阻断 DB 清理。
-fn purge_book(conn: &Connection, data_dir: &Path, book_id: &str) -> Result<(), String> {
+fn purge_book(conn: &Connection, library_root: &Path, book_id: &str) -> Result<(), String> {
     let row: (String, Option<String>) = conn
         .query_row("SELECT library_path, cover_path FROM books WHERE id = ?1", [book_id], |r| {
             Ok((r.get(0)?, r.get(1)?))
@@ -162,10 +162,7 @@ fn purge_book(conn: &Connection, data_dir: &Path, book_id: &str) -> Result<(), S
     let to_abs = |rel: &str| -> Option<PathBuf> {
         let v = rel.replace('\\', "/");
         // 仅删库内文件：绝对路径是原地引用的漫画文件夹，不碰源
-        if !v.starts_with("library/") {
-            return None;
-        }
-        Some(data_dir.join(&v))
+        v.strip_prefix("library/").map(|rest| library_root.join(rest))
     };
     if let Some(abs) = to_abs(&row.0) {
         let _ = fs::remove_file(&abs);
@@ -343,9 +340,9 @@ pub fn purge_books(app: tauri::AppHandle, book_ids: Vec<String>) -> Result<(), S
         return Ok(());
     }
     let conn = db::open_db(&app)?;
-    let data_dir = app_paths::app_data_dir(&app)?;
+    let library_root = app_paths::library_dir(&app)?;
     for id in book_ids {
-        purge_book(&conn, &data_dir, &id)?;
+        purge_book(&conn, &library_root, &id)?;
     }
     Ok(())
 }
@@ -504,8 +501,8 @@ mod tests {
         )
         .unwrap();
 
-        purge_book(&conn, &dir, "b1").unwrap();
-        purge_book(&conn, &dir, "b2").unwrap();
+        purge_book(&conn, &dir.join("library"), "b1").unwrap();
+        purge_book(&conn, &dir.join("library"), "b2").unwrap();
 
         assert!(!books_dir.join("b1.epub").exists());
         assert!(!covers_dir.join("b1.jpg").exists());
@@ -527,7 +524,7 @@ mod tests {
         conn.execute("UPDATE books SET deleted_at = ?1 WHERE id = 'b1'", params![now - 31 * 86400]).unwrap();
 
         // 默认 30 天：31 天前删除 → 清掉
-        purge_expired_trash(&conn, &dir, now).unwrap();
+        purge_expired_trash(&conn, &dir.join("library"), now).unwrap();
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM books", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 0);
         assert!(!dir.join("library/books").join("b1.epub").exists());
@@ -543,7 +540,7 @@ mod tests {
             params![TRASH_RETENTION_KEY],
         )
         .unwrap();
-        purge_expired_trash(&conn, &dir, now).unwrap();
+        purge_expired_trash(&conn, &dir.join("library"), now).unwrap();
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM books", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 1);
 
@@ -554,7 +551,7 @@ mod tests {
             params![TRASH_RETENTION_KEY],
         )
         .unwrap();
-        purge_expired_trash(&conn, &dir, now).unwrap();
+        purge_expired_trash(&conn, &dir.join("library"), now).unwrap();
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM books", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 0);
         let _ = fs::remove_dir_all(&dir);

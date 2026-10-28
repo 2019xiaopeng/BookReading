@@ -34,6 +34,12 @@ export function invalidateCoverUrl(path: string): void {
   notify(path);
 }
 
+// 清理封面缓存后全量失效：重拷/置空会让同 path 的内容或有无发生变化，缓存无法自愈
+export function invalidateAllCoverUrls(): void {
+  const paths = [...urlCache.keys()];
+  for (const path of paths) invalidateCoverUrl(path);
+}
+
 export function requestCoverUrl(path: string): void {
   if (urlCache.has(path) || inflight.has(path)) return;
   if ((failedAttempts.get(path) ?? 0) >= COVER_MAX_ATTEMPTS) return;

@@ -16,10 +16,11 @@ export function tagDotColor(color: string | null): string {
   return color ?? "var(--wr-accent)";
 }
 
-// 文件大小：KB/MB 格式化（详情页与统计行共用）
+// 文件大小：KB/MB/GB 格式化（详情页、统计行与存储占用共用）
 export function formatFileSize(bytes: number | null): string {
   if (bytes == null || bytes < 0) return "—";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }

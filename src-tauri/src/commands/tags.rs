@@ -259,10 +259,11 @@ fn path_size_bytes(p: &Path) -> Option<u64> {
 }
 
 // v1 只算 file_size（库内文件或文件夹源）；content_chars 列已建但不填，详情页显示 —
-fn compute_book_size(conn: &Connection, data_dir: &Path, book: &Book) -> Result<(), String> {
+// library_root 参数是当前库根（"library/..." 相对路径的锚点）
+fn compute_book_size(conn: &Connection, library_root: &Path, book: &Book) -> Result<(), String> {
     let rel = book.library_path.replace('\\', "/");
-    let abs: PathBuf = if rel.starts_with("library/") {
-        data_dir.join(&rel)
+    let abs: PathBuf = if let Some(rest) = rel.strip_prefix("library/") {
+        library_root.join(rest)
     } else if Path::new(&rel).is_absolute() {
         PathBuf::from(&rel)
     } else {
@@ -330,7 +331,7 @@ pub fn add_tags_to_books(app: tauri::AppHandle, book_ids: Vec<String>, tag_ids: 
 pub fn compute_book_stats(app: tauri::AppHandle, book_id: String) -> Result<Book, String> {
     let conn = db::open_db(&app)?;
     let book = fetch_book_by_id(&conn, &book_id).map_err(|e| format!("failed to fetch book: {e}"))?;
-    compute_book_size(&conn, &app_paths::app_data_dir(&app)?, &book)?;
+    compute_book_size(&conn, &app_paths::library_dir(&app)?, &book)?;
     fetch_book_by_id(&conn, &book_id).map_err(|e| format!("failed to fetch book: {e}"))
 }
 
@@ -541,7 +542,7 @@ mod tests {
 
         for id in ["b1", "b2", "b3"] {
             let book = fetch_book_by_id(&conn, id).unwrap();
-            compute_book_size(&conn, &dir, &book).unwrap();
+            compute_book_size(&conn, &dir.join("library"), &book).unwrap();
         }
 
         let size = |id: &str| -> Option<i64> {

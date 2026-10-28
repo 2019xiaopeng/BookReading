@@ -44,10 +44,10 @@ pub(crate) fn require_library_rel(p: &str) -> Result<&str, String> {
     Ok(p)
 }
 
-fn abs_from_appdata_rel(app: &tauri::AppHandle, rel: &str) -> Result<PathBuf, String> {
+fn abs_from_library_rel(app: &tauri::AppHandle, rel: &str) -> Result<PathBuf, String> {
     let rel = rel.replace('\\', "/");
     require_library_rel(&rel)?;
-    Ok(app_paths::app_data_dir(app)?.join(rel))
+    app_paths::library_abs(app, &rel)
 }
 
 pub(crate) fn atomic_copy_to(src: &str, tmp: &Path, final_path: &Path) -> Result<(), String> {
@@ -243,7 +243,7 @@ pub fn repair_book_metadata(app: tauri::AppHandle, book_id: String) -> Result<Bo
 
     let mut cover_path = existing.cover_path.clone();
     if let Some(rel) = cover_path.as_deref() {
-        if let Ok(abs) = abs_from_appdata_rel(&app, rel) {
+        if let Ok(abs) = abs_from_library_rel(&app, rel) {
             if !abs.exists() {
                 cover_path = None;
             }
@@ -486,7 +486,7 @@ pub fn delete_book(app: tauri::AppHandle, book_id: String) -> Result<(), String>
     let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
 
     if let Some(rel) = library_path.as_deref() {
-        if let Ok(abs) = abs_from_appdata_rel(&app, rel) {
+        if let Ok(abs) = abs_from_library_rel(&app, rel) {
             if abs.exists() {
                 let ext = abs.extension().and_then(|e| e.to_str()).unwrap_or("epub");
                 let trash = trash_dir.join(format!("{}-{}.{}", book_id, Uuid::new_v4(), ext));
@@ -502,7 +502,7 @@ pub fn delete_book(app: tauri::AppHandle, book_id: String) -> Result<(), String>
     }
 
     if let Some(rel) = cover_path.as_deref() {
-        if let Ok(abs) = abs_from_appdata_rel(&app, rel) {
+        if let Ok(abs) = abs_from_library_rel(&app, rel) {
             if abs.exists() {
                 let ext = abs.extension().and_then(|e| e.to_str()).unwrap_or("img");
                 let trash = trash_dir.join(format!("{}-{}.{}", book_id, Uuid::new_v4(), ext));

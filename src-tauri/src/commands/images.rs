@@ -66,7 +66,7 @@ fn nat_cmp(a: &str, b: &str) -> Ordering {
 }
 
 // 单层遍历（不递归），只收图片文件，按文件名自然排序
-fn folder_image_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn folder_image_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
         .map_err(|e| format!("failed to read dir {}: {e}", dir.display()))?
         .filter_map(|entry| entry.ok().map(|e| e.path()))
@@ -130,7 +130,7 @@ fn resolve_image_source(app: &tauri::AppHandle, book: &Book) -> Result<ImageSour
         .map_or(false, |e| e.eq_ignore_ascii_case("cbz"))
     {
         require_library_rel(&lp)?;
-        Ok(ImageSource::Cbz(app_paths::app_data_dir(app)?.join(&lp)))
+        Ok(ImageSource::Cbz(app_paths::library_abs(app, &lp)?))
     } else {
         Ok(ImageSource::Folder(PathBuf::from(&lp)))
     }

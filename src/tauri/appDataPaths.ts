@@ -1,5 +1,5 @@
 import { appDataDir } from "@tauri-apps/api/path";
-import { BaseDirectory, readFile } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
 
 import { coerceToLibraryRelPath } from "./libraryPath";
 
@@ -23,14 +23,14 @@ export function isSafeRelPath(rel: string): boolean {
   return v.length > 0;
 }
 
+// 库根可配置后，"library/..." 相对路径必须由主进程按当前库根解析（AppData baseDir 只在默认根下成立）
 export async function readAppDataFile(rel: string): Promise<Uint8Array> {
-  const input = rel;
-
   const base = await getAppDataBase();
-  const coerced = coerceToLibraryRelPath(input, base);
-  const v = coerced ? normalizeAppDataRelPath(coerced) : normalizeAppDataRelPath(input);
-  if (!isSafeRelPath(v)) throw new Error(`invalid relative path: ${input}`);
-  return readFile(v, { baseDir: BaseDirectory.AppData });
+  const coerced = coerceToLibraryRelPath(rel, base);
+  const v = coerced ? normalizeAppDataRelPath(coerced) : normalizeAppDataRelPath(rel);
+  if (!isSafeRelPath(v)) throw new Error(`invalid relative path: ${rel}`);
+  const res = await invoke<ArrayBuffer | number[]>("read_library_file", { rel: v });
+  return new Uint8Array(res);
 }
 
 export function extToMime(ext: string | null): string {

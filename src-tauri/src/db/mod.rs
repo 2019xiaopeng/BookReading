@@ -28,10 +28,10 @@ pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
     migrations::migrate_book_paths_to_appdata_relative(&conn, app)?;
     migrations::migrate_groups_to_shelves(&conn)?;
     // 回收站到期自动清理（保留期 0 = 永不）；启动失败不阻断应用
-    if let Ok(data_dir) = app_paths::app_data_dir(app) {
+    if let Ok(library_dir) = app_paths::library_dir(app) {
         let _ = commands::shelves::purge_expired_trash(
             &conn,
-            &data_dir,
+            &library_dir,
             OffsetDateTime::now_utc().unix_timestamp(),
         );
     }

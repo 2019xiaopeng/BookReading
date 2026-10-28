@@ -1,11 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { IconBook, IconPalette, IconSearch, IconStar, IconTrash } from "./icons";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { IconBook, IconPalette, IconSearch, IconSettings, IconStar, IconTrash } from "./icons";
 import { getBackgroundUrl, subscribeBackground } from "./appBackground";
 import { applyPersistedTheme, setTheme, THEME_SWATCHES, useTheme } from "./theme";
 import { getSettings, listShelves, type Shelf } from "../tauri/invoke";
 import { normalizeReaderBackground } from "../reader/settings/normalize";
 import { shelfTreeRows } from "../library/shelves";
+import { runImports, subscribeImportProgress, type ImportProgress } from "../library/importRunner";
+import SettingsDialog from "./SettingsDialog";
 
 // 六个 30px 色块 + 5*8 间距 + 12 内边距 + 2 边框
 const THEME_MENU_WIDTH = 234;
@@ -32,6 +35,9 @@ export default function AppShell(props: {
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const [themeMenu, setThemeMenu] = useState<{ x: number; y: number } | null>(null);
   const [shelves, setShelves] = useState<Shelf[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [importProgress, setImportProgress] = useState<ImportProgress>(null);
   const themeBtnRef = useRef<HTMLButtonElement | null>(null);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
   const [searchParams] = useSearchParams();
@@ -76,6 +82,25 @@ export default function AppShell(props: {
     return () => {
       cancelled = true;
       window.removeEventListener("focus", load);
+    };
+  }, []);
+
+  // 批量/拖拽导入进度条（importRunner 模块单例广播）
+  useEffect(() => subscribeImportProgress(setImportProgress), []);
+
+  // OS 文件拖入：Tauri 2 默认接管 webview 拖放（HTML5 drop 不触发，浏览器"打开文件"默认行为被拦），
+  // 拿到的是绝对路径——文件走统一导入流，目录按"一本漫画文件夹"
+  useEffect(() => {
+    const unlisten = getCurrentWebview().onDragDropEvent((e) => {
+      if (e.payload.type === "drop") {
+        setDragOver(false);
+        if (e.payload.paths.length > 0) void runImports(e.payload.paths);
+      } else {
+        setDragOver(e.payload.type !== "leave");
+      }
+    });
+    return () => {
+      void unlisten.then((f) => f());
     };
   }, []);
 
@@ -176,7 +201,13 @@ export default function AppShell(props: {
           </button>
         </div>
 
-        {props.sidebarFooter ? <div className="wr-side-bottom">{props.sidebarFooter}</div> : null}
+        <div className="wr-side-bottom">
+          {props.sidebarFooter}
+          <button className="wr-small-btn" onClick={() => setSettingsOpen(true)}>
+            <IconSettings />
+            <span>设置</span>
+          </button>
+        </div>
       </div>
 
       <div className="wr-panel wr-main">
@@ -258,6 +289,26 @@ export default function AppShell(props: {
           ))}
         </div>
       ) : null}
+
+      {dragOver ? (
+        <div className="wr-drop-overlay" role="status">
+          <div className="wr-drop-hint">松开导入 · EPUB / TXT / CBZ / 漫画文件夹</div>
+        </div>
+      ) : null}
+
+      {importProgress ? (
+        <div className="wr-import-bar" role="status" aria-live="polite">
+          <div
+            className="wr-import-bar-fill"
+            style={{ width: `${(importProgress.done / importProgress.total) * 100}%` }}
+          />
+          <span className="wr-import-bar-text">
+            导入 {importProgress.done}/{importProgress.total} · {importProgress.current}
+          </span>
+        </div>
+      ) : null}
+
+      {settingsOpen ? <SettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
     </div>
   );
 }

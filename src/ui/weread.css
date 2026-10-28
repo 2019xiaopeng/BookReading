@@ -2016,6 +2016,150 @@ input[type="range"]:focus-visible {
   overflow: auto;
 }
 
+/* 批次10 设置对话框：分组标题 + 占用/只读行 + 快捷键表 */
+.wr-settings-group {
+  margin-top: 14px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--wr-muted);
+}
+
+.wr-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--wr-hairline);
+}
+
+.wr-settings-row:last-of-type {
+  border-bottom: none;
+}
+
+.wr-settings-label {
+  flex-shrink: 0;
+  min-width: 88px;
+  font-weight: 600;
+}
+
+.wr-settings-hint {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--wr-muted);
+}
+
+.wr-settings-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--wr-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wr-settings-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--wr-muted);
+}
+
+.wr-settings-check input {
+  accent-color: var(--wr-accent);
+}
+
+.wr-kbd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.wr-kbd-table th {
+  width: 48px;
+  padding: 6px 12px 6px 0;
+  text-align: left;
+  vertical-align: top;
+  font-weight: 600;
+  color: var(--wr-muted);
+}
+
+.wr-kbd-table td {
+  padding: 6px 0;
+  line-height: 1.7;
+  color: var(--wr-muted);
+}
+
+.wr-kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--wr-hairline);
+  border-radius: var(--wr-radius-xs);
+  background: rgba(var(--wr-ink-rgb), 0.04);
+  font-size: 12px;
+  color: var(--wr-ink);
+}
+
+/* 批次10 OS 拖放全屏 overlay：pointer-events:none 保证松手事件仍落到窗口 */
+.wr-drop-overlay {
+  position: fixed;
+  inset: 10px;
+  z-index: var(--wr-z-overlay);
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--wr-accent);
+  border-radius: var(--wr-radius-lg);
+  background: color-mix(in srgb, var(--wr-bg) 78%, transparent);
+  animation: wr-fade-in 160ms ease both;
+  pointer-events: none;
+}
+
+.wr-drop-hint {
+  padding: 14px 24px;
+  border: 1px solid var(--wr-hairline);
+  border-radius: var(--wr-radius-md);
+  background: var(--wr-paper);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+/* 批次10 导入进度浮条：壳顶居中，宽度即 i/N */
+.wr-import-bar {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--wr-z-hud);
+  min-width: 240px;
+  max-width: min(480px, calc(100vw - 32px));
+  padding: 7px 14px;
+  border: 1px solid var(--wr-hairline);
+  border-radius: 999px;
+  background: var(--wr-paper);
+  box-shadow: var(--wr-shadow-pop);
+  overflow: hidden;
+  animation: wr-menu-in 150ms ease both;
+}
+
+.wr-import-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgba(var(--wr-accent-rgb), 0.16);
+  transition: width 200ms ease;
+}
+
+.wr-import-bar-text {
+  position: relative;
+  display: block;
+  font-size: 13px;
+  color: var(--wr-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* 详情布局：左封面 + 右表单/统计 */
 .wr-details {
   display: grid;
