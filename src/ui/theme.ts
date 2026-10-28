@@ -23,7 +23,12 @@ let touched = false; // 本会话用户改过主题后，不再用 DB 旧值覆�
 const listeners = new Set<() => void>();
 
 function applyDom(t: Theme) {
-  if (typeof document !== "undefined") document.documentElement.dataset.theme = t;
+  if (typeof document === "undefined") return;
+  document.documentElement.dataset.theme = t;
+  // 原生弹层（select option 列表/滚动条）跟随 color-scheme；个别 WebView2 运行时对样式表里的
+  // color-scheme 缓存不稳，内联直写兜底（tokens.css/weread.css 已有六主题映射，此处双保险）
+  const style = document.documentElement.style;
+  if (style) style.colorScheme = t === "dark" || t === "darkcontrast" ? "dark" : "light";
 }
 
 function commit(t: Theme) {

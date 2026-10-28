@@ -188,17 +188,19 @@
   padding: 12px;
 }
 
+/* 批次12b：原生 select 弹层底取 select 的 background-color——半透明值在 WebView2 上
+   与白色基底合成成白底，夜间主题白字不可见；换不透明 panel-solid 让弹层与主题实底一致 */
 .wr-select {
   border: 1px solid var(--wr-hairline);
   border-radius: var(--wr-radius-md);
   padding: 10px 12px;
-  background: rgba(var(--wr-ink-rgb), 0.03);
+  background: var(--panel-solid);
   color: var(--wr-ink);
 }
 
-[data-theme="dark"] .wr-select,
-[data-theme="darkcontrast"] .wr-select {
-  background: rgba(var(--wr-ink-rgb), 0.06);
+.wr-select option {
+  background: var(--panel-solid);
+  color: var(--wr-ink);
 }
 
 .wr-textarea {
@@ -282,6 +284,35 @@
 [data-theme="dark"] .wr-pill,
 [data-theme="darkcontrast"] .wr-pill {
   background: rgba(var(--wr-ink-rgb), 0.06);
+}
+
+/* 批次12b：绿色活跃点回归（侧栏"本地库"与书卡"读到%"chip 前各一枚，别处不加） */
+.wr-live-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--wr-accent);
+  box-shadow: 0 0 6px rgba(var(--wr-accent-rgb), 0.65);
+  animation: wr-live-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes wr-live-breathe {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 5px rgba(var(--wr-accent-rgb), 0.5);
+  }
+  50% {
+    opacity: 0.72;
+    box-shadow: 0 0 10px rgba(var(--wr-accent-rgb), 0.9);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wr-live-dot {
+    animation: none;
+  }
 }
 
 .wr-nav {
@@ -1295,23 +1326,34 @@
   padding: 16px 18px 0;
 }
 
-/* 批次11b：书架卡封面=四宫格前 4 本书封；不足 4 格露出 .wr-cover 主题渐变占位 */
+/* 批次11b：书架卡封面=四宫格前 4 本书封；不足 4 格露出 .wr-cover 主题渐变占位。
+   批次12b：格距 3px + 每格 1px 内描边 + 底部内阴影——四图贴太紧无层次（外框/圆角由 .wr-cover 本身给出） */
 .wr-shelf-grid {
   position: absolute;
   inset: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
-  gap: 1px;
+  gap: 3px;
 }
 
 .wr-shelf-grid img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px var(--wr-hairline);
 }
 
-/* 超过 4 本时右下角 +N 徽标 */
+.wr-shelf-grid::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 -12px 16px -10px rgba(0, 0, 0, 0.28);
+}
+
+/* 超过 4 本时右下角 +N 徽标：墨色半透实底压得住任何封面，文字反色保对比 */
 .wr-shelf-badge {
   position: absolute;
   right: 4px;
@@ -1319,9 +1361,10 @@
   z-index: 2;
   padding: 1px 6px;
   border-radius: 999px;
-  background: var(--panel-solid);
-  color: var(--wr-muted);
+  background: rgba(var(--wr-ink-rgb), 0.78);
+  color: var(--wr-bg);
   font-size: 10px;
+  font-weight: 600;
   line-height: 1.5;
 }
 
@@ -1353,7 +1396,55 @@
   transform: scale(1.02);
 }
 
-/* 拖起后原卡淡出+虚线占位（ghost 是原生整卡截图） */
+/* 批次12b：拖拽改 Pointer Events——禁卡内文本选择/图片原生拖拽（原生 img 拖拽会抢走指针流） */
+.wr-book-card {
+  user-select: none;
+}
+
+.wr-book-card img,
+.wr-shelf-grid img,
+.wr-trash-cover img {
+  -webkit-user-drag: none;
+}
+
+body.wr-card-dragging,
+body.wr-card-dragging * {
+  cursor: grabbing !important;
+}
+
+/* 拖拽自绘 ghost：跟指针的小卡片（封面缩略 + 名称），pointer-events 穿透不挡命中测试 */
+.wr-drag-ghost {
+  position: fixed;
+  z-index: var(--wr-z-hud);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 240px;
+  padding: 5px 10px 5px 5px;
+  border: 1px solid var(--wr-hairline);
+  border-radius: var(--wr-radius-md);
+  background: var(--panel-solid);
+  color: var(--wr-ink);
+  font-size: 12px;
+  box-shadow: var(--wr-shadow-pop);
+  pointer-events: none;
+  opacity: 0.94;
+}
+
+.wr-drag-ghost img {
+  width: 30px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 3px;
+}
+
+.wr-drag-ghost span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 拖起后原卡淡出+虚线占位（拖拽 ghost 由 .wr-drag-ghost 自绘） */
 .wr-book-card[data-dragging="true"] {
   opacity: 0.35;
   border-style: dashed;
@@ -1992,7 +2083,8 @@ input[type="range"]:focus-visible {
   display: inline-block;
 }
 
-/* 标签弹层：筛选下拉与详情联想共用；inline 变体锚在输入框下方 */
+/* 标签弹层：筛选下拉与详情联想共用；inline 变体锚在输入框下方。
+   批次12b：显式落 ink（原先只靠继承）——与 .wr-menu 同语言，深色下文字/底色均随主题 */
 .wr-tag-pop {
   position: absolute;
   top: calc(100% + 6px);
@@ -2008,6 +2100,7 @@ input[type="range"]:focus-visible {
   border: 1px solid var(--wr-hairline);
   border-radius: var(--wr-radius-lg);
   background: var(--panel-solid);
+  color: var(--wr-ink);
   box-shadow: var(--wr-shadow-pop);
   animation: wr-menu-in 150ms ease both;
 }

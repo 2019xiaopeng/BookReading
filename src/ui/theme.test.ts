@@ -7,6 +7,7 @@ vi.mock("../tauri/invoke", () => ({ setSetting: setSettingMock }));
 // store 在 import 时同步读 localStorage / 写 document，先装 stub 再动态 import
 const storage = new Map<string, string>();
 const dataset: Record<string, string> = {};
+const style: Partial<CSSStyleDeclaration> = {};
 let theme: typeof import("./theme");
 
 beforeAll(async () => {
@@ -14,7 +15,7 @@ beforeAll(async () => {
     getItem: (k: string) => storage.get(k) ?? null,
     setItem: (k: string, v: string) => void storage.set(k, v),
   });
-  vi.stubGlobal("document", { documentElement: { dataset } });
+  vi.stubGlobal("document", { documentElement: { dataset, style } });
   theme = await import("./theme");
 });
 
@@ -43,5 +44,15 @@ describe("theme store", () => {
   test("user-touched theme is not overwritten by later DB reads", () => {
     theme.applyPersistedTheme("dark");
     expect(theme.getTheme()).toBe("sepia");
+  });
+
+  // 批次12b：原生弹层 color-scheme 内联同步——两枚夜间主题 dark，其余 light
+  test("colorScheme inline style maps dark themes", () => {
+    theme.setTheme("dark");
+    expect(style.colorScheme).toBe("dark");
+    theme.setTheme("darkcontrast");
+    expect(style.colorScheme).toBe("dark");
+    theme.setTheme("sepia");
+    expect(style.colorScheme).toBe("light");
   });
 });

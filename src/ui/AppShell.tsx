@@ -1,17 +1,61 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { IconBook, IconPalette, IconSearch, IconSettings, IconStar, IconTrash } from "./icons";
-import { getBackgroundUrl, subscribeBackground } from "./appBackground";
+import { getCachedBackgroundUrl, getBackgroundUrl, subscribeBackground } from "./appBackground";
 import { applyPersistedTheme, setTheme, THEME_SWATCHES, useTheme } from "./theme";
 import { getSettings, listShelves, type Shelf } from "../tauri/invoke";
 import { normalizeReaderBackground } from "../reader/settings/normalize";
 import { shelfTreeRows } from "../library/shelves";
-import { runImports, subscribeImportProgress, type ImportProgress } from "../library/importRunner";
+import { BOOKS_CHANGED_EVENT, runImports, subscribeImportProgress, type ImportProgress } from "../library/importRunner";
 import SettingsDialog from "./SettingsDialog";
 
 // 六个 30px 色块 + 5*8 间距 + 12 内边距 + 2 边框
 const THEME_MENU_WIDTH = 234;
+
+// 侧栏书架树模块级单例（批次12b）：每页各渲染一个 AppShell，路由切换整树重挂曾是闪烁根因；
+// 数据上提后重挂首帧即有旧值，LibraryPage.refresh 推写，导入事件兜底（LibraryPage 卸载时也能刷新）
+let shelvesCache: Shelf[] = [];
+let shelvesLoaded = false;
+let shelvesInflight: Promise<void> | null = null;
+const shelvesListeners = new Set<() => void>();
+let shelvesEventBound = false;
+
+export function setShelvesCache(list: Shelf[]): void {
+  shelvesCache = list;
+  shelvesLoaded = true;
+  for (const l of shelvesListeners) l();
+}
+
+function loadShelves(): Promise<void> {
+  shelvesInflight ??= listShelves()
+    .then(setShelvesCache)
+    .catch(() => {
+      // DB 不可达：侧栏不渲染书架树
+    })
+    .finally(() => {
+      shelvesInflight = null;
+    });
+  return shelvesInflight;
+}
+
+function subscribeShelves(fn: () => void): () => void {
+  shelvesListeners.add(fn);
+  if (!shelvesEventBound && typeof window !== "undefined") {
+    shelvesEventBound = true;
+    window.addEventListener(BOOKS_CHANGED_EVENT, () => void loadShelves());
+  }
+  return () => {
+    shelvesListeners.delete(fn);
+  };
+}
+
+export function useShellShelves(): Shelf[] {
+  useEffect(() => {
+    if (!shelvesLoaded) void loadShelves();
+  }, []);
+  return useSyncExternalStore(subscribeShelves, () => shelvesCache, () => shelvesCache);
+}
 
 export default function AppShell(props: {
   active: "library" | "favorites" | "reader";
@@ -32,9 +76,10 @@ export default function AppShell(props: {
 }) {
   const navigate = useNavigate();
   const theme = useTheme();
-  const [bgUrl, setBgUrl] = useState<string | null>(null);
+  // 首帧命中背景单槽缓存：路由切换重挂不再闪回无背景（DB 纠偏仍走下方 load）
+  const [bgUrl, setBgUrl] = useState<string | null>(getCachedBackgroundUrl);
   const [themeMenu, setThemeMenu] = useState<{ x: number; y: number } | null>(null);
-  const [shelves, setShelves] = useState<Shelf[]>([]);
+  const shelves = useShellShelves();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [importProgress, setImportProgress] = useState<ImportProgress>(null);
@@ -62,26 +107,6 @@ export default function AppShell(props: {
     return () => {
       cancelled = true;
       off();
-    };
-  }, []);
-
-  // 侧栏书架树：与书库同源（shelves 表）；挂载+窗口聚焦刷新
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const list = await listShelves();
-        if (cancelled) return;
-        setShelves(list);
-      } catch {
-        // DB 不可达：侧栏不渲染书架树
-      }
-    };
-    void load();
-    window.addEventListener("focus", load);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", load);
     };
   }, []);
 
@@ -157,6 +182,7 @@ export default function AppShell(props: {
             <div className="wr-brand-sub">weread-inspired</div>
           </div>
           <div className="wr-pill" title="状态">
+            <span className="wr-live-dot" aria-hidden="true" />
             <span style={{ fontSize: 12 }}>本地库</span>
           </div>
         </div>

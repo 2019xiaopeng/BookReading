@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -49,7 +49,7 @@ import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "../library/us
 import { notifyBackgroundChanged, resetBackgroundCache } from "../ui/appBackground";
 import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
-import AppShell from "../ui/AppShell";
+import AppShell, { setShelvesCache, useShellShelves } from "../ui/AppShell";
 import { showAlert, showConfirm } from "../ui/dialog";
 import { IconBook, IconFolder, IconImage, IconMore, IconPin, IconRefresh, IconTrash } from "../ui/icons";
 
@@ -87,7 +87,8 @@ export default function LibraryPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [books, setBooks] = useState<Book[]>([]);
-  const [shelves, setShelves] = useState<Shelf[]>([]);
+  // 书架树与侧栏同源（AppShell 模块单例）：本页增删改后 refresh 推写，两侧零闪烁同步
+  const shelves = useShellShelves();
   const [tags, setTags] = useState<Tag[]>([]);
   const [trash, setTrash] = useState<Book[]>([]);
   const [retentionDays, setRetentionDays] = useState(30);
@@ -185,7 +186,7 @@ export default function LibraryPage() {
   async function refresh() {
     const [list, shelfList, tagList] = await Promise.all([listBooks(), listShelves(), listTags()]);
     setBooks(list);
-    setShelves(shelfList);
+    setShelvesCache(shelfList);
     setTags(tagList);
   }
 
@@ -620,40 +621,148 @@ export default function LibraryPage() {
     }
   }
 
-  function dropOnShelf(e: DragEvent<HTMLElement>, shelfId: number | null) {
-    e.currentTarget.classList.remove("drop-target");
-    e.preventDefault();
-    if (dragBookId) {
-      void moveDroppedBook(dragBookId, shelfId);
+  // 拖拽载荷：书卡或书架卡（pointer 实现，见 startCardDrag）
+  type CardDrag =
+    | { kind: "book"; id: string; label: string; cover?: string }
+    | { kind: "shelf"; id: number; label: string };
+
+  const [dragGhost, setDragGhost] = useState<{ x: number; y: number; label: string; cover?: string; shelf: boolean } | null>(null);
+  // ghost 位置直写 DOM：pointermove 每帧只改 left/top，不触发整页重渲
+  const dragGhostRef = useRef<HTMLDivElement | null>(null);
+
+  // 拖动过的这次按压不能让 click 透传（同卡上按下-拖动-松开会触发 onClick 进阅读器）
+  function suppressNextClick() {
+    const stop = (ev: MouseEvent) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      window.removeEventListener("click", stop, true);
+    };
+    window.addEventListener("click", stop, true);
+  }
+
+  function dropOnShelf(drag: CardDrag, shelfId: number | null) {
+    if (drag.kind === "book") {
+      void moveDroppedBook(drag.id, shelfId);
       if (shelfId != null) popCard(`shelf:${shelfId}`);
     } else if (
-      dragShelfId != null &&
       sortKey === "custom" &&
       shelfId != null &&
-      dragShelfId !== shelfId &&
+      drag.id !== shelfId &&
       subShelves.some((s) => s.id === shelfId)
     ) {
       const ids = subShelves.map((s) => s.id);
-      const rest = ids.filter((id) => id !== dragShelfId);
+      const rest = ids.filter((id) => id !== drag.id);
       const to = rest.indexOf(shelfId);
-      rest.splice(to < 0 ? rest.length : to, 0, dragShelfId);
-      popCard(`shelf:${dragShelfId}`);
+      rest.splice(to < 0 ? rest.length : to, 0, drag.id);
+      popCard(`shelf:${drag.id}`);
       void persistOrder(rest, setShelfOrder);
     }
-    setDragBookId(null);
-    setDragShelfId(null);
   }
 
-  function dropOnBook(e: DragEvent<HTMLElement>, target: Book) {
-    e.currentTarget.classList.remove("drop-target");
-    if (sortKey !== "custom" || !dragBookId || dragBookId === target.id) return;
-    e.preventDefault();
-    const rest = booksFiltered.map((b) => b.id).filter((id) => id !== dragBookId);
+  function dropOnBook(bookId: string, target: Book) {
+    if (sortKey !== "custom" || bookId === target.id) return;
+    const rest = booksFiltered.map((b) => b.id).filter((id) => id !== bookId);
     const to = rest.indexOf(target.id);
-    rest.splice(to < 0 ? rest.length : to, 0, dragBookId);
-    popCard(`book:${dragBookId}`);
+    rest.splice(to < 0 ? rest.length : to, 0, bookId);
+    popCard(`book:${bookId}`);
     void persistOrder(rest, setBooksOrder);
-    setDragBookId(null);
+  }
+
+  function canDropOn(target: HTMLElement, drag: CardDrag): boolean {
+    const mode = target.dataset.drop;
+    if (drag.kind === "book") {
+      if (mode === "shelf") return true;
+      return mode === "book" && sortKey === "custom" && drag.id !== target.dataset.bookId;
+    }
+    if (mode !== "shelf" || sortKey !== "custom") return false;
+    const sid = target.dataset.shelfId;
+    const n = sid && sid !== "" ? Number(sid) : null;
+    return n != null && n !== drag.id && subShelves.some((s) => s.id === n);
+  }
+
+  // Tauri2 默认接管 webview 拖放（OS 文件拖入要靠它拿绝对路径），Windows 上 HTML5 DnD 全程红圈；
+  // 内部拖拽改走 Pointer Events：>5px 视为拖起，elementFromPoint 命中 [data-drop] 目标，自绘 ghost
+  function startCardDrag(e: ReactPointerEvent<HTMLElement>, drag: CardDrag) {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button, input, select")) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let started = false;
+    let over: HTMLElement | null = null;
+
+    function setOver(next: HTMLElement | null) {
+      if (next === over) return;
+      over?.classList.remove("drop-target");
+      next?.classList.add("drop-target");
+      over = next;
+    }
+
+    function cleanup() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", cleanup);
+      window.removeEventListener("keydown", onKey);
+      setOver(null);
+      document.body.classList.remove("wr-card-dragging");
+      setDragGhost(null);
+      setDragBookId(null);
+      setDragShelfId(null);
+    }
+
+    function onMove(ev: PointerEvent) {
+      if (!started) {
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 5) return;
+        started = true;
+        if (drag.kind === "book") setDragBookId(drag.id);
+        else setDragShelfId(drag.id);
+        document.body.classList.add("wr-card-dragging");
+        setDragGhost({
+          x: ev.clientX,
+          y: ev.clientY,
+          label: drag.label,
+          cover: drag.kind === "book" ? drag.cover : undefined,
+          shelf: drag.kind === "shelf",
+        });
+      }
+      const g = dragGhostRef.current;
+      if (g) {
+        g.style.left = `${ev.clientX + 14}px`;
+        g.style.top = `${ev.clientY + 10}px`;
+      }
+      const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+      const t = hit instanceof HTMLElement ? hit.closest<HTMLElement>("[data-drop]") : null;
+      setOver(t && canDropOn(t, drag) ? t : null);
+    }
+
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key !== "Escape") return;
+      if (started) suppressNextClick(); // 按住中取消，松开时仍可能落在源卡上触发 click
+      cleanup();
+    }
+
+    function onUp() {
+      const target = over;
+      const was = started;
+      if (was) suppressNextClick();
+      cleanup();
+      if (!was || !target) return;
+      const sid = target.dataset.shelfId;
+      const shelfId = sid && sid !== "" ? Number(sid) : null;
+      if (drag.kind === "book") {
+        if (target.dataset.drop === "shelf") dropOnShelf(drag, shelfId);
+        else {
+          const targetBook = booksFiltered.find((b) => b.id === target.dataset.bookId);
+          if (targetBook) dropOnBook(drag.id, targetBook);
+        }
+      } else {
+        dropOnShelf(drag, shelfId);
+      }
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", cleanup);
+    window.addEventListener("keydown", onKey);
   }
 
   // ---- 批量选择 ----
@@ -909,16 +1018,11 @@ export default function LibraryPage() {
         <div className="wr-group-row" role="group" aria-label="书架路径">
           <button
             className="wr-group-chip"
+            data-drop="shelf"
+            data-shelf-id=""
             data-active={currentShelfId == null}
             aria-current={currentShelfId == null ? "page" : undefined}
             onClick={() => navigate("/")}
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = "move";
-            }}
-            onDragEnter={(e) => e.currentTarget.classList.add("drop-target")}
-            onDragLeave={(e) => e.currentTarget.classList.remove("drop-target")}
-            onDrop={(e) => dropOnShelf(e, null)}
           >
             全部
           </button>
@@ -926,16 +1030,11 @@ export default function LibraryPage() {
             <button
               key={s.id}
               className="wr-group-chip"
+              data-drop="shelf"
+              data-shelf-id={s.id}
               data-active={i === path.length - 1}
               aria-current={i === path.length - 1 ? "page" : undefined}
               onClick={() => navigate(`/?shelf=${s.id}`)}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-              }}
-              onDragEnter={(e) => e.currentTarget.classList.add("drop-target")}
-              onDragLeave={(e) => e.currentTarget.classList.remove("drop-target")}
-              onDrop={(e) => dropOnShelf(e, s.id)}
             >
               {s.name}
             </button>
@@ -1028,18 +1127,11 @@ export default function LibraryPage() {
               role="button"
               tabIndex={0}
               aria-label={`书架 ${s.name}，${count} 本`}
+              data-drop="shelf"
+              data-shelf-id={s.id}
               data-dragging={dragShelfId === s.id}
               data-pop={popKey === `shelf:${s.id}`}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.effectAllowed = "move";
-                setDragShelfId(s.id);
-                setDragBookId(null);
-              }}
-              onDragEnd={() => {
-                setDragShelfId(null);
-                setDragBookId(null);
-              }}
+              onPointerDown={(e) => startCardDrag(e, { kind: "shelf", id: s.id, label: s.name })}
               onClick={() => navigate(`/?shelf=${s.id}`)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
@@ -1051,13 +1143,6 @@ export default function LibraryPage() {
                 e.preventDefault();
                 openMenu({ kind: "shelf", x: e.clientX, y: e.clientY, shelf: s }, e.currentTarget);
               }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-              }}
-              onDragEnter={(e) => e.currentTarget.classList.add("drop-target")}
-              onDragLeave={(e) => e.currentTarget.classList.remove("drop-target")}
-              onDrop={(e) => dropOnShelf(e, s.id)}
             >
               <div className="wr-cover" aria-hidden="true">
                 <div className="wr-shelf-grid">
@@ -1082,27 +1167,18 @@ export default function LibraryPage() {
               role="button"
               tabIndex={0}
               data-selected={selectMode && selected.has(b.id)}
+              data-drop="book"
+              data-book-id={b.id}
               data-dragging={dragBookId === b.id}
               data-pop={popKey === `book:${b.id}`}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData("text/book-id", b.id);
-                e.dataTransfer.effectAllowed = "move";
-                setDragBookId(b.id);
-                setDragShelfId(null);
-              }}
-              onDragEnd={() => {
-                setDragBookId(null);
-                setDragShelfId(null);
-              }}
-              onDragOver={(e) => {
-                if (sortKey === "custom" && dragBookId && dragBookId !== b.id) {
-                  e.preventDefault();
-                  e.currentTarget.classList.add("drop-target");
-                }
-              }}
-              onDragLeave={(e) => e.currentTarget.classList.remove("drop-target")}
-              onDrop={(e) => dropOnBook(e, b)}
+              onPointerDown={(e) =>
+                startCardDrag(e, {
+                  kind: "book",
+                  id: b.id,
+                  label: formatTitle(b),
+                  cover: b.cover_path ? coverUrls[b.cover_path] : undefined,
+                })
+              }
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
@@ -1147,6 +1223,7 @@ export default function LibraryPage() {
                 {typeof b.reading_percent === "number" ? (
                   <div className="wr-chip-row">
                     <div className="wr-chip">
+                      <span className="wr-live-dot" aria-hidden="true" />
                       <span>读到 {Math.round(b.reading_percent * 100)}%</span>
                     </div>
                   </div>
@@ -1233,6 +1310,24 @@ export default function LibraryPage() {
           <button className="wr-btn" onClick={exitSelect}>
             取消
           </button>
+        </div>
+      ) : null}
+
+      {dragGhost ? (
+        <div
+          ref={dragGhostRef}
+          className="wr-drag-ghost"
+          style={{ left: dragGhost.x + 14, top: dragGhost.y + 10 }}
+          aria-hidden="true"
+        >
+          {dragGhost.cover ? (
+            <img src={dragGhost.cover} alt="" draggable={false} />
+          ) : dragGhost.shelf ? (
+            <IconFolder width={20} height={20} />
+          ) : (
+            <IconBook width={20} height={20} />
+          )}
+          <span>{dragGhost.label}</span>
         </div>
       ) : null}
 

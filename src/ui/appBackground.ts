@@ -12,6 +12,11 @@ export function resetBackgroundCache() {
   }
 }
 
+// 已解析过的 objectURL 同步读回：AppShell 跨路由重挂时首帧直接命中，消除背景闪一下的感知
+export function getCachedBackgroundUrl(): string | null {
+  return cache?.url ?? null;
+}
+
 // 换背景广播（仿 useCoverUrls listeners）：书架改设置后 AppShell 订阅重读 settings 即时换肤，应用即预览
 const backgroundListeners = new Set<() => void>();
 
