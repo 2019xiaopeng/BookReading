@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { applySpreadMode, cfiRangesOverlap, spineIndexFromCfi } from "./reader";
+import { applySpreadMode, cfiRangesOverlap, scrollEdgeDirection, spineIndexFromCfi } from "./reader";
 
 describe("applySpreadMode", () => {
   test("uses rendition.spread when available", () => {
@@ -83,5 +83,24 @@ describe("cfiRangesOverlap", () => {
     expect(cfiRangesOverlap("junk", A)).toBe(false);
     expect(cfiRangesOverlap("", A)).toBe(false);
     expect(cfiRangesOverlap("epubcfi(/6/4)", A)).toBe(false);
+  });
+});
+
+describe("scrollEdgeDirection（B13 滚动模式章续读）", () => {
+  test("章中为 null；距端 <40px 判到边", () => {
+    // scrollHeight=2000, clientHeight=600：可视 [scrollTop, scrollTop+600]
+    expect(scrollEdgeDirection(500, 600, 2000, 1)).toBeNull();
+    expect(scrollEdgeDirection(1300, 600, 2000, 1)).toBeNull(); // bottomGap=100
+    expect(scrollEdgeDirection(1400, 600, 2000, 1)).toBe(1); // bottomGap=0
+    expect(scrollEdgeDirection(1361, 600, 2000, 1)).toBe(1); // bottomGap=39
+    expect(scrollEdgeDirection(1360, 600, 2000, 1)).toBeNull(); // bottomGap=40
+    expect(scrollEdgeDirection(39, 600, 2000, -1)).toBe(-1); // topGap=39
+    expect(scrollEdgeDirection(40, 600, 2000, -1)).toBeNull(); // topGap=40
+    expect(scrollEdgeDirection(0, 600, 2000, -1)).toBe(-1);
+  });
+
+  test("短章（整章可见）按滚动方向续读", () => {
+    expect(scrollEdgeDirection(0, 600, 500, 1)).toBe(1);
+    expect(scrollEdgeDirection(0, 600, 500, -1)).toBe(-1);
   });
 });

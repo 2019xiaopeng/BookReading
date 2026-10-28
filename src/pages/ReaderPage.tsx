@@ -26,6 +26,7 @@ import {
 import {
   cfiRangesOverlap,
   createReader,
+  scrollEdgeDirection,
   type ReaderController,
   type RelocatedPayload,
   type SearchResult,
@@ -121,6 +122,8 @@ export default function ReaderPage() {
   const [locPage, setLocPage] = useState<{ index: number; total: number } | null>(null);
   const [lockToast, setLockToast] = useState(false);
   const [speedToast, setSpeedToast] = useState<number | null>(null);
+  // B13 滚动模式章续读提示（"已进入 <章名>"1.5s）
+  const [chapterToast, setChapterToast] = useState<string | null>(null);
   const [pagerHover, setPagerHover] = useState<"left" | "right" | null>(null);
   const [locationsReady, setLocationsReady] = useState(false);
   const [dragPct, setDragPct] = useState<number | null>(null);
@@ -128,6 +131,8 @@ export default function ReaderPage() {
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const readerRootRef = useRef<HTMLDivElement | null>(null);
   const speedToastTimerRef = useRef<number | null>(null);
+  const chapterToastTimerRef = useRef<number | null>(null);
+  const pendingChapterToastRef = useRef(false);
   const viewerSize = useElementSize(viewerRef);
   const controllerRef = useRef<ReaderController | null>(null);
   const settingsRef = useRef<ReaderSettings>(settings);
@@ -556,9 +561,14 @@ export default function ReaderPage() {
         !imageCtxRef.current.active &&
         (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "PageUp" || e.key === "PageDown")
       ) {
-        // 分页=翻页；滚动模式由 animateTurn 内部分流为章节导航
+        // 分页=翻页；滚动模式 Arrow 仍整章跳（animateTurn 分流）
         e.preventDefault();
         chrome.dismiss(); // B12：翻页动作即收栏（栏可见时）
+        // B13 滚动模式 PageDown/PageUp：章末/章首即时章导航，章中原生滚一屏（键盘优先，不等 400ms 防抖）
+        if (settingsRef.current.readingMode !== "paginated" && (e.key === "PageDown" || e.key === "PageUp")) {
+          void controllerRef.current?.scrollStep(e.key === "PageDown" ? 1 : -1);
+          return;
+        }
         void animateTurn(e.key === "ArrowLeft" || e.key === "PageUp" ? "prev" : "next");
         return;
       }
@@ -637,6 +647,60 @@ export default function ReaderPage() {
       el.removeEventListener("wheel", onWheel);
     };
   }, [drawerOpen, settings.pageAnimation]);
+
+  // B13 滚动模式章续读：滚到章末/章首持续 ~400ms 自动 display 下/上一章（保持 scrolled）+ 轻提示。
+  // 章切换落位的程序性滚动（整屏级大跳）不参与判定，避免落位即回跳；短章按滚动方向续读。
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || isImageBook || settings.readingMode !== "scrolled" || drawerOpen) return;
+    let timer: number | null = null;
+    let lastTop = -1;
+    let lastDelta = 1;
+    const clearTimer = () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+    };
+    const onScroll = () => {
+      const sc = el.querySelector<HTMLElement>(".epub-container");
+      if (!sc || sc.clientHeight <= 0) return;
+      const delta = sc.scrollTop - lastTop;
+      lastTop = sc.scrollTop;
+      if (Math.abs(delta) >= sc.clientHeight * 0.9) return; // display 落位整跳：只同步位置不判定
+      if (delta !== 0) lastDelta = delta;
+      clearTimer();
+      const dir = scrollEdgeDirection(sc.scrollTop, sc.clientHeight, sc.scrollHeight, lastDelta);
+      if (!dir) return;
+      timer = window.setTimeout(() => {
+        timer = null;
+        const sc2 = el.querySelector<HTMLElement>(".epub-container");
+        const ctrl = controllerRef.current;
+        if (!sc2 || sc2.clientHeight <= 0 || !ctrl) return;
+        if (scrollEdgeDirection(sc2.scrollTop, sc2.clientHeight, sc2.scrollHeight, lastDelta) !== dir) return;
+        pendingChapterToastRef.current = true;
+        ctrl.chapterNav(dir);
+      }, 400);
+    };
+    el.addEventListener("scroll", onScroll, true);
+    return () => {
+      clearTimer();
+      el.removeEventListener("scroll", onScroll, true);
+    };
+  }, [isImageBook, settings.readingMode, drawerOpen]);
+
+  // 章续读落位（relocated 更新 chapterHref）后弹 1.5s 轻提示
+  useEffect(() => {
+    if (!pendingChapterToastRef.current) return;
+    pendingChapterToastRef.current = false;
+    if (!chapterTitle) return;
+    setChapterToast(chapterTitle);
+    if (chapterToastTimerRef.current) window.clearTimeout(chapterToastTimerRef.current);
+    chapterToastTimerRef.current = window.setTimeout(() => setChapterToast(null), 1500);
+    return () => {
+      if (chapterToastTimerRef.current) window.clearTimeout(chapterToastTimerRef.current);
+    };
+  }, [chapterTitle]);
 
   async function persistSettings(next: ReaderSettings) {
     settingsTouchedRef.current = true;
@@ -961,8 +1025,13 @@ export default function ReaderPage() {
         </div>
       ) : null}
 
-      {/* B12 固定预留：非锁定态 stage 恒定 padding 62px（栏在预留区内淡入淡出，内容零位移）；锁定态一次性收 0 */}
-      <div className="wr-reader-stage" data-locked={chrome.locked ? "true" : undefined}>
+      {/* B12 固定预留：非锁定态 stage 恒定 padding 62px（栏在预留区内淡入淡出，内容零位移）；锁定态一次性收 0；
+          B13 漫画：栏为悬浮玻璃条后无需让位，padding 恒 0（见 weread.css [data-image]） */}
+      <div
+        className="wr-reader-stage"
+        data-locked={chrome.locked ? "true" : undefined}
+        data-image={isImageBook || undefined}
+      >
         <div
           ref={viewerRef}
           className="wr-reader-viewer"
@@ -1483,7 +1552,6 @@ export default function ReaderPage() {
             alignItems: "center",
             gap: 10,
             padding: 10,
-            borderTop: "1px solid var(--wr-hairline)",
           }}
           onMouseEnter={chrome.enter}
           onMouseLeave={chrome.leave}
@@ -1609,6 +1677,28 @@ export default function ReaderPage() {
           }}
         >
           自动滚动 {speedToast}px/s
+        </div>
+      ) : null}
+
+      {chapterToast !== null ? (
+        <div
+          role="status"
+          style={{
+            position: "fixed",
+            bottom: 84,
+            left: "50%",
+            transform: "translateX(-50%)",
+            fontSize: 12,
+            color: "var(--wr-muted)",
+            background: "var(--panel-solid)",
+            border: "1px solid var(--wr-hairline)",
+            borderRadius: 999,
+            padding: "6px 14px",
+            boxShadow: "var(--shadow-sm)",
+            pointerEvents: "none",
+          }}
+        >
+          已进入 {chapterToast}
         </div>
       ) : null}
     </div>

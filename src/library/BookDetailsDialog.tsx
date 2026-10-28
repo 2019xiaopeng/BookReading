@@ -41,8 +41,8 @@ export default function BookDetailsDialog({
   const [tagInput, setTagInput] = useState("");
   const [saving, setSaving] = useState(false);
   const coverUrls = useCoverUrls([b]);
-
-  // file_size 缺失时按需计算（写库并回填显示；epub 章节数/字数 v1 不算，显示 —）
+  // B13 封面分辨率：blob objectURL 用 Image() 异步量自然尺寸（无解码依赖）
+  const [coverSize, setCoverSize] = useState<{ w: number; h: number } | null>(null);
   useEffect(() => {
     if (b.file_size != null) return;
     let cancelled = false;
@@ -141,6 +141,25 @@ export default function BookDetailsDialog({
 
   const pathNames = shelfPath(shelves, b.shelf_id).map((s) => s.name);
   const coverUrl = b.cover_path ? coverUrls[b.cover_path] : undefined;
+
+  useEffect(() => {
+    if (!coverUrl) {
+      setCoverSize(null);
+      return;
+    }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (!cancelled && img.naturalWidth > 0) setCoverSize({ w: img.naturalWidth, h: img.naturalHeight });
+    };
+    img.onerror = () => {
+      if (!cancelled) setCoverSize(null);
+    };
+    img.src = coverUrl;
+    return () => {
+      cancelled = true;
+    };
+  }, [coverUrl]);
 
   return (
     <div
@@ -270,6 +289,11 @@ export default function BookDetailsDialog({
               </span>
               <span>大小</span>
               <span>{formatFileSize(b.file_size)}</span>
+              <span>封面</span>
+              <span>
+                {coverSize ? `${coverSize.w}×${coverSize.h}` : "—"}
+                {coverSize && coverSize.w < 500 ? "（源图较小，可点击封面更换高清）" : ""}
+              </span>
               <span>页数</span>
               <span>{b.page_count != null ? `${b.page_count} 页` : "—"}</span>
               <span>字数</span>

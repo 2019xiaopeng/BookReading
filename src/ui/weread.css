@@ -25,7 +25,8 @@
   --wr-danger: #d93025;
   --wr-danger-ink: #ffffff;
   --wr-ink-rgb: 22, 24, 26;
-  --wr-chrome-bg: rgba(251, 250, 247, 0.86);
+  /* B13 玻璃栏：透明度 0.86→0.6 + blur(16px)——栏浮在内容上而非实色横条（暗字最坏对比≈4.5:1 仍 AA） */
+  --wr-chrome-bg: rgba(251, 250, 247, 0.6);
   --wr-scrim: rgba(0, 0, 0, 0.26);
   --wr-panel-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.55));
   --wr-reader-paper-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.64));
@@ -64,7 +65,7 @@
   --wr-danger: #ff6b5e;
   --wr-danger-ink: rgba(6, 10, 10, 0.96);
   --wr-ink-rgb: 255, 255, 255;
-  --wr-chrome-bg: rgba(16, 18, 20, 0.62);
+  --wr-chrome-bg: rgba(0, 0, 0, 0.58);
   --wr-panel-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
   --wr-reader-paper-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
   --wr-shadow-card: 0 16px 40px rgba(0, 0, 0, 0.42);
@@ -151,7 +152,7 @@
   --wr-danger: #ff6b5e;
   --wr-danger-ink: rgba(6, 10, 10, 0.96);
   --wr-ink-rgb: 255, 255, 255;
-  --wr-chrome-bg: rgba(16, 18, 20, 0.62);
+  --wr-chrome-bg: rgba(0, 0, 0, 0.58);
   --wr-panel-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
   --wr-reader-paper-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
   --wr-shadow-card: 0 16px 40px rgba(0, 0, 0, 0.42);
@@ -692,6 +693,13 @@
   padding-bottom: 0;
 }
 
+/* B13 漫画全屏：栏改为悬浮玻璃条后无需给内容让位，漫画常态与锁定态 padding 恒 0
+   （图片 reader 尺寸纯 CSS 自适应，高度变化即时生效无需 JS resize） */
+.wr-reader-stage[data-image="true"] {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
 .wr-reader-viewer {
   position: relative;
   flex: 1;
@@ -736,15 +744,18 @@
   transition: opacity 200ms ease;
 }
 
-/* B6：栏为 absolute overlay（浮动在纸面上方，显隐不占布局、纸面恒满高不触发 epub resize） */
+/* B6：栏为 absolute overlay（浮动在纸面上方，显隐不占布局、纸面恒满高不触发 epub resize）。
+   B13 玻璃条：透明度降低+blur16+内容侧 1px hairline+屏幕侧渐隐（模拟 mask 渐隐边缘），
+   栏呈"浮在内容上的玻璃"而非实色横条（B12 用户"背景断层不整体"观感） */
 .wr-reader-topbar {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   z-index: 16; /* 高于热区(14)与边缘翻页区(15)，低于抽屉(20) */
-  background: var(--wr-chrome-bg);
-  backdrop-filter: blur(10px);
+  background: linear-gradient(to bottom, transparent, var(--wr-chrome-bg) 22%);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--wr-hairline);
 }
 
 .wr-reader-footer {
@@ -753,12 +764,13 @@
   left: 0;
   right: 0;
   z-index: 16;
-  background: var(--wr-chrome-bg);
-  backdrop-filter: blur(10px);
+  background: linear-gradient(to top, transparent, var(--wr-chrome-bg) 22%);
+  backdrop-filter: blur(16px);
+  border-top: 1px solid var(--wr-hairline);
 }
 
-/* B6→B12 热区条：恒为根级顶/底预留带（62px，正对栏位置），鼠标进入唤出上下栏；
-   z 低于边缘翻页区(15)与栏(16)，点击穿透照常翻页；挂根级因 viewer overflow:hidden 会裁掉负偏移 */
+/* B6→B12 热区条：恒为根级顶/底屏幕带（62px，正对栏位置——B13 漫画无预留时即贴屏幕顶/底悬浮在图上），
+   鼠标进入唤出上下栏；z 低于边缘翻页区(15)与栏(16)，点击穿透照常翻页；挂根级因 viewer overflow:hidden 会裁掉负偏移 */
 .wr-chrome-hotzone {
   position: absolute;
   left: 0;

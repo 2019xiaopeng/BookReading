@@ -124,6 +124,8 @@ export type ReaderController = {
   prev: () => Promise<void>;
   display: (target?: string) => Promise<void>;
   chapterNav: (delta: number) => void;
+  /** B13 滚动模式翻屏（PageDown/PageUp）：章末/章首即时章导航，章中滚动一屏；返回触发的章方向或 null */
+  scrollStep: (dir: 1 | -1) => 1 | -1 | null;
   progressCfi: (percentage: number) => string | null;
   setTheme: (theme: Theme) => void;
   setFontSizePercent: (percent: number) => void;
@@ -156,6 +158,14 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  * spread 切换只改列度量不重绘当前内容，会留下按旧度量裁切的残影；
  * 统一路径：spread(mode) → clear() → display(target)。无 target（尚未渲染）时退回 resize。
  */
+/** 滚动模式章末/章首判定（B13 章续读）：距端 <40px 视为到边；短章整章可见时按滚动方向续读。 */
+export function scrollEdgeDirection(scrollTop: number, clientHeight: number, scrollHeight: number, lastDelta: number): 1 | -1 | null {
+  if (scrollHeight <= clientHeight) return lastDelta < 0 ? -1 : 1;
+  if (scrollHeight - scrollTop - clientHeight < 40) return 1;
+  if (scrollTop < 40) return -1;
+  return null;
+}
+
 export function applySpreadMode(rendition: any, mode: SpreadMode, target?: string): void {
   try {
     const spreadFn = rendition?.spread;
@@ -245,14 +255,17 @@ export async function createReader(opts: {
 
   let lastLocation: any = null;
 
-  const flow: ReadingMode = opts.readingMode === "scrolled" ? "scrolled" : "paginated";
-  let currentFlow: ReadingMode = flow;
+  const requestedFlow: ReadingMode = opts.readingMode === "scrolled" ? "scrolled" : "paginated";
+  // B13：冷启动统一按分页渲染（App 内被反复验证的成熟路径），scrolled 在首显成功后立即运行时切换。
+  // 原先 scrolled 直建（重进书场景：设置先于书就绪，restore 走 createReader 冷路径）与运行时切换
+  // 产生不同的 manager/view 初始化时序，重进后滚动失效（B13 2a 卡死）；收敛为单一路径后两条路径等价。
+  let currentFlow: ReadingMode = "paginated";
   let lastSpreadMode: SpreadMode = opts.spreadMode ?? "none";
   const rendition: any = book.renderTo(opts.container, {
     width: "100%",
     height: "100%",
-    spread: flow === "scrolled" ? "none" : opts.spreadMode ?? "none",
-    flow,
+    spread: opts.spreadMode ?? "none",
+    flow: "paginated",
   });
 
   const onDisplayError = (e: any) => {
@@ -403,6 +416,49 @@ export async function createReader(opts: {
     }
   })();
 
+  const chapterNav = (delta: number) => {
+    try {
+      if (!delta) return;
+      const loc = rendition.currentLocation?.();
+      let idx: number | null = loc?.start?.index;
+      if (typeof idx !== "number" || !Number.isFinite(idx) || idx < 0) idx = spineIndexFromCfi(loc?.start?.cfi);
+      if (idx === null) return;
+      const count: number = book.spine?.spineItems?.length ?? 0;
+      const next = Math.min(count - 1, Math.max(0, idx + delta));
+      if (next === idx) return;
+      const href = book.spine.get?.(next)?.href;
+      if (typeof href === "string" && href) void rendition.display(href);
+    } catch (e) {
+      logOnce("reader.chapterNav", `reader: chapterNav failed ${String(e)}`);
+    }
+  };
+
+  /**
+   * flow 双向切换统一路径（B13 2a/2b）：spread 先于 flow 设置列度量（flow 内部重挂即按新度量渲染）；
+   * epubjs 0.3.93 rendition.flow() 仅在 manager 已渲染且 location 就绪时自 clear+display——
+   * 早切（display 刚 resolve、relocated 尚未跑完，重进书/快速切换）会留下按分页度量裁切的旧视图
+   * （scrolled 下滚动失效、paginated 下双栏错切），故 location 缺失时统一补 clear+display(currentCfi)。
+   */
+  const applyFlow = (mode: ReadingMode) => {
+    if (mode === currentFlow) return;
+    currentFlow = mode;
+    try {
+      const cfi = rendition.currentLocation?.()?.start?.cfi;
+      const target = typeof cfi === "string" ? cfi : undefined;
+      const spreadFn = rendition?.spread;
+      if (typeof spreadFn === "function") spreadFn.call(rendition, mode === "scrolled" ? "none" : lastSpreadMode);
+      rendition.flow(mode);
+      if (!rendition.location) {
+        rendition.clear?.();
+        void rendition.display?.(target);
+      } else if (mode === "paginated") {
+        rendition.resize?.();
+      }
+    } catch (e) {
+      logOnce("reader.flow", `reader: flow switch failed ${String(e)}`);
+    }
+  };
+
   await withTimeout(rendition.display(), 30_000).catch((e) => {
     const msg = `首次渲染超时/失败：${String(e)}`;
     opts.onError?.(msg);
@@ -410,6 +466,9 @@ export async function createReader(opts: {
     book.destroy?.();
     throw new Error(msg);
   });
+
+  // 冷启动收敛：请求 scrolled 时在首显成功后立即切换（见 renderTo 注释）
+  if (requestedFlow === "scrolled") applyFlow("scrolled");
 
   return {
     next: async () => {
@@ -449,33 +508,23 @@ export async function createReader(opts: {
       const cfi = rendition.currentLocation?.()?.start?.cfi;
       applySpreadMode(rendition, mode, typeof cfi === "string" ? cfi : undefined);
     },
-    setReadingMode: (mode: ReadingMode) => {
-      if (mode === currentFlow) return;
-      currentFlow = mode;
+    setReadingMode: (mode: ReadingMode) => applyFlow(mode),
+    chapterNav,
+    /** B13 滚动模式键盘翻屏：章末/章首即时 chapterNav，章中原生滚动一屏。返回触发的章方向（null=章内滚动） */
+    scrollStep: (dir: 1 | -1) => {
       try {
-        const cfi = rendition.currentLocation?.()?.start?.cfi;
-        // epubjs 0.3.93 rendition.flow() 为运行时切换 API：内部自动 clear + display(当前 CFI)
-        rendition.flow(mode);
-        applySpreadMode(rendition, mode === "scrolled" ? "none" : lastSpreadMode, typeof cfi === "string" ? cfi : undefined);
-        if (mode === "paginated") rendition.resize?.();
+        if (currentFlow !== "scrolled") return null;
+        const scroller = opts.container.querySelector<HTMLElement>(".epub-container");
+        if (!scroller) return null;
+        if (scrollEdgeDirection(scroller.scrollTop, scroller.clientHeight, scroller.scrollHeight, dir) === dir) {
+          chapterNav(dir);
+          return dir;
+        }
+        scroller.scrollBy({ top: dir * Math.max(1, scroller.clientHeight - 48), behavior: "auto" });
+        return null;
       } catch (e) {
-        logOnce("reader.flow", `reader: flow switch failed ${String(e)}`);
-      }
-    },
-    chapterNav: (delta: number) => {
-      try {
-        if (!delta) return;
-        const loc = rendition.currentLocation?.();
-        let idx: number | null = loc?.start?.index;
-        if (typeof idx !== "number" || !Number.isFinite(idx) || idx < 0) idx = spineIndexFromCfi(loc?.start?.cfi);
-        if (idx === null) return;
-        const count: number = book.spine?.spineItems?.length ?? 0;
-        const next = Math.min(count - 1, Math.max(0, idx + delta));
-        if (next === idx) return;
-        const href = book.spine.get?.(next)?.href;
-        if (typeof href === "string" && href) void rendition.display(href);
-      } catch (e) {
-        logOnce("reader.chapterNav", `reader: chapterNav failed ${String(e)}`);
+        logOnce("reader.scrollStep", `reader: scrollStep failed ${String(e)}`);
+        return null;
       }
     },
     progressCfi: (percentage: number) => {
