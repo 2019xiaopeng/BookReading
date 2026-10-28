@@ -10,14 +10,14 @@ describe("createImmersiveMachine", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  test("初始隐藏；热区/栏进入浮现，离开 2.5s 后隐藏", () => {
+  test("初始隐藏；热区/栏进入浮现，离开 1.2s 后隐藏", () => {
     const m = machine();
     expect(m.visible).toBe(false);
     m.enter();
     expect(m.visible).toBe(true);
     m.leave();
     expect(m.visible).toBe(true); // 计时中仍可见
-    vi.advanceTimersByTime(2499);
+    vi.advanceTimersByTime(1199);
     expect(m.visible).toBe(true);
     vi.advanceTimersByTime(1);
     expect(m.visible).toBe(false);
@@ -36,8 +36,27 @@ describe("createImmersiveMachine", () => {
     const m = machine();
     m.wake();
     expect(m.visible).toBe(true);
-    vi.advanceTimersByTime(2500);
+    vi.advanceTimersByTime(1200);
     expect(m.visible).toBe(false);
+  });
+
+  test("dismiss 点击即收：栏/热区外 pointerdown 立即隐藏，disabled/locked 下无操作", () => {
+    const m = machine();
+    m.enter();
+    m.dismiss();
+    expect(m.visible).toBe(false);
+    m.wake();
+    m.dismiss();
+    expect(m.visible).toBe(false);
+    vi.advanceTimersByTime(10_000); // dismiss 已清计时，不再自动翻转
+    expect(m.visible).toBe(false);
+    const d = machine(true);
+    d.dismiss();
+    expect(d.visible).toBe(true);
+    const l = machine();
+    l.setLocked(true);
+    l.dismiss();
+    expect(l.visible).toBe(false);
   });
 
   test("disabled 强制可见且计时暂停", () => {
@@ -48,7 +67,7 @@ describe("createImmersiveMachine", () => {
     expect(m.visible).toBe(true);
     m.setDisabled(false);
     expect(m.visible).toBe(true); // 关抽屉回到自动隐藏态：先可见
-    vi.advanceTimersByTime(2500);
+    vi.advanceTimersByTime(1200);
     expect(m.visible).toBe(false);
   });
 
@@ -63,7 +82,7 @@ describe("createImmersiveMachine", () => {
     expect(m.visible).toBe(false);
     m.setLocked(false);
     expect(m.visible).toBe(true);
-    vi.advanceTimersByTime(2500);
+    vi.advanceTimersByTime(1200);
     expect(m.visible).toBe(false);
   });
 });

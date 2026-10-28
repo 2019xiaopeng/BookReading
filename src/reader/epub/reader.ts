@@ -199,9 +199,10 @@ const THEME_STYLES: Record<Theme, { paper: string | null; fg: string }> = {
   darkcontrast: { paper: "#050505", fg: "#f5f5f5" },
 };
 
-// B6 正文字体：default=现状 serif 栈（与壳 --wr-serif 同源），其余为 Windows 安全字体栈
+// B11 正文字体：default=悦读栈（思源宋优先、回退等线/宋体，未装字体自动落下一步），custom=文件安装的 wr-custom
 const FONT_STACKS: Record<FontFamily, string> = {
-  default: `"Songti SC", "STSong", "Source Han Serif SC", "Noto Serif SC", "SimSun", serif`,
+  default: `"Source Han Serif SC", "Noto Serif CJK SC", "DengXian", "等线", serif`,
+  custom: `"wr-custom", serif`,
   songti: `"SimSun", "NSimSun", "Songti SC", "STSong", serif`,
   heiti: `"Microsoft YaHei", "PingFang SC", "SimHei", sans-serif`,
   kaiti: `"KaiTi", "楷体", "STKaiti", serif`,

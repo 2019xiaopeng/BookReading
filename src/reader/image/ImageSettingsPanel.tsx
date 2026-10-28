@@ -122,6 +122,27 @@ export default function ImageSettingsPanel({ value, onChange }: Props) {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="wr-muted">自动滚动速度</div>
+          <div style={{ marginLeft: "auto", color: "var(--wr-muted)", fontVariantNumeric: "tabular-nums" }}>
+            {value.autoScrollSpeed}px/s
+          </div>
+        </div>
+        <input
+          type="range"
+          aria-label="自动滚动速度"
+          aria-valuetext={`${value.autoScrollSpeed}px/s`}
+          min={20}
+          max={240}
+          step={10}
+          value={value.autoScrollSpeed}
+          disabled={!webtoon}
+          title={webtoon ? undefined : "仅条漫模式可用"}
+          onChange={(e) => onChange({ ...value, autoScrollSpeed: Number(e.currentTarget.value) })}
+        />
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div className="wr-muted">主题</div>
         <div role="group" aria-label="主题" style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
           {THEME_SWATCHES.map((s) => {

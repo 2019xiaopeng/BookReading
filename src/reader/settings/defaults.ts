@@ -8,6 +8,7 @@ export const defaultSettings: ReaderSettings = {
   fontFamily: "default",
   readingMode: "paginated",
   reader_bg: { type: "preset" },
+  reader_font: { type: "preset" },
 };
 
 export const HIGHLIGHT_COLOR = "#ffe600";

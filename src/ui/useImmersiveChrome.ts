@@ -8,9 +8,11 @@ export type ImmersiveChrome = {
   setLocked: (v: boolean) => void;
   /** 鼠标进入顶部/底部热区或栏内：立即浮现并常驻 */
   enter: () => void;
-  /** 鼠标离开热区与栏：起 2.5s 计时后隐藏 */
+  /** 鼠标离开热区与栏：起 1.2s 计时后隐藏 */
   leave: () => void;
-  /** Esc 唤醒：浮现并起计时（期间无鼠标进入热区则自动隐藏） */
+  /** 点击即收：pointerdown 落在栏/热区之外时立即隐藏（不等计时） */
+  dismiss: () => void;
+  /** Esc 唤醒：浮现并起计时（期间无鼠标进入热区则自动隐藏，1.2s） */
   wake: () => void;
 };
 
@@ -20,7 +22,8 @@ export type ImmersiveMachine = ImmersiveChrome & {
 
 /**
  * 沉浸 chrome 状态机（B6 热区版）：栏默认隐藏，鼠标进入顶/底热区或栏内才浮现；
- * 离开热区与栏 2.5s 后淡出；locked=全藏且热区无效；disabled（抽屉开/加载失败/选区气泡开）恒可见。
+ * 离开热区与栏 1.2s 后淡出，栏/热区外的 pointerdown 立即隐藏（点击即收）；
+ * locked=全藏且热区无效；disabled（抽屉开/加载失败/选区气泡开）恒可见。
  * 键盘/滚轮/边缘翻页不经过此状态机，任何栏状态下照常。纯逻辑可脱离 React 在 node 单测。
  */
 export function createImmersiveMachine(opts: {
@@ -28,7 +31,7 @@ export function createImmersiveMachine(opts: {
   disabled?: boolean;
   onChange: () => void;
 }): ImmersiveMachine {
-  const hideMs = opts.hideMs ?? 2500;
+  const hideMs = opts.hideMs ?? 1200;
   let locked = false;
   let disabled = !!opts.disabled;
   let hidden = true;
@@ -61,6 +64,14 @@ export function createImmersiveMachine(opts: {
   const leave = () => {
     if (locked || disabled) return;
     if (!hidden) arm();
+  };
+  const dismiss = () => {
+    if (locked || disabled) return;
+    clearTimer();
+    if (!hidden) {
+      hidden = true;
+      opts.onChange();
+    }
   };
   const wake = () => {
     if (locked || disabled) return;
@@ -102,6 +113,7 @@ export function createImmersiveMachine(opts: {
     setLocked,
     enter,
     leave,
+    dismiss,
     wake,
     setDisabled,
   };

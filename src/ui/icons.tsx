@@ -210,6 +210,23 @@ export function IconRefresh(props: P) {
   );
 }
 
+export function IconPlay(props: P) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" {...props}>
+      <path d="M8 5.5v13l10-6.5Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function IconPause(props: P) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" {...props}>
+      <rect x="7" y="5.5" width="3.4" height="13" rx="1" fill="currentColor" />
+      <rect x="13.6" y="5.5" width="3.4" height="13" rx="1" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function IconPalette(props: P) {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...props}>

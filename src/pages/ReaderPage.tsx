@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import type { Book } from "../tauri/invoke";
 import {
@@ -57,6 +58,7 @@ import {
   normalizeLineHeight,
   normalizePageAnimation,
   normalizeReaderBackground,
+  normalizeReaderFont,
   normalizeReadingMode,
 } from "../reader/settings/normalize";
 import { calcPaperStage } from "../reader/ui/paperStage";
@@ -66,6 +68,7 @@ import { showConfirm } from "../ui/dialog";
 import { useElementSize } from "../ui/useElementSize";
 import { useImmersiveChrome } from "../ui/useImmersiveChrome";
 import { getBackgroundUrl } from "../ui/appBackground";
+import { applyReaderFont } from "../ui/readerFont";
 import { applyPersistedTheme, getTheme, useTheme } from "../ui/theme";
 import {
   IconBookmark,
@@ -138,7 +141,7 @@ export default function ReaderPage() {
   const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false });
   const progressRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
-  // 沉浸 chrome（B6 热区版）：默认净屏，鼠标进顶/底热区或栏内浮现，离开 2.5s 淡出；锁定=全藏+热区禁用；抽屉开/加载失败/选区气泡开强制可见
+  // 沉浸 chrome（B6 热区版）：默认净屏，鼠标进顶/底热区或栏内浮现，离开 1.2s 淡出、栏外点击即收；锁定=全藏+热区禁用；抽屉开/加载失败/选区气泡开强制可见
   const chrome = useImmersiveChrome({ disabled: drawerOpen || !!readerError || !!selection || !!noteDraft });
 
   useEffect(() => {
@@ -227,6 +230,7 @@ export default function ReaderPage() {
         fontFamily,
         readingMode: normalizeReadingMode(map.readingMode),
         reader_bg: normalizeReaderBackground(map.reader_bg),
+        reader_font: normalizeReaderFont(map.reader_font),
       });
       setImageSettings(normalizeImageReaderSettings(map.image_reader_settings));
     })();
@@ -334,8 +338,11 @@ export default function ReaderPage() {
           onLocationsReady: () => {
             if (!cancelled) setLocationsReady(true);
           },
-          // iframe 内按下（含开始新选区）即收起旧气泡
-          onContentsPress: () => setSelection(null),
+          // iframe 内按下（含开始新选区）即收起旧气泡，并按"点击即收"同步收栏
+          onContentsPress: () => {
+            setSelection(null);
+            chrome.dismiss();
+          },
           onError,
         });
       } catch (e) {
@@ -453,7 +460,29 @@ export default function ReaderPage() {
     };
   }, [settings.reader_bg, isImageBook]);
 
+  // B11：自定义正文字体——@font-face("wr-custom") 单槽注入，preset 时回收 objectURL 与 <style>
+  useEffect(() => {
+    applyReaderFont(settings.reader_font).catch((e) => logFrontend(`reader: font load failed ${String(e)}`));
+  }, [settings.reader_font]);
+
   // B6：栏改为 overlay 后纸面高度恒定，锁定切换不再需要 resize 联动（原底部空白根因已消除）
+  // B11 让位 padding 又改回纸面高度可变：栏显隐切换在过渡（200ms）结束后补一次 epub 重排
+  useEffect(() => {
+    if (isImageBook) return;
+    const t = window.setTimeout(() => controllerRef.current?.resize(), 220);
+    return () => window.clearTimeout(t);
+  }, [chrome.visible, isImageBook]);
+
+  // B11 点击即收：pointerdown 落在栏/热区之外立即隐藏（栏与热区内点击保留，按钮可点）；epub iframe 内经 onContentsPress 中继
+  useEffect(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.(".wr-reader-topbar, .wr-reader-footer, .wr-chrome-hotzone")) return;
+      chrome.dismiss();
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => window.removeEventListener("pointerdown", onPointerDown, true);
+  }, [chrome]);
 
   useEffect(() => {
     if (!chrome.locked) return;
@@ -486,6 +515,20 @@ export default function ReaderPage() {
         e.preventDefault();
         addBookmarkHere();
         setSideTab("bookmarks");
+        return;
+      }
+
+      // F11 窗口全屏（独立于沉浸锁定；Esc 不退全屏，浏览器惯例由用户 F11 自控）
+      if (e.key === "F11") {
+        e.preventDefault();
+        void (async () => {
+          const win = getCurrentWindow();
+          try {
+            await win.setFullscreen(!(await win.isFullscreen()));
+          } catch (e) {
+            logFrontend(`reader: fullscreen toggle failed ${String(e)}`);
+          }
+        })();
         return;
       }
 
@@ -590,6 +633,7 @@ export default function ReaderPage() {
     await setSetting("fontFamily", next.fontFamily);
     await setSetting("readingMode", next.readingMode);
     await setSetting("reader_bg", JSON.stringify(next.reader_bg));
+    await setSetting("reader_font", JSON.stringify(next.reader_font));
   }
 
   function handleImageRelocated(page: number, pageCount: number) {
@@ -890,7 +934,8 @@ export default function ReaderPage() {
         </div>
       ) : null}
 
-      <div className="wr-reader-stage">
+      {/* data-chrome 驱动让位 padding（B11）：栏可见=纸面上下压 62px，隐藏/锁定=0 */}
+      <div className="wr-reader-stage" data-chrome={chrome.visible ? "visible" : "hidden"}>
         <div
           ref={viewerRef}
           className="wr-reader-viewer"

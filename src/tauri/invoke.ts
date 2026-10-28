@@ -186,6 +186,15 @@ export async function saveReaderBackground(sourcePath: string): Promise<string> 
   return invoke<string>("save_reader_background", { sourcePath });
 }
 
+// B11 自定义正文字体：单槽安装（校验+复制到 library/fonts/font.<ext>，返回相对路径）与删除（恢复默认）
+export async function saveReaderFont(sourcePath: string): Promise<string> {
+  return invoke<string>("save_reader_font", { sourcePath });
+}
+
+export async function deleteReaderFont(): Promise<void> {
+  return invoke<void>("delete_reader_font");
+}
+
 // 批量导入用：父目录下"直接含图片"的一级子目录（服务端过滤空/无图目录，自然序）
 export async function listImageSubdirs(parent: string): Promise<string[]> {
   return invoke<string[]>("list_image_subdirs", { parent });

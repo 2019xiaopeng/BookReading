@@ -1,6 +1,6 @@
-import type { FontFamily, PageAnimation, ReaderBackground, ReadingMode, Theme } from "./types";
+import type { FontFamily, PageAnimation, ReaderBackground, ReaderFont, ReadingMode, Theme } from "./types";
 
-const FONT_FAMILIES = ["default", "songti", "heiti", "kaiti", "fangsong"] as const;
+const FONT_FAMILIES = ["default", "songti", "heiti", "kaiti", "fangsong", "custom"] as const;
 
 export function normalizeFontFamily(v: unknown): FontFamily {
   const s = String(v ?? "").trim().toLowerCase();
@@ -35,6 +35,25 @@ export function normalizeReaderBackground(v: unknown): ReaderBackground {
     if (o.type === "preset") return { type: "preset" };
     if (o.type === "image" && typeof o.path === "string" && o.path.length > 0) {
       return { type: "image", path: o.path };
+    }
+  }
+  return { type: "preset" };
+}
+
+/** B11 自定义字体槽位：与背景同构，type 为 custom */
+export function normalizeReaderFont(v: unknown): ReaderFont {
+  let parsed: unknown = v;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return { type: "preset" };
+    }
+  }
+  if (parsed && typeof parsed === "object") {
+    const o = parsed as { type?: unknown; path?: unknown };
+    if (o.type === "custom" && typeof o.path === "string" && o.path.length > 0) {
+      return { type: "custom", path: o.path };
     }
   }
   return { type: "preset" };

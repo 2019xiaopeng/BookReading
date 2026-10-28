@@ -10,7 +10,7 @@ import {
 import type { Book } from "../../tauri/invoke";
 import { getReadingState } from "../../tauri/invoke";
 import type { Theme } from "../settings/types";
-import { IconRefresh } from "../../ui/icons";
+import { IconPause, IconPlay, IconRefresh } from "../../ui/icons";
 import { listImagePages, readImagePage } from "./api";
 import {
   WIDE_PAGE_RATIO,
@@ -67,6 +67,10 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
   const [snap, setSnap] = useState<{ pages: number[]; urls: Record<number, string>; dir: 1 | -1 } | null>(null);
   const [zoom, setZoom] = useState({ scale: 1, tx: 0, ty: 0 });
   const zoomed = zoom.scale !== 1;
+  // B11 条漫自动滚动（webtoon 专属）：rAF 按帧距累积 scrollTop，速度存 image_reader_settings
+  const [autoScroll, setAutoScroll] = useState(false);
+  const [autoEndToast, setAutoEndToast] = useState(false);
+  const autoSpeedRef = useRef(settings.autoScrollSpeed);
   const zoomRef = useRef(zoom);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const fitRef = useRef<HTMLDivElement | null>(null);
@@ -92,11 +96,16 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
   }, [onRelocated]);
 
   useEffect(() => {
+    autoSpeedRef.current = settings.autoScrollSpeed;
+  }, [settings.autoScrollSpeed]);
+
+  useEffect(() => {
     zoomRef.current = zoom;
   }, [zoom]);
 
   // zoom geometry is per-mode (stage fit layer vs webtoon strip): start each mode fresh
   useEffect(() => {
+    setAutoScroll(false); // 模式切换停自动滚动（分页模式无此功能）
     if (zoomRef.current.scale !== 1) setZoom({ scale: 1, tx: 0, ty: 0 });
   }, [settings.mode]);
 
@@ -117,6 +126,7 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
     setWide({});
     setUrls({});
     setFailed(new Set());
+    setAutoScroll(false);
     reportedRef.current = null;
     shownSpreadRef.current = null;
     setShownSpread(null);
@@ -284,6 +294,7 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
     onApi({
       turn: (direction: TurnDirection) => {
         // B6：翻页先复位缩放（缩放不再阻塞翻页；条漫缩放态容器 overflow:hidden，复位后下一帧再滚动）
+        setAutoScroll(false); // 手动翻页停自动滚动
         const wasZoomed = zoomRef.current.scale !== 1;
         if (wasZoomed) resetZoom();
         if (settings.mode === "webtoon") {
@@ -305,6 +316,7 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
         });
       },
       goToPage: (page: number) => {
+        setAutoScroll(false);
         const wasZoomed = zoomRef.current.scale !== 1;
         if (wasZoomed) resetZoom();
         if (settings.mode === "webtoon") {
@@ -360,6 +372,40 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
     return () => observer.disconnect();
   }, [settings.mode, pages]);
 
+  // B11 自动滚动：rAF 按帧距累积 scrollTop；滚轮/键盘/指针=用户接管即停；到底自动停并轻提示。
+  // 脚本改 scrollTop 不产生这些事件，无需区分自身滚动；reduced-motion 下照常（功能非装饰）。
+  useEffect(() => {
+    if (!autoScroll) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    let raf = 0;
+    let last = performance.now();
+    const stop = () => setAutoScroll(false);
+    const onUserInput = () => stop();
+    el.addEventListener("wheel", onUserInput, { passive: true });
+    el.addEventListener("keydown", onUserInput);
+    el.addEventListener("pointerdown", onUserInput, { passive: true });
+    const tick = (now: number) => {
+      const dt = Math.min(0.1, (now - last) / 1000); // 后台页回来的大间隔不做跳变
+      last = now;
+      el.scrollTop += autoSpeedRef.current * dt;
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) {
+        stop();
+        setAutoEndToast(true);
+        window.setTimeout(() => setAutoEndToast(false), 1500);
+        return;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener("wheel", onUserInput);
+      el.removeEventListener("keydown", onUserInput);
+      el.removeEventListener("pointerdown", onUserInput);
+    };
+  }, [autoScroll]);
+
   // B5 zoom: viewport vs content dims decide the pan slack (tall strips / fit-width pages pan end to end)
   function panDims() {
     const stage = stageRef.current;
@@ -371,7 +417,29 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
     return { vw, vh, cw: content?.scrollWidth || vw, ch: content?.scrollHeight || vh };
   }
 
+  // B11 复原语义：仅重置 scale/pan 到 1x/0，保持当前阅读位置——条漫先把当前视口中心页记下
+  // （把 transform 逆映射回内容坐标），复位后 rAF 滚回该页；绝不回跳缩放开始前的旧页。分页模式本就只复位。
   function resetZoom() {
+    // 读 ref 而非 state：本函数被 onApi effect（turn/goToPage）长期持有，闭包里的 zoom state 会过期
+    const z = zoomRef.current;
+    if (z.scale === 1) return;
+    const sc = scrollRef.current;
+    if (settings.mode === "webtoon" && sc && sc.clientHeight > 0) {
+      // 缩放原点=缩放开始时的视口中心（scrollTop 整段锁定不变），故中心内容坐标 = scrollTop+vh/2 - ty/scale
+      const center = sc.scrollTop + sc.clientHeight / 2 - z.ty / z.scale;
+      let best: HTMLElement | null = null;
+      let bestD = Infinity;
+      for (const el of pageElsRef.current.values()) {
+        const d = Math.abs(el.offsetTop + el.offsetHeight / 2 - center);
+        if (d < bestD) {
+          bestD = d;
+          best = el;
+        }
+      }
+      setZoom({ scale: 1, tx: 0, ty: 0 });
+      if (best) requestAnimationFrame(() => best!.scrollIntoView({ block: "center" }));
+      return;
+    }
     setZoom({ scale: 1, tx: 0, ty: 0 });
   }
 
@@ -448,29 +516,30 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
         ? `center ${(scrollRef.current?.scrollTop ?? 0) + vh2}px`
         : `${(fitRef.current?.scrollLeft ?? 0) + (stage?.clientWidth ?? 0) / 2}px ${(fitRef.current?.scrollTop ?? 0) + vh2}px`;
   }
-  // B6：缩放中可见的“复原”浮动钮（一键回 1x 与原位；替代原 100% 文本钮）
+  // 浮动小钮公共样式：z(17) 高于热区(14)与两栏(16)——B11 前复原钮 z=3 埋在底热区 48px 带下被吞点击
+  const HUD_FLOAT: CSSProperties = {
+    position: "absolute",
+    bottom: 12,
+    zIndex: 17,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    padding: "4px 10px",
+    fontSize: 12,
+    borderRadius: 999,
+    border: "1px solid var(--wr-hairline)",
+    background: "var(--wr-bg)",
+    color: "var(--wr-muted)",
+    cursor: "pointer",
+  };
+  // B6：缩放中可见的“复原”浮动钮（一键回 1x，保持当前阅读位置）；B11 移到左下角且抬出热区层
   const resetBtn = zoomed ? (
     <button
       type="button"
       aria-label="复原缩放"
       title="复原缩放"
       onClick={resetZoom}
-      style={{
-        position: "absolute",
-        right: 12,
-        bottom: 12,
-        zIndex: 3,
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 4,
-        padding: "4px 10px",
-        fontSize: 12,
-        borderRadius: 999,
-        border: "1px solid var(--wr-hairline)",
-        background: "var(--wr-bg)",
-        color: "var(--wr-muted)",
-        cursor: "pointer",
-      }}
+      style={{ ...HUD_FLOAT, left: 12 }}
     >
       <IconRefresh />
       复原
@@ -554,6 +623,39 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
           </div>
         </div>
         {resetBtn}
+        {/* B11 条漫自动滚动 HUD：缩放态隐藏（缩放中容器锁滚，先复原再播） */}
+        {!zoomed ? (
+          <button
+            type="button"
+            aria-pressed={autoScroll}
+            title={autoScroll ? "暂停自动滚动" : "自动滚动"}
+            onClick={() => setAutoScroll((v) => !v)}
+            style={{ ...HUD_FLOAT, right: 12 }}
+          >
+            {autoScroll ? <IconPause /> : <IconPlay />}
+            {autoScroll ? "暂停" : "自动"}
+          </button>
+        ) : null}
+        {autoEndToast ? (
+          <div
+            role="status"
+            style={{
+              position: "absolute",
+              bottom: 56,
+              left: "50%",
+              transform: "translateX(-50%)",
+              fontSize: 12,
+              color: "var(--wr-muted)",
+              background: "var(--wr-bg)",
+              border: "1px solid var(--wr-hairline)",
+              borderRadius: 999,
+              padding: "4px 12px",
+              pointerEvents: "none",
+            }}
+          >
+            已到底部，自动滚动停止
+          </div>
+        ) : null}
       </div>
     );
   }

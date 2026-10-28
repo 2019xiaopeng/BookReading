@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import { saveReaderBackground } from "../../tauri/invoke";
+import { deleteReaderFont, saveReaderBackground, saveReaderFont } from "../../tauri/invoke";
 import { resetBackgroundCache } from "../../ui/appBackground";
+import { resetFontCache } from "../../ui/readerFont";
 import { setTheme, THEME_SWATCHES, useTheme } from "../../ui/theme";
-import type { ReaderSettings } from "../settings/types";
+import type { FontFamily, ReaderSettings } from "../settings/types";
 
 export default function SettingsPanel(props: {
   value: ReaderSettings;
@@ -17,6 +18,9 @@ export default function SettingsPanel(props: {
   const scrolled = v.readingMode === "scrolled";
   const [bgBusy, setBgBusy] = useState(false);
   const [bgError, setBgError] = useState<string | null>(null);
+  const [fontBusy, setFontBusy] = useState(false);
+  const [fontError, setFontError] = useState<string | null>(null);
+  const fontCustom = v.reader_font.type === "custom";
 
   async function pickBackground() {
     if (bgBusy) return;
@@ -34,6 +38,41 @@ export default function SettingsPanel(props: {
       setBgError(String(e));
     } finally {
       setBgBusy(false);
+    }
+  }
+
+  // B11 自定义字体：安装→单槽覆盖并选中 custom；恢复默认→删槽位、回 default
+  async function pickFont() {
+    if (fontBusy) return;
+    setFontError(null);
+    setFontBusy(true);
+    try {
+      const picked = await open({
+        filters: [{ name: "Fonts", extensions: ["ttf", "otf", "woff2"] }],
+      });
+      if (typeof picked !== "string") return;
+      const path = await saveReaderFont(picked);
+      resetFontCache(); // 同扩展名换字体 path 不变，旧 @font-face blob 必须作废
+      props.onChange({ ...v, reader_font: { type: "custom", path }, fontFamily: "custom" });
+    } catch (e) {
+      setFontError(String(e));
+    } finally {
+      setFontBusy(false);
+    }
+  }
+
+  async function restoreFont() {
+    if (fontBusy) return;
+    setFontError(null);
+    setFontBusy(true);
+    try {
+      await deleteReaderFont();
+      resetFontCache();
+      props.onChange({ ...v, reader_font: { type: "preset" }, fontFamily: "default" });
+    } catch (e) {
+      setFontError(String(e));
+    } finally {
+      setFontBusy(false);
     }
   }
 
@@ -129,20 +168,43 @@ export default function SettingsPanel(props: {
         <select
           className="wr-select"
           aria-label="正文字体"
-          value={v.fontFamily}
+          value={v.fontFamily === "custom" && !fontCustom ? "default" : v.fontFamily}
           onChange={(e) => {
             const next = e.currentTarget.value;
-            if (next === "default" || next === "songti" || next === "heiti" || next === "kaiti" || next === "fangsong") {
-              props.onChange({ ...v, fontFamily: next });
+            if (
+              next === "default" ||
+              next === "songti" ||
+              next === "heiti" ||
+              next === "kaiti" ||
+              next === "fangsong" ||
+              (next === "custom" && fontCustom)
+            ) {
+              props.onChange({ ...v, fontFamily: next as FontFamily });
             }
           }}
         >
-          <option value="default">默认（宋体系）</option>
+          <option value="default">悦读（回退宋体）</option>
           <option value="songti">宋体</option>
           <option value="heiti">黑体</option>
           <option value="kaiti">楷体</option>
           <option value="fangsong">仿宋</option>
+          {fontCustom ? <option value="custom">自定义字体</option> : null}
         </select>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button type="button" className="wr-btn" onClick={() => void pickFont()} disabled={fontBusy}>
+            从文件安装字体…
+          </button>
+          {fontCustom ? (
+            <button type="button" className="wr-btn" onClick={() => void restoreFont()} disabled={fontBusy}>
+              恢复默认
+            </button>
+          ) : null}
+        </div>
+        {fontError ? (
+          <div role="alert" className="wr-muted" style={{ fontSize: 12 }}>
+            {fontError}
+          </div>
+        ) : null}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

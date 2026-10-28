@@ -125,6 +125,7 @@ describe("normalizeImageReaderSettings", () => {
       mode: "webtoon",
       pageAnimation: "slide",
       webtoonWidth: 75,
+      autoScrollSpeed: 60,
     });
   });
 
@@ -139,6 +140,13 @@ describe("normalizeImageReaderSettings", () => {
     expect(normalizeImageReaderSettings({ webtoonWidth: 120 }).webtoonWidth).toBe(100);
     expect(normalizeImageReaderSettings({ webtoonWidth: "80" }).webtoonWidth).toBe(75);
     expect(normalizeImageReaderSettings({ webtoonWidth: 62 }).webtoonWidth).toBe(62);
+  });
+
+  test("batch11: autoScrollSpeed clamps to 20-240, non-numbers fall back to 60", () => {
+    expect(normalizeImageReaderSettings({ autoScrollSpeed: 5 }).autoScrollSpeed).toBe(20);
+    expect(normalizeImageReaderSettings({ autoScrollSpeed: 999 }).autoScrollSpeed).toBe(240);
+    expect(normalizeImageReaderSettings({ autoScrollSpeed: "90" }).autoScrollSpeed).toBe(60);
+    expect(normalizeImageReaderSettings({ autoScrollSpeed: 120 }).autoScrollSpeed).toBe(120);
   });
 });
 

@@ -577,6 +577,68 @@ pub fn save_reader_background(app: tauri::AppHandle, source_path: String) -> Res
     Ok(format!("library/bg/{name}"))
 }
 
+// B11 自定义正文字体：ttf/otf/woff2 且 ≤20MB，返回小写扩展名
+fn validate_font_file(source_path: &str) -> Result<String, String> {
+    let ext = Path::new(source_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if !matches!(ext.as_str(), "ttf" | "otf" | "woff2") {
+        return Err("不支持的字体格式，仅支持 TTF/OTF/WOFF2".to_string());
+    }
+    let meta = fs::metadata(source_path).map_err(|e| format!("failed to read {source_path}: {e}"))?;
+    if meta.len() > 20 * 1024 * 1024 {
+        return Err("字体文件超过 20MB 限制".to_string());
+    }
+    Ok(ext)
+}
+
+// core takes fonts_dir so tests can run against a tempdir instead of real appdata
+fn store_reader_font(fonts_dir: &Path, source_path: &str) -> Result<String, String> {
+    let ext = validate_font_file(source_path)?;
+    fs::create_dir_all(fonts_dir).map_err(|e| format!("failed to create fonts dir: {e}"))?;
+    let final_font = fonts_dir.join(format!("font.{ext}"));
+    let tmp_font = fonts_dir.join(format!("font.{ext}.part"));
+    atomic_copy_to(source_path, &tmp_font, &final_font)
+        .map_err(|e| format!("failed to save font: {e}"))?;
+    // single slot: drop stale font.* of other extensions, best-effort
+    let keep = format!("font.{ext}");
+    if let Ok(entries) = fs::read_dir(fonts_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("font.") && name.as_ref() != keep.as_str() {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(keep)
+}
+
+#[tauri::command]
+pub fn save_reader_font(app: tauri::AppHandle, source_path: String) -> Result<String, String> {
+    let fonts_dir = app_paths::library_dir(&app)?.join("fonts");
+    let name = store_reader_font(&fonts_dir, &source_path)?;
+    Ok(format!("library/fonts/{name}"))
+}
+
+/// B11 恢复默认：删除字体单槽（目录不存在/已空视为成功）
+#[tauri::command]
+pub fn delete_reader_font(app: tauri::AppHandle) -> Result<(), String> {
+    let fonts_dir = app_paths::library_dir(&app)?.join("fonts");
+    if let Ok(entries) = fs::read_dir(&fonts_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("font.") && !name.ends_with(".part") {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(())
+}
+
 // core takes covers_dir so tests can run against a tempdir instead of real appdata
 fn store_book_cover(covers_dir: &Path, book_id: &str, source_path: &str) -> Result<String, String> {
     let ext = validate_image_file(source_path)?;
@@ -948,6 +1010,35 @@ mod tests {
         assert_eq!(store_reader_background(&dir, jpg.to_str().unwrap()).unwrap(), "bg.jpg");
         assert_eq!(fs::read(dir.join("bg.jpg")).unwrap(), b"jpeg");
         assert!(!dir.join("bg.png").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reader_font_rejects_bad_extension_and_oversize() {
+        let dir = temp_bg_dir("font-bad");
+        let txt = dir.join("f.txt");
+        fs::write(&txt, b"x").unwrap();
+        assert_eq!(
+            store_reader_font(&dir, txt.to_str().unwrap()).unwrap_err(),
+            "不支持的字体格式，仅支持 TTF/OTF/WOFF2"
+        );
+        let big = dir.join("big.ttf");
+        fs::write(&big, vec![0u8; 20 * 1024 * 1024 + 1]).unwrap();
+        assert_eq!(store_reader_font(&dir, big.to_str().unwrap()).unwrap_err(), "字体文件超过 20MB 限制");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reader_font_overwrites_single_slot() {
+        let dir = temp_bg_dir("font-slot");
+        let ttf = dir.join("in.ttf");
+        fs::write(&ttf, b"ttf").unwrap();
+        assert_eq!(store_reader_font(&dir, ttf.to_str().unwrap()).unwrap(), "font.ttf");
+        let woff2 = dir.join("in.woff2");
+        fs::write(&woff2, b"woff").unwrap();
+        assert_eq!(store_reader_font(&dir, woff2.to_str().unwrap()).unwrap(), "font.woff2");
+        assert_eq!(fs::read(dir.join("font.woff2")).unwrap(), b"woff");
+        assert!(!dir.join("font.ttf").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 

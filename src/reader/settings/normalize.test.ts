@@ -6,6 +6,7 @@ import {
   normalizeLineHeight,
   normalizePageAnimation,
   normalizeReaderBackground,
+  normalizeReaderFont,
   normalizeReadingMode,
   normalizeTheme,
 } from "./normalize";
@@ -88,8 +89,8 @@ describe("normalize", () => {
     expect(normalizeFontFamily("comic-sans")).toBe("default");
   });
 
-  test("normalizeFontFamily accepts all five families", () => {
-    for (const f of ["default", "songti", "heiti", "kaiti", "fangsong"] as const) {
+  test("normalizeFontFamily accepts all families", () => {
+    for (const f of ["default", "songti", "heiti", "kaiti", "fangsong", "custom"] as const) {
       expect(normalizeFontFamily(f)).toBe(f);
     }
   });
@@ -99,9 +100,20 @@ describe("normalize", () => {
     expect(normalizeFontFamily("SONGTI")).toBe("songti");
   });
 
+  test("batch11: normalizeReaderFont keeps custom slots, rejects invalid shapes", () => {
+    expect(normalizeReaderFont('{"type":"custom","path":"library/fonts/font.ttf"}')).toEqual({
+      type: "custom",
+      path: "library/fonts/font.ttf",
+    });
+    expect(normalizeReaderFont({ type: "custom" })).toEqual({ type: "preset" });
+    expect(normalizeReaderFont({ type: "image", path: "library/bg/bg.png" })).toEqual({ type: "preset" });
+    expect(normalizeReaderFont(undefined)).toEqual({ type: "preset" });
+  });
+
   test("defaultSettings includes the new keys with their defaults", () => {
     expect(defaultSettings.readingMode).toBe("paginated");
     expect(defaultSettings.reader_bg).toEqual({ type: "preset" });
+    expect(defaultSettings.reader_font).toEqual({ type: "preset" });
     expect(defaultSettings.fontFamily).toBe("default");
   });
 });

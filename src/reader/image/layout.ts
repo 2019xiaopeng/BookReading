@@ -10,6 +10,7 @@ export type ImageReaderSettings = {
   mode: ImageReadMode;
   pageAnimation: ImagePageAnimation;
   webtoonWidth: number; // percent of the strip width, 40-100
+  autoScrollSpeed: number; // webtoon auto-scroll px/s, 20-240 (B11)
 };
 
 export type TurnDirection = "prev" | "next";
@@ -23,6 +24,7 @@ export const defaultImageReaderSettings: ImageReaderSettings = {
   mode: "paged",
   pageAnimation: "slide",
   webtoonWidth: 75,
+  autoScrollSpeed: 60,
 };
 
 export function normalizeImageReaderSettings(raw: unknown): ImageReaderSettings {
@@ -36,6 +38,7 @@ export function normalizeImageReaderSettings(raw: unknown): ImageReaderSettings 
   }
   const o = (typeof v === "object" && v !== null ? v : {}) as Record<string, unknown>;
   const width = typeof o.webtoonWidth === "number" && Number.isFinite(o.webtoonWidth) ? o.webtoonWidth : 75;
+  const speed = typeof o.autoScrollSpeed === "number" && Number.isFinite(o.autoScrollSpeed) ? o.autoScrollSpeed : 60;
   return {
     fit: o.fit === "width" || o.fit === "original" ? o.fit : "height",
     layout: o.layout === "double" ? "double" : "single",
@@ -43,6 +46,7 @@ export function normalizeImageReaderSettings(raw: unknown): ImageReaderSettings 
     mode: o.mode === "webtoon" ? "webtoon" : "paged",
     pageAnimation: o.pageAnimation === "none" ? "none" : "slide",
     webtoonWidth: Math.min(100, Math.max(40, width)),
+    autoScrollSpeed: Math.min(240, Math.max(20, Math.round(speed))),
   };
 }
 
