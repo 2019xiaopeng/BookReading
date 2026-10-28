@@ -6,7 +6,7 @@ import { deleteFavoriteQuote, listBooks, listFavoriteBooks, listFavoriteQuotes, 
 import { useCoverUrls } from "../library/useCoverUrls";
 import AppShell from "../ui/AppShell";
 import { showConfirm } from "../ui/dialog";
-import { IconHeart, IconQuote, IconStar } from "../ui/icons";
+import { IconBook, IconHeart, IconQuote, IconStar, IconTrash } from "../ui/icons";
 
 export default function FavoritesPage() {
   const navigate = useNavigate();
@@ -175,7 +175,7 @@ export default function FavoritesPage() {
 
       {tab === "quotes" ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 18 }}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="wr-toolbar-row" style={{ padding: 0 }}>
             <select
               aria-label="按书籍筛选"
               className="wr-select"
@@ -222,35 +222,44 @@ export default function FavoritesPage() {
               )}
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {quotes.map((q) => (
-                <div key={q.id} className="wr-card" style={{ padding: 12 }}>
-                  <div className="wr-muted" style={{ fontFamily: "var(--wr-mono)", fontSize: 12, marginBottom: 8 }}>
-                    {bookIdToTitle.get(q.book_id) ?? q.book_id}
+            <div className="wr-quote-list">
+              {quotes.map((q) => {
+                const src = bookIdToTitle.get(q.book_id) ?? q.book_id;
+                return (
+                  <div key={q.id} className="wr-card wr-quote-card">
+                    <div className="wr-quote-text" title={q.text}>{q.text}</div>
+                    {q.note ? <div className="wr-quote-note wr-muted" title={q.note}>{q.note}</div> : null}
+                    <div className="wr-quote-foot">
+                      <span className="wr-quote-src" title={src}>{src}</span>
+                      <button
+                        className="wr-mini-btn"
+                        aria-label="打开定位"
+                        title="打开定位"
+                        onClick={() => navigate(`/read/${q.book_id}?cfi=${encodeURIComponent(q.cfi_range)}`)}
+                      >
+                        <IconBook width={16} height={16} />
+                      </button>
+                      <button
+                        className="wr-mini-btn"
+                        data-danger="true"
+                        aria-label="删除收藏"
+                        title="删除收藏"
+                        disabled={loading}
+                        onClick={async () => {
+                          const ok = await showConfirm("删除收藏", "确定删除这条收藏吗？", { danger: true, confirmText: "删除" });
+                          if (!ok) return;
+                          setLoading(true);
+                          deleteFavoriteQuote(q.id)
+                            .then(() => refreshQuotes())
+                            .finally(() => setLoading(false));
+                        }}
+                      >
+                        <IconTrash width={16} height={16} />
+                      </button>
+                    </div>
                   </div>
-                  <div style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}>{q.text}</div>
-                  {q.note ? <div className="wr-muted" style={{ whiteSpace: "pre-wrap", marginBottom: 10 }}>{q.note}</div> : null}
-                  <div className="wr-actions">
-                    <button className="wr-btn wr-btn-primary" onClick={() => navigate(`/read/${q.book_id}?cfi=${encodeURIComponent(q.cfi_range)}`)}>
-                      打开定位
-                    </button>
-                    <button
-                      className="wr-btn"
-                      onClick={async () => {
-                        const ok = await showConfirm("删除收藏", "确定删除这条收藏吗？", { danger: true, confirmText: "删除" });
-                        if (!ok) return;
-                        setLoading(true);
-                        deleteFavoriteQuote(q.id)
-                          .then(() => refreshQuotes())
-                          .finally(() => setLoading(false));
-                      }}
-                      disabled={loading}
-                    >
-                      删除
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

@@ -134,6 +134,20 @@ export default function LibraryPage() {
     () => books.filter((b) => (b.shelf_id ?? null) === currentShelfId),
     [books, currentShelfId],
   );
+  // 书架卡四宫格：每架前 4 张已就绪的封面（无封面/未加载的书跳过，格子由主题渐变占位）
+  const coversByShelf = useMemo(() => {
+    const m = new Map<number, { id: string; url: string }[]>();
+    for (const b of books) {
+      const url = b.cover_path ? coverUrls[b.cover_path] : undefined;
+      if (!url || b.shelf_id == null) continue;
+      const list = m.get(b.shelf_id) ?? [];
+      if (list.length < 4) {
+        list.push({ id: b.id, url });
+        m.set(b.shelf_id, list);
+      }
+    }
+    return m;
+  }, [books, coverUrls]);
 
   const booksFiltered = useMemo(() => {
     let list = shelfBooks;
@@ -578,6 +592,15 @@ export default function LibraryPage() {
 
   // ---- 拖拽 ----
 
+  // drop 后目标卡弹入动画（180ms，reduced-motion 下由全局回退关闭）
+  const [popKey, setPopKey] = useState<string | null>(null);
+  const popTimer = useRef<number>(0);
+  function popCard(key: string) {
+    window.clearTimeout(popTimer.current);
+    setPopKey(key);
+    popTimer.current = window.setTimeout(() => setPopKey(null), 220);
+  }
+
   async function moveDroppedBook(bookId: string, shelfId: number | null) {
     try {
       await moveBooksToShelf([bookId], shelfId);
@@ -602,6 +625,7 @@ export default function LibraryPage() {
     e.preventDefault();
     if (dragBookId) {
       void moveDroppedBook(dragBookId, shelfId);
+      if (shelfId != null) popCard(`shelf:${shelfId}`);
     } else if (
       dragShelfId != null &&
       sortKey === "custom" &&
@@ -613,6 +637,7 @@ export default function LibraryPage() {
       const rest = ids.filter((id) => id !== dragShelfId);
       const to = rest.indexOf(shelfId);
       rest.splice(to < 0 ? rest.length : to, 0, dragShelfId);
+      popCard(`shelf:${dragShelfId}`);
       void persistOrder(rest, setShelfOrder);
     }
     setDragBookId(null);
@@ -626,6 +651,7 @@ export default function LibraryPage() {
     const rest = booksFiltered.map((b) => b.id).filter((id) => id !== dragBookId);
     const to = rest.indexOf(target.id);
     rest.splice(to < 0 ? rest.length : to, 0, dragBookId);
+    popCard(`book:${dragBookId}`);
     void persistOrder(rest, setBooksOrder);
     setDragBookId(null);
   }
@@ -761,7 +787,7 @@ export default function LibraryPage() {
             <IconRefresh />
             <span>刷新</span>
           </button>
-          <button className="wr-small-btn" onClick={onImportImages} disabled={loading}>
+          <button className="wr-small-btn wr-primary" onClick={onImportImages} disabled={loading}>
             <IconImage />
             <span>导入漫画</span>
           </button>
@@ -773,7 +799,7 @@ export default function LibraryPage() {
       }
     >
       {trashView ? (
-        <div style={{ display: "flex", gap: 8, padding: "16px 18px 0", alignItems: "center" }}>
+        <div className="wr-toolbar-row">
           <button className="wr-btn" onClick={() => navigate("/")}>
             返回书架
           </button>
@@ -803,7 +829,7 @@ export default function LibraryPage() {
           </button>
         </div>
       ) : (
-        <div style={{ display: "flex", gap: 8, padding: "16px 18px 0", alignItems: "center" }}>
+        <div className="wr-toolbar-row">
           <div className="wr-seg" role="group" aria-label="排序">
             <button className="wr-seg-btn" data-active={sortKey === "recent"} onClick={() => setSortKey("recent")}>
               最近阅读
@@ -971,13 +997,39 @@ export default function LibraryPage() {
             openMenu({ kind: "grid", x: e.clientX, y: e.clientY }, e.currentTarget);
           }}
         >
-          {subShelves.map((s) => (
+          {/* 常驻"新建书架"虚线卡：网格第一格，空书架也显示 */}
+          <div
+            className="wr-book-card wr-shelf-create"
+            role="button"
+            tabIndex={0}
+            aria-label="新建书架"
+            onClick={onNewShelf}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onNewShelf();
+              }
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              onNewShelf();
+            }}
+          >
+            <IconFolder width={22} height={22} />
+            <span>新建书架</span>
+          </div>
+
+          {subShelves.map((s) => {
+            const count = counts.get(s.id) ?? 0;
+            return (
             <div
               key={s.id}
               className="wr-book-card wr-shelf-card"
               role="button"
               tabIndex={0}
-              aria-label={`书架 ${s.name}，${counts.get(s.id) ?? 0} 本`}
+              aria-label={`书架 ${s.name}，${count} 本`}
+              data-dragging={dragShelfId === s.id}
+              data-pop={popKey === `shelf:${s.id}`}
               draggable
               onDragStart={(e) => {
                 e.dataTransfer.effectAllowed = "move";
@@ -1008,14 +1060,20 @@ export default function LibraryPage() {
               onDrop={(e) => dropOnShelf(e, s.id)}
             >
               <div className="wr-cover" aria-hidden="true">
-                <IconFolder className="wr-shelf-icon" width={30} height={30} />
+                <div className="wr-shelf-grid">
+                  {(coversByShelf.get(s.id) ?? []).map((c) => (
+                    <img key={c.id} src={c.url} alt="" />
+                  ))}
+                </div>
+                {count > 4 ? <span className="wr-shelf-badge">+{count - 4}</span> : null}
               </div>
               <div className="wr-meta">
                 <div className="wr-title" title={s.name}>{s.name}</div>
-                <div className="wr-author">{counts.get(s.id) ?? 0} 本</div>
+                <div className="wr-author">{count} 本</div>
               </div>
             </div>
-          ))}
+            );
+          })}
 
           {booksFiltered.map((b) => (
             <div
@@ -1024,6 +1082,8 @@ export default function LibraryPage() {
               role="button"
               tabIndex={0}
               data-selected={selectMode && selected.has(b.id)}
+              data-dragging={dragBookId === b.id}
+              data-pop={popKey === `book:${b.id}`}
               draggable
               onDragStart={(e) => {
                 e.dataTransfer.setData("text/book-id", b.id);

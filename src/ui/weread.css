@@ -422,7 +422,8 @@
 
 .wr-main {
   display: grid;
-  grid-template-rows: 62px 1fr;
+  /* 批次11b：auto 代替定高 62px——窄窗下顶栏控件换行时栏随长，不裁切 */
+  grid-template-rows: auto 1fr;
   min-width: 0;
   min-height: 0;
 }
@@ -432,6 +433,8 @@
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
+  min-height: 62px;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--wr-hairline);
 }
 
@@ -475,6 +478,9 @@
 
 .wr-seg {
   display: inline-flex;
+  /* 批次11b：窄窗下段控内按钮允许换行成两排，胶囊不被压扁、文字不折行 */
+  flex-wrap: wrap;
+  max-width: 100%;
   border: 1px solid var(--wr-hairline);
   border-radius: 999px;
   padding: 4px;
@@ -493,6 +499,7 @@
   padding: 8px 12px;
   border-radius: 999px;
   cursor: pointer;
+  white-space: nowrap;
   transition: background 120ms ease, color 120ms ease, transform 120ms ease;
 }
 
@@ -872,19 +879,10 @@
   gap: 14px;
 }
 
-/* 书架密度档位：列宽由 density.ts 内联注入，此处只联动封面/卡列尺寸与字号（standard=默认不动） */
-.wr-book-grid--compact .wr-cover {
-  width: 52px;
-  height: 76px;
-}
-
-.wr-book-grid--compact .wr-book-card {
-  grid-template-columns: 52px 1fr;
-}
-
+/* 书架密度档位：列宽由 density.ts 内联注入，此处只联动封面/卡列尺寸与字号（standard=默认不动）；
+   批次11b 删紧凑档，三档=标准/宽松/特大；封面高一律由 aspect-ratio 2/3 推导 */
 .wr-book-grid--large .wr-cover {
   width: 96px;
-  height: 138px;
 }
 
 .wr-book-grid--large .wr-book-card {
@@ -898,7 +896,6 @@
 
 .wr-book-grid--xl .wr-cover {
   width: 120px;
-  height: 172px;
 }
 
 .wr-book-grid--xl .wr-book-card {
@@ -948,7 +945,8 @@
 
 .wr-cover {
   width: 64px;
-  height: 92px;
+  /* 批次11b：固定 2:3 书封比例，高由比例推导；渐变兜底兼作无封面/书架四宫格占位 */
+  aspect-ratio: 2 / 3;
   border-radius: var(--wr-radius-md);
   border: 1px solid var(--wr-hairline);
   position: relative;
@@ -965,11 +963,11 @@
     linear-gradient(180deg, rgba(var(--wr-ink-rgb), 0.06), rgba(var(--wr-ink-rgb), 0.02));
 }
 
-/* 封面原图直出：contain 完整呈现（禁 cover 裁切/拉伸），image-rendering:auto 走浏览器默认缩放采样 */
+/* 批次11b：cover 裁满封面盒——contain 会留边、露出底部渐变；文字封面卡不受影响（.wr-cover-text 叠加） */
 .wr-cover img {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   image-rendering: auto;
 }
 
@@ -1213,6 +1211,9 @@
   display: grid;
   gap: 10px;
   padding: 14px;
+  /* 批次11b：弹层实色化——覆盖 .wr-panel 的半透明渐变，文字不再透出底下书架 */
+  background: var(--panel-solid);
+  box-shadow: var(--wr-shadow-pop);
   animation: wr-menu-in 150ms ease both;
 }
 
@@ -1273,6 +1274,7 @@
 .wr-group-chip.drop-target {
   border-color: var(--wr-accent);
   color: var(--wr-ink);
+  transform: scale(1.02);
 }
 
 .wr-group-chip:focus-visible {
@@ -1280,22 +1282,91 @@
   outline-offset: 2px;
 }
 
-/* 批次8：书架卡（文件夹图标占封面位），与书卡同语言 */
-.wr-shelf-card .wr-cover {
+/* 批次11b：工具行（排序/筛选/回收站操作）允许换行——窄窗下段控整组换行而不是压缩溢出 */
+.wr-toolbar-row {
   display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 16px 18px 0;
+}
+
+/* 批次11b：书架卡封面=四宫格前 4 本书封；不足 4 格露出 .wr-cover 主题渐变占位 */
+.wr-shelf-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 1px;
+}
+
+.wr-shelf-grid img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 超过 4 本时右下角 +N 徽标 */
+.wr-shelf-badge {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 2;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--panel-solid);
+  color: var(--wr-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+/* 常驻"新建书架"虚线卡（网格第一格） */
+.wr-shelf-create {
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 8px;
+  min-height: 132px;
+  border-style: dashed;
+  background: transparent;
+  box-shadow: none;
+  color: var(--wr-muted);
 }
 
-.wr-shelf-icon {
+.wr-shelf-create:hover,
+.wr-shelf-create:focus-visible {
+  border-color: rgba(var(--wr-accent-rgb), 0.5);
+  background: rgba(var(--wr-accent-rgb), 0.05);
   color: var(--wr-ink);
-  opacity: 0.75;
 }
 
-/* DnD drop 目标高亮（书卡/书架卡，语义同 chips 的 .drop-target） */
+/* DnD drop 目标高亮（书卡/书架卡，语义同 chips 的 .drop-target）；批次11b 加轻微放大 */
 .wr-book-card.drop-target {
   border-color: var(--wr-accent);
   box-shadow: 0 0 0 3px rgba(var(--wr-accent-rgb), 0.25);
+  transform: scale(1.02);
+}
+
+/* 拖起后原卡淡出+虚线占位（ghost 是原生整卡截图） */
+.wr-book-card[data-dragging="true"] {
+  opacity: 0.35;
+  border-style: dashed;
+}
+
+/* drop 后新位置弹入 */
+.wr-book-card[data-pop="true"] {
+  animation: wr-card-pop 180ms ease;
+}
+
+@keyframes wr-card-pop {
+  from {
+    transform: scale(0.96);
+  }
+  to {
+    transform: scale(1);
+  }
 }
 
 .wr-book-card[data-selected="true"] {
@@ -1332,7 +1403,7 @@
   outline-offset: 2px;
 }
 
-/* 批量操作浮动条（选择模式） */
+/* 批量操作浮动条（选择模式）；批次11b 窄窗允许换行不溢出视口 */
 .wr-batch-bar {
   position: fixed;
   left: 50%;
@@ -1342,6 +1413,9 @@
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100vw - 32px);
   padding: 10px 14px;
   border: 1px solid var(--wr-hairline);
   border-radius: 999px;
@@ -1389,7 +1463,7 @@
 
 .wr-trash-cover {
   width: 40px;
-  height: 56px;
+  aspect-ratio: 2 / 3;
   flex: 0 0 auto;
   border: 1px solid var(--wr-hairline);
   border-radius: var(--wr-radius-xs);
@@ -1403,7 +1477,7 @@
 .wr-trash-cover img {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
 }
 
 .wr-trash-info {
@@ -2045,6 +2119,7 @@ input[type="range"]:focus-visible {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
   padding: 7px 0;
   font-size: 13px;
   border-bottom: 1px solid var(--wr-hairline);
@@ -2136,7 +2211,8 @@ input[type="range"]:focus-visible {
   padding: 14px 24px;
   border: 1px solid var(--wr-hairline);
   border-radius: var(--wr-radius-md);
-  background: var(--wr-paper);
+  /* 批次11b：实色化，夜间主题 --wr-paper 半透明会透底 */
+  background: var(--panel-solid);
   font-size: 16px;
   font-weight: 700;
 }
@@ -2153,7 +2229,8 @@ input[type="range"]:focus-visible {
   padding: 7px 14px;
   border: 1px solid var(--wr-hairline);
   border-radius: 999px;
-  background: var(--wr-paper);
+  /* 批次11b：实色化，夜间主题 --wr-paper 半透明会透底 */
+  background: var(--panel-solid);
   box-shadow: var(--wr-shadow-pop);
   overflow: hidden;
   animation: wr-menu-in 150ms ease both;
@@ -2300,7 +2377,109 @@ input[type="range"]:focus-visible {
   flex-wrap: wrap;
 }
 
+/* 批次11b：收藏句紧凑卡——句文 clamp 3 行（title 提示全文），底部来源小字 + 定位/删除图标钮 */
+.wr-quote-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.wr-quote-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  min-width: 0;
+}
+
+.wr-quote-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.wr-quote-note {
+  font-size: 12px;
+}
+
+.wr-quote-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wr-quote-src {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--wr-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wr-mini-btn[data-danger="true"] {
+  color: var(--wr-danger);
+}
+
+.wr-mini-btn[data-danger="true"]:hover {
+  background: color-mix(in srgb, var(--wr-danger) 12%, transparent);
+}
+
+/* 批次11b：窄窗响应式——侧栏让位、行距收紧，控件换行不溢出 */
+@media (max-width: 900px) {
+  .wr-shell {
+    grid-template-columns: 210px 1fr;
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .wr-toolbar-row {
+    padding: 12px 12px 0;
+  }
+
+  .wr-filter-row {
+    padding: 10px 12px 0;
+  }
+
+  .wr-group-row {
+    padding: 12px 12px 0;
+  }
+
+  .wr-book-grid,
+  .wr-trash-list {
+    padding: 12px 12px 14px;
+  }
+}
+
 @media (max-width: 640px) {
+  .wr-shell {
+    grid-template-columns: 156px 1fr;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .wr-pill {
+    display: none;
+  }
+
+  .wr-nav {
+    padding: 8px 6px;
+  }
+
+  .wr-side-bottom {
+    padding: 8px;
+  }
+
+  .wr-small-btn {
+    padding: 8px 6px;
+    font-size: 12px;
+  }
+
   .wr-details {
     grid-template-columns: 1fr;
   }
