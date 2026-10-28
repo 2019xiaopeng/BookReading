@@ -1,21 +1,109 @@
 # BookReading
 
-Windows 桌面端 EPUB 阅读器（Tauri + React）。
+Windows 桌面全格式阅读器（Tauri + React + Rust）：EPUB / TXT / 漫画文件夹·CBZ / PDF，一个应用读完全部本地藏书。书籍、进度、笔记全部存在本机，不联网、无账号。
 
-## 开发
+## 功能总览
+
+### 格式与阅读
+- 四种格式统一入口：EPUB、TXT（自动探测 GBK/UTF-8/UTF-16 编码，legado 规则池自动分章）、漫画文件夹与 CBZ（Webtoon 连续滚动）、PDF（翻页 + 连续滚动）
+- 翻页 / 滚动双阅读模式；单双栏分栏；RTL（日漫从右向左）；横图跨页检测
+- 六套主题：浅色 / 纸黄 / 护眼绿 / 灰 / 暗色 / 高对比暗色，全局即时切换，另可设置自定义背景图与自定义正文字体（ttf/otf/woff2）
+- 字号 / 行距 / 字体（宋 / 黑 / 楷 / 仿宋 / 默认悦读栈）自由调节；翻页动画速度可调（150–600ms）
+- 页码显示：EPUB 章内页码 + 全局估算页码；漫画与 PDF 显示第 N / 总页
+- 沉浸模式：Ctrl+D 锁定全藏界面，鼠标活动不唤出；F11 窗口全屏独立开关
+- 漫画：Ctrl+滚轮 0.5–4x 缩放（光标锚点）、拖拽平移、条漫宽度三档 + 自定义、自动滚动（空格播放，方向键调速）
+- 划线高亮 / 书签（含章节标题）/ 收藏句子 / 书内全文搜索（结果带章节标题与百分比，一键跳转）
+
+### 书库管理
+- 层级书架（无限嵌套，侧栏树形导航，面包屑定位，拖拽归架）
+- 标签系统：8 色标签、多选 AND 筛选、批量打标、标签合并
+- 回收站：删除先入回收站，7 天 / 30 天 / 永不三种保留期，可恢复或彻底删除
+- 批量操作：多选移动 / 收藏 / 删除 / 打标签
+- 排序（最近阅读 / 书名 / 导入时间 × 升降序）、阅读状态筛选（未读 / 在读 / 已读）、搜索（书名 + 文件名）
+- 书籍详情页：编辑标题 / 作者 / 简介，查看格式 / 大小 / 进度 / 书架路径，一键更换自定义封面
+- 卡片密度三档（标准 / 宽松 / 特大）、书架四宫格封面缩略
+
+### 导入
+- 文件多选导入（EPUB / TXT / PDF）；父目录一键批量导入漫画（每个子文件夹一本书）
+- 拖入窗口即导入（支持文件与目录，绝对路径直取）
+- 自动查重（文件名 / 标题 + 字节数），四类结果汇总：成功 / 已存在 / 疑似重复 / 失败原因
+- 壳级进度条：第 i / N 本 + 当前书名
+
+### 存储
+- 书库根目录可迁移（空间预检、复制式迁移、失败自动回滚）
+- 占用统计：书籍 / 封面 / 背景图 / 数据库 / 日志分类列表
+- 一键清理：封面缓存（文件夹漫画自动重拷首页）、背景图、运行日志
+
+## 快捷键
+
+| 场景 | 按键 | 作用 |
+| --- | --- | --- |
+| 阅读 | ← / → / PgUp / PgDn | 翻页（漫画 RTL 下方向语义反转） |
+| 阅读 | 滚轮 | 滚动阅读 / 翻页 |
+| 阅读 | 空格 | 条漫模式：自动滚动播放 / 暂停 |
+| 阅读 | ↑ / ↓ | 自动滚动播放中：速度 ±10px/s |
+| 阅读 | Esc | 关抽屉 → 解除界面锁定 → 唤醒工具栏 |
+| 阅读 | F11 | 窗口全屏开关（独立于沉浸锁定） |
+| 阅读 | Ctrl+F | 书内搜索（EPUB） |
+| 阅读 | Ctrl+B | 在当前位置加书签 |
+| 阅读 | Ctrl+D | 锁定 / 解锁界面 |
+| 阅读 | Ctrl+滚轮 / 双击 | 漫画缩放 / 复位缩放 |
+| 阅读 | PDF | 复用漫画键位与热区（翻页 / 缩放 / Ctrl+B 书签；连续滚动模式无自动滚动） |
+| 书库 | Enter / Space | 打开选中的书或书架 |
+| 书库 | Tab | 在书与书架间移动焦点 |
+| 书库 | 右键 | 上下文菜单 |
+| 书库 | 拖拽 | 把书移入书架（含批量） |
+
+## 安装
+
+从 [Releases](../../releases/latest) 下载 NSIS 安装包（`bookreading_2.0.0_x64-setup.exe`），双击安装即可。安装包内置 WebView2 离线安装器，无需额外环境。
+
+## 从源码构建
+
+环境要求：Node.js 18+、Rust stable（含 Windows MSVC 工具链）。
 
 ```bash
 npm install
-npm run tauri dev
+npm run tauri dev    # 开发调试（前端 dev server 固定占用 14200 端口）
+npm run tauri build  # 产出 NSIS 安装包（src-tauri/target/release/bundle/nsis/）
 ```
 
-## 构建
+说明：
+
+- cargo 走 rsproxy 镜像拉取 crates——项目已自带 `src-tauri/.cargo/config.toml`，无需手动配置。
+- Rust 编译产物体积大，建议把构建目录重定向到大容量磁盘，避免撑爆系统盘：
 
 ```bash
-npm run tauri build
+CARGO_TARGET_DIR=D:/cargo-target/bookreading npm run tauri build
 ```
 
-## 文档
+- 跑测试：`npm test`（前端 Vitest）与 `cd src-tauri && cargo test`（后端）。
 
-- 设计：[2026-05-02-epub-reader-design.md](docs/superpowers/specs/2026-05-02-epub-reader-design.md)
-- 计划：[2026-05-02-epub-reader-plan.md](docs/superpowers/plans/2026-05-02-epub-reader-plan.md)
+## 项目结构
+
+```
+bookreading/
+├── src/                # React 前端
+│   ├── app/            #   路由
+│   ├── pages/          #   书库 / 收藏 / 阅读器页面
+│   ├── library/        #   书架、标签、导入、封面、密度
+│   ├── reader/         #   epub / image / pdf 三类阅读器与设置
+│   ├── tauri/          #   invoke 封装与前端日志
+│   └── ui/             #   AppShell、主题、对话框、设置
+├── src-tauri/          # Rust 后端（SQLite 书库、导入转换、文件管理）
+│   └── .cargo/         #   rsproxy 镜像配置
+└── docs/superpowers/   # 设计规格与各批次变更记录
+```
+
+## 已知限制
+
+- PDF：文本搜索与划线标注暂不可用，仅支持阅读 / 跳页 / 缩放 / 书签；受密码保护的 PDF 暂不支持。
+- EPUB 全局页码为位置估算（按 1024 字/页折算），章内页码准确。
+- 条漫深度恢复为近似落位（恢复到最近渲染锚点，不逐像素还原）。
+
+## 致谢
+
+- [epub.js](https://github.com/futurepress/epub.js)：EPUB 渲染内核
+- [pdf.js](https://github.com/mozilla/pdf.js)：PDF 渲染内核
+- [legado](https://github.com/gedoor/legado)：TXT 分章规则池参考
+- 界面设计参考微信读书桌面版
