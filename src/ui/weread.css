@@ -1864,6 +1864,9 @@ input[type="range"]:focus-visible {
 .wr-image-loading {
   width: 100%;
   min-height: 50vh;
+  /* 批次16：占位底色——图未就绪/淡入期间不再是纯白/纯黑突变 */
+  background: rgba(var(--wr-ink-rgb), 0.05);
+  border-radius: var(--wr-radius-md);
 }
 .wr-image-webtoon:focus-visible {
   outline: 2px solid var(--wr-ink);
@@ -1910,6 +1913,22 @@ input[type="range"]:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .wr-image-fit--in,
   .wr-image-fit--out {
+    animation: none;
+  }
+}
+/* 批次16：页图入场淡入（预载已解码完成才换页，动画只做视觉缓冲）；reduced-motion 直显 */
+.wr-image-fit img,
+.wr-image-webtoon img {
+  animation: wr-image-fade-in 120ms ease;
+}
+@keyframes wr-image-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wr-image-fit img,
+  .wr-image-webtoon img {
     animation: none;
   }
 }

@@ -234,9 +234,20 @@ export async function storageStats(): Promise<StorageStats> {
   return invoke<StorageStats>("storage_stats");
 }
 
-// 成功返回汇总文案（含"重启生效"提示）；失败抛错且不写设置
-export async function migrateLibraryRoot(newRoot: string): Promise<string> {
-  return invoke<string>("migrate_library_root", { newRoot });
+// 迁移结果：数据量与旧库位置（供"删除旧库文件"二次确认与清理命令回传校验）
+export type MigrateResult = {
+  moved_bytes: number;
+  old_library: string;
+  old_db: string;
+};
+
+export async function migrateLibraryRoot(newRoot: string): Promise<MigrateResult> {
+  return invoke<MigrateResult>("migrate_library_root", { newRoot });
+}
+
+// 批次16：迁移后清理旧库文件（Rust 端按 last_migrated_from 校验，防误删任意路径）
+export async function removeOldLibrary(oldLibrary: string, oldDb: string): Promise<string> {
+  return invoke<string>("remove_old_library", { oldLibrary, oldDb });
 }
 
 export type ClearCacheResult = { freed_bytes: number };

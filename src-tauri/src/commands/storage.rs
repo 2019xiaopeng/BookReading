@@ -98,7 +98,10 @@ pub(crate) struct MigratePaths {
     pub bootstrap_db: PathBuf,
 }
 
-fn write_root_setting(db_file: &Path, root: &Path) -> Result<(), String> {
+// settings 键：最近一次迁移的旧库根（remove_old_library 防误删任意路径的凭证）
+pub(crate) const LAST_MIGRATED_KEY: &str = "last_migrated_from";
+
+fn write_setting(db_file: &Path, key: &str, value: &str) -> Result<(), String> {
     if let Some(dir) = db_file.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("failed to create db dir: {e}"))?;
     }
@@ -108,10 +111,21 @@ fn write_root_setting(db_file: &Path, root: &Path) -> Result<(), String> {
     conn.execute(
         "INSERT INTO settings (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![app_paths::LIBRARY_ROOT_KEY, root.to_string_lossy().to_string()],
+        params![key, value],
     )
-    .map_err(|e| format!("failed to save library_root setting: {e}"))?;
+    .map_err(|e| format!("failed to save setting {key}: {e}"))?;
     Ok(())
+}
+
+fn read_setting(db_file: &Path, key: &str) -> Result<Option<String>, String> {
+    if !db_file.is_file() {
+        return Ok(None);
+    }
+    let conn = Connection::open(db_file).map_err(|e| format!("failed to open {}: {e}", db_file.display()))?;
+    let v = conn
+        .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get::<_, String>(0))
+        .ok();
+    Ok(v)
 }
 
 /// 迁移核心（可在测试里对临时目录运行）：复制 library 子目录 + db 到新根，
@@ -186,14 +200,25 @@ pub(crate) fn migrate_library_root_core(cur: &MigratePaths, new_root: &Path) -> 
         return Err(format!("迁移失败，已清理目标目录残留：{e}"));
     }
 
-    // 全部复制成功 → 写设置：bootstrap（重启定位入口，永不少于这一份）+ 新根 db 副本（迁移后活动库）
+    // 全部复制成功 → 写设置：bootstrap（重启定位入口，永不少于这一份）+ 新根 db 副本（迁移后活动库）。
+    // 同时把旧根记入 last_migrated_from（bootstrap / 新根 db / 迁移当时仍在用的旧 db），供迁移后清理校验。
     let new_db = new_root.join("db").join("app.sqlite");
-    if let Err(e) = write_root_setting(&cur.bootstrap_db, new_root) {
+    let record = |db_file: &Path| -> Result<(), String> {
+        write_setting(db_file, app_paths::LIBRARY_ROOT_KEY, &new_root.to_string_lossy())?;
+        write_setting(db_file, LAST_MIGRATED_KEY, &cur.library.to_string_lossy())
+    };
+    if let Err(e) = record(&cur.bootstrap_db) {
         cleanup_copied(&copied, new_root, created_root);
         return Err(format!("迁移失败，已清理目标目录残留：{e}"));
     }
-    if cur.bootstrap_db != new_db {
-        if let Err(e) = write_root_setting(&new_db, new_root) {
+    if norm_lower(&cur.bootstrap_db) != norm_lower(&new_db) {
+        if let Err(e) = record(&new_db) {
+            cleanup_copied(&copied, new_root, created_root);
+            return Err(format!("迁移失败，已清理目标目录残留：{e}"));
+        }
+    }
+    if norm_lower(&cur.db) != norm_lower(&cur.bootstrap_db) {
+        if let Err(e) = write_setting(&cur.db, LAST_MIGRATED_KEY, &cur.library.to_string_lossy()) {
             cleanup_copied(&copied, new_root, created_root);
             return Err(format!("迁移失败，已清理目标目录残留：{e}"));
         }
@@ -210,8 +235,15 @@ fn cleanup_copied(copied: &[PathBuf], root: &Path, created_root: bool) {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct MigrateResult {
+    pub moved_bytes: u64,
+    pub old_library: String,
+    pub old_db: String,
+}
+
 #[tauri::command]
-pub fn migrate_library_root(app: tauri::AppHandle, new_root: String) -> Result<String, String> {
+pub fn migrate_library_root(app: tauri::AppHandle, new_root: String) -> Result<MigrateResult, String> {
     let new_root = PathBuf::from(new_root.trim());
     let roots = app_paths::roots(&app)?;
     let paths = MigratePaths {
@@ -221,7 +253,79 @@ pub fn migrate_library_root(app: tauri::AppHandle, new_root: String) -> Result<S
     };
     // 命令内不持有任何 sqlite 连接（各命令自开自关、同步串行），db 文件可安全复制
     let used = migrate_library_root_core(&paths, &new_root)?;
-    Ok(format!("已复制 {}。重启应用后新库生效。", format_bytes(used)))
+    Ok(MigrateResult {
+        moved_bytes: used,
+        old_library: paths.library.to_string_lossy().to_string(),
+        old_db: paths.db.to_string_lossy().to_string(),
+    })
+}
+
+/// 迁移后清理旧库：删旧 library 目录与旧 db（bootstrap db 在 AppData 永不动）。
+/// 安全闸：路径非空且绝对、不等于当前库根、且与当前 db 里记录的 last_migrated_from 一致，防误删任意路径。
+pub(crate) fn remove_old_library_core(
+    cur: &MigratePaths,
+    old_library: &Path,
+    old_db: &Path,
+    recorded_from: Option<&str>,
+) -> Result<u64, String> {
+    if old_library.as_os_str().is_empty() || !old_library.is_absolute() {
+        return Err("旧库路径无效".to_string());
+    }
+    let recorded = recorded_from
+        .map(|s| norm_lower(Path::new(s.trim())))
+        .unwrap_or_default();
+    if recorded.is_empty() || recorded != norm_lower(old_library) {
+        return Err("旧库路径与本次迁移记录不符，已拒绝删除".to_string());
+    }
+    if norm_lower(old_library) == norm_lower(&cur.library) {
+        return Err("旧库路径与当前库根相同，已拒绝删除".to_string());
+    }
+    if path_contains(old_library, &cur.library) || path_contains(&cur.library, old_library) {
+        return Err("旧库路径与当前书库嵌套，已拒绝删除".to_string());
+    }
+
+    let mut freed = 0u64;
+    if old_library.is_dir() {
+        freed += dir_size_bytes(old_library);
+        fs::remove_dir_all(old_library).map_err(|e| format!("failed to remove {}: {e}", old_library.display()))?;
+    }
+    let old_db_norm = norm_lower(old_db);
+    let is_bootstrap = old_db_norm == norm_lower(&cur.bootstrap_db);
+    let is_current = old_db_norm == norm_lower(&cur.db);
+    if !old_db_norm.is_empty() && !is_bootstrap && !is_current && old_db.is_file() {
+        // sqlite 兄弟文件（-wal/-shm）一并清
+        for suffix in ["", "-wal", "-shm"] {
+            let p = PathBuf::from(format!("{}{suffix}", old_db.display()));
+            freed += fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            let _ = fs::remove_file(&p);
+        }
+    }
+    Ok(freed)
+}
+
+#[tauri::command]
+pub fn remove_old_library(app: tauri::AppHandle, old_library: String, old_db: String) -> Result<String, String> {
+    let old_library = PathBuf::from(old_library.trim());
+    let old_db = PathBuf::from(old_db.trim());
+    let roots = app_paths::roots(&app)?;
+    let cur = MigratePaths {
+        library: roots.library.clone(),
+        db: roots.db.clone(),
+        bootstrap_db: roots.bootstrap_db.clone(),
+    };
+    let recorded = read_setting(&cur.db, LAST_MIGRATED_KEY).unwrap_or(None);
+    let freed = remove_old_library_core(&cur, &old_library, &old_db, recorded.as_deref())?;
+    // 成功后清除标记（当前 db + bootstrap），杜绝二次调用
+    let _ = clear_migrated_marker(&cur.db);
+    let _ = clear_migrated_marker(&cur.bootstrap_db);
+    Ok(format!("已删除旧库文件，释放 {}。", format_bytes(freed)))
+}
+
+fn clear_migrated_marker(db_file: &Path) -> Result<(), String> {
+    let conn = Connection::open(db_file).map_err(|e| format!("failed to open {}: {e}", db_file.display()))?;
+    conn.execute("DELETE FROM settings WHERE key = ?1", [LAST_MIGRATED_KEY])
+        .map_err(|e| format!("failed to clear {LAST_MIGRATED_KEY}: {e}"))?;
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -522,6 +626,96 @@ mod tests {
         assert_eq!(count, 0);
         let _ = fs::remove_dir_all(&appdata);
         let _ = fs::remove_dir_all(&new_root);
+    }
+
+    #[test]
+    fn migrate_records_old_root_for_cleanup() {
+        let appdata = tempdir("rec");
+        let cur = make_library(&appdata);
+        let new_root = tempdir("recdest");
+        migrate_library_root_core(&cur, &new_root).unwrap();
+
+        // 三处 db（bootstrap=旧 db 同一份、新根 db）都记下旧根
+        let new_db = new_root.join("db").join("app.sqlite");
+        for db_file in [&cur.bootstrap_db, &new_db] {
+            let v = read_setting(db_file, LAST_MIGRATED_KEY).unwrap().unwrap();
+            assert_eq!(v, cur.library.to_string_lossy().to_string());
+        }
+        let _ = fs::remove_dir_all(&appdata);
+        let _ = fs::remove_dir_all(&new_root);
+    }
+
+    #[test]
+    fn remove_old_library_validates_and_deletes() {
+        let appdata = tempdir("rm");
+        let cur = make_library(&appdata);
+        let new_root = tempdir("rmdest");
+        migrate_library_root_core(&cur, &new_root).unwrap();
+
+        // 迁移后视角：当前库 = 新根，旧库 = 原根（含旧 db；本布局下旧 db 即 bootstrap，不可删）
+        let after = MigratePaths {
+            library: new_root.clone(),
+            db: new_root.join("db").join("app.sqlite"),
+            bootstrap_db: cur.bootstrap_db.clone(),
+        };
+        let old_lib = cur.library.clone();
+        let old_db = cur.db.clone();
+        let recorded = old_lib.to_string_lossy().to_string();
+
+        // 记录不符 / 无记录 → 拒绝
+        assert!(remove_old_library_core(&after, &old_lib, &old_db, None).unwrap_err().contains("不符"));
+        assert!(remove_old_library_core(&after, &old_lib, &old_db, Some("D:\\elsewhere")).unwrap_err().contains("不符"));
+        // 等于当前根 → 拒绝
+        assert!(remove_old_library_core(&after, &new_root, &old_db, Some(&new_root.to_string_lossy().to_string()))
+            .unwrap_err()
+            .contains("相同"));
+        // 相对路径 → 拒绝
+        assert!(remove_old_library_core(&after, Path::new("rel"), &old_db, Some("rel")).unwrap_err().contains("无效"));
+
+        // 校验通过 → 删旧 library；bootstrap db（=旧 db）保留
+        let freed = remove_old_library_core(&after, &old_lib, &old_db, Some(&recorded)).unwrap();
+        assert_eq!(freed, 210); // books 100 + covers 40 + bg 60 + trash 10
+        assert!(!old_lib.join("books").join("b1.epub").exists());
+        assert!(!old_lib.exists());
+        assert!(cur.bootstrap_db.is_file(), "bootstrap db 永不动");
+
+        // 幂等：再跑一次（目录已无、记录仍在 core 入参层面）不再报错
+        let freed2 = remove_old_library_core(&after, &old_lib, &old_db, Some(&recorded)).unwrap();
+        assert_eq!(freed2, 0);
+        let _ = fs::remove_dir_all(&appdata);
+        let _ = fs::remove_dir_all(&new_root);
+    }
+
+    #[test]
+    fn remove_old_library_deletes_old_db_when_separate() {
+        // 连续两次迁移场景：B→C 后旧库 B 的 db（非 bootstrap、非当前）随旧根一并删除
+        let appdata = tempdir("rm2");
+        let a = make_library(&appdata);
+        let b_root = tempdir("rm2b");
+        migrate_library_root_core(&a, &b_root).unwrap();
+
+        let b_paths = MigratePaths {
+            library: b_root.clone(),
+            db: b_root.join("db").join("app.sqlite"),
+            bootstrap_db: a.bootstrap_db.clone(),
+        };
+        let c_root = tempdir("rm2c");
+        migrate_library_root_core(&b_paths, &c_root).unwrap();
+
+        let after = MigratePaths {
+            library: c_root.clone(),
+            db: c_root.join("db").join("app.sqlite"),
+            bootstrap_db: a.bootstrap_db.clone(),
+        };
+        let recorded = b_root.to_string_lossy().to_string();
+        let freed = remove_old_library_core(&after, &b_root, &b_paths.db, Some(&recorded)).unwrap();
+        assert!(freed >= 210);
+        assert!(!b_root.join("db").join("app.sqlite").exists());
+        assert!(!b_root.exists());
+        assert!(a.bootstrap_db.is_file());
+        let _ = fs::remove_dir_all(&appdata);
+        let _ = fs::remove_dir_all(&b_root);
+        let _ = fs::remove_dir_all(&c_root);
     }
 
     #[test]

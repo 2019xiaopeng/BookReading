@@ -1,5 +1,5 @@
 // PDF 阅读器纯函数层：cfi 约定；几何/缩放钳制复用漫画 layout。
-// 批次15：PDF 与漫画共用 image_reader_settings（独立 pdf_reader_settings 已删），
+// 批次16：PDF 独立记忆 pdf_reader_settings（结构同 ImageReaderSettings，批次15 并轨已回拆），
 // 连续滚动沿用 webtoon 枚举（PdfReader 内 mode === "webtoon" 即连续滚动）。
 export { clampPage, clampZoomScale, pagePercent, panClamp, ZOOM_MIN, ZOOM_MAX, turnKeyDirection } from "../image/layout";
 export type { TurnDirection } from "../image/layout";

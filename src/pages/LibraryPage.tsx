@@ -29,7 +29,6 @@ import {
   setTrashRetentionDays,
   updateBookMetadata,
 } from "../tauri/invoke";
-import { importImageFolder } from "../reader/image/api";
 import { needsMetadataRepair } from "../library/metadataRepair";
 import { readingStatus, type ReadingStatus } from "../library/readingStatus";
 import BookDetailsDialog from "../library/BookDetailsDialog";
@@ -44,7 +43,7 @@ import {
   trashRemainingDays,
 } from "../library/shelves";
 import { DENSITY_PRESETS, normalizeLibraryDensity, type LibraryDensity } from "../library/density";
-import { BOOKS_CHANGED_EVENT, runImports } from "../library/importRunner";
+import { BOOKS_CHANGED_EVENT, importSingle, runImports } from "../library/importRunner";
 import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "../library/useCoverUrls";
 import { notifyBackgroundChanged, resetBackgroundCache } from "../ui/appBackground";
 import type { ReaderBackground } from "../reader/settings/types";
@@ -362,24 +361,23 @@ export default function LibraryPage() {
     try {
       const dir = await open({ directory: true, multiple: false, title: "选择漫画文件夹" });
       if (!dir || Array.isArray(dir)) return;
-      try {
-        await importImageFolder(dir, null);
-      } catch (e) {
-        const msg = String(e);
-        logFrontend(`ui: import image folder failed ${dir} ${msg}`);
-        // 实测根因：把“每本一个子文件夹”的父目录当单本导入——直接子项全是子文件夹 → 无图。
-        // 此时若子文件夹里有漫画，引导走批量导入而不是报错退出
-        const subdirs = msg.includes("未找到图片") ? await listImageSubdirs(dir).catch(() => [] as string[]) : [];
-        if (subdirs.length > 0) {
-          const batch = await showConfirm(
-            "改为批量导入？",
-            `该文件夹内没有直接图片，但包含 ${subdirs.length} 个图片子文件夹。\n按每个子文件夹一本批量导入。`,
-            { confirmText: "批量导入" },
-          );
-          if (batch) await runImports(subdirs);
-        } else {
-          await showAlert("导入失败", msg);
-        }
+      // 批次16：单本漫画也走 importRunner（查重交互 + BOOKS_CHANGED_EVENT 自动刷新书卡，不再手动刷新才出现）
+      const res = await importSingle(dir);
+      if (res.kind !== "failed") return;
+      const msg = res.error ?? "";
+      logFrontend(`ui: import image folder failed ${dir} ${msg}`);
+      // 实测根因：把“每本一个子文件夹”的父目录当单本导入——直接子项全是子文件夹 → 无图。
+      // 此时若子文件夹里有漫画，引导走批量导入而不是报错退出
+      const subdirs = msg.includes("未找到图片") ? await listImageSubdirs(dir).catch(() => [] as string[]) : [];
+      if (subdirs.length > 0) {
+        const batch = await showConfirm(
+          "改为批量导入？",
+          `该文件夹内没有直接图片，但包含 ${subdirs.length} 个图片子文件夹。\n按每个子文件夹一本批量导入。`,
+          { confirmText: "批量导入" },
+        );
+        if (batch) await runImports(subdirs);
+      } else {
+        await showAlert("导入失败", msg);
       }
     } finally {
       setLoading(false);
@@ -667,6 +665,27 @@ export default function LibraryPage() {
     }
   }
 
+  // 批次16：书卡拖到"新建书架"虚线卡 = 命名（复用 wr-prompt）→ 新建于当前层 → 移入该书；取消=不建不移动
+  function dropOnNewShelf(bookId: string) {
+    setPrompt({
+      title: currentShelfId == null ? "新书架名称" : `在“${path[path.length - 1]?.name ?? ""}”内新建书架`,
+      value: "",
+      allowEmpty: false,
+      onConfirm: (name) => {
+        void (async () => {
+          try {
+            const shelf = await createShelf(name, currentShelfId);
+            await moveBooksToShelf([bookId], shelf.id);
+            popCard(`shelf:${shelf.id}`);
+            await refresh();
+          } catch (e) {
+            await showAlert("新建书架失败", String(e));
+          }
+        })();
+      },
+    });
+  }
+
   // 拖书卡到侧栏“回收站”导航项 = 软删入回收站（确认后与 onDeleteBook 同链路；广播同步其他窗口）
   async function dropOnTrash(bookId: string) {
     const ok = await showConfirm("移入回收站", "将 1 本书移入回收站？可在回收站恢复。", {
@@ -698,6 +717,8 @@ export default function LibraryPage() {
   function canDropOn(target: HTMLElement, drag: CardDrag): boolean {
     const mode = target.dataset.drop;
     if (drag.kind === "book") {
+      // 批次16：拖到"新建书架"虚线卡 = 命名新建并放入该书（书架卡不开放此目标）
+      if (mode === "new-shelf") return true;
       if (mode === "shelf") return true;
       // 侧栏“回收站”项：拖入=软删；回收站视图内无拖拽源，这里再挡一层防自删困惑
       if (mode === "trash") return !trashView;
@@ -783,6 +804,7 @@ export default function LibraryPage() {
       const shelfId = sid && sid !== "" ? Number(sid) : null;
       if (drag.kind === "book") {
         if (target.dataset.drop === "shelf") dropOnShelf(drag, shelfId);
+        else if (target.dataset.drop === "new-shelf") dropOnNewShelf(drag.id);
         else if (target.dataset.drop === "trash") void dropOnTrash(drag.id);
         else {
           const targetBook = booksFiltered.find((b) => b.id === target.dataset.bookId);
@@ -1119,12 +1141,13 @@ export default function LibraryPage() {
             openMenu({ kind: "grid", x: e.clientX, y: e.clientY }, e.currentTarget);
           }}
         >
-          {/* 常驻"新建书架"虚线卡：网格第一格，空书架也显示 */}
+          {/* 常驻"新建书架"虚线卡：网格第一格，空书架也显示；拖书入内 = 新建并放入（data-drop） */}
           <div
             className="wr-book-card wr-shelf-create"
             role="button"
             tabIndex={0}
             aria-label="新建书架"
+            data-drop="new-shelf"
             onClick={onNewShelf}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {

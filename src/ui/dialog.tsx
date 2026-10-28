@@ -6,12 +6,13 @@ import { useSyncExternalStore } from "react";
  * 样式复用 wr-prompt 体系，危险确认走 --wr-danger 实底。
  */
 type DialogRequest = {
-  kind: "alert" | "confirm";
+  kind: "alert" | "confirm" | "choice";
   title: string;
   body?: string;
   danger?: boolean;
   confirmText?: string;
-  resolve: (ok: boolean) => void;
+  secondaryText?: string;
+  resolve: (action: "primary" | "secondary" | "dismiss") => void;
 };
 
 let current: DialogRequest | null = null;
@@ -30,7 +31,26 @@ export function showAlert(title: string, body?: string): Promise<void> {
 
 export function showConfirm(title: string, body?: string, opts?: { danger?: boolean; confirmText?: string }): Promise<boolean> {
   return new Promise((resolve) => {
-    current = { kind: "confirm", title, body, danger: opts?.danger, confirmText: opts?.confirmText, resolve };
+    current = {
+      kind: "confirm",
+      title,
+      body,
+      danger: opts?.danger,
+      confirmText: opts?.confirmText,
+      resolve: (a) => resolve(a === "primary"),
+    };
+    emit();
+  });
+}
+
+/** 批次16：主按钮 / 次按钮 / 关闭三择（次按钮=低频动作如"导入全部副本"） */
+export function showChoice(
+  title: string,
+  body?: string,
+  opts?: { confirmText?: string; secondaryText?: string },
+): Promise<"primary" | "secondary" | "dismiss"> {
+  return new Promise((resolve) => {
+    current = { kind: "choice", title, body, confirmText: opts?.confirmText, secondaryText: opts?.secondaryText, resolve };
     emit();
   });
 }
@@ -46,17 +66,17 @@ export function DialogHost() {
   );
   if (!req) return null;
 
-  const finish = (ok: boolean) => {
+  const finish = (action: "primary" | "secondary" | "dismiss") => {
     current = null;
     emit();
-    req.resolve(ok);
+    req.resolve(action);
   };
 
   return (
     <div
       className="wr-prompt-overlay"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) finish(false);
+        if (e.target === e.currentTarget) finish("dismiss");
       }}
     >
       <div
@@ -65,21 +85,26 @@ export function DialogHost() {
         aria-modal="true"
         aria-label={req.title}
         onKeyDown={(e) => {
-          if (e.key === "Escape") finish(false);
+          if (e.key === "Escape") finish("dismiss");
         }}
       >
         <div className="wr-prompt-title">{req.title}</div>
         {req.body ? <div className="wr-prompt-body">{req.body}</div> : null}
         <div className="wr-prompt-actions">
           {req.kind === "confirm" ? (
-            <button className="wr-btn" autoFocus onClick={() => finish(false)}>
+            <button className="wr-btn" autoFocus onClick={() => finish("dismiss")}>
               取消
             </button>
           ) : null}
+          {req.secondaryText ? (
+            <button className="wr-btn" onClick={() => finish("secondary")}>
+              {req.secondaryText}
+            </button>
+          ) : null}
           <button
-            autoFocus={req.kind === "alert"}
+            autoFocus={req.kind !== "confirm"}
             className={req.danger ? "wr-btn wr-btn-danger" : "wr-btn wr-btn-primary"}
-            onClick={() => finish(true)}
+            onClick={() => finish("primary")}
           >
             {req.confirmText ?? (req.kind === "alert" ? "知道了" : "确定")}
           </button>

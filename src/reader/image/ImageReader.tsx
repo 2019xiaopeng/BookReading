@@ -51,8 +51,8 @@ type Props = {
   onApi: (api: ImageReaderApi) => void;
 };
 
-// batch-2 red line: at most current +/- 2 pages may stay resident as blobs
-const PRELOAD_PAGES = 2;
+// resident window: at most current +/- 4 pages stay as blobs (批次16 由 ±2 放宽，快速翻页不进空白区)
+const PRELOAD_PAGES = 4;
 
 function mimeFor(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
@@ -243,15 +243,19 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
     const epoch = epochRef.current;
     try {
       const bytes = await readImagePage(book.id, index);
-      // stale fetch (want set moved on / book switched / unmounted): never let it become a resident blob
-      if (epoch !== epochRef.current || !wantedRef.current.has(index)) return;
       const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mimeFor(pages?.[index] ?? "") }));
-      cacheRef.current.set(index, url);
-      setUrls((prev) => ({ ...prev, [index]: url }));
-      // probe the aspect so wide pages can claim a full spread in double mode
+      // 批次16：解码完成才算就绪——未解码完不入缓存不换页，消除半载入闪白
       const probe = new Image();
       probe.src = url;
       await probe.decode().catch(() => undefined);
+      // stale fetch (want set moved on / book switched / unmounted): never let it become a resident blob
+      if (epoch !== epochRef.current || !wantedRef.current.has(index)) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      cacheRef.current.set(index, url);
+      setUrls((prev) => ({ ...prev, [index]: url }));
+      // probe the aspect so wide pages can claim a full spread in double mode
       if (probe.naturalHeight > 0 && probe.naturalWidth / probe.naturalHeight > WIDE_PAGE_RATIO) {
         setWide((prev) => (prev[index] ? prev : { ...prev, [index]: true }));
       }

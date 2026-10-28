@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import { clearCache, getSettings, migrateLibraryRoot, reextractAllCovers, storageStats, type StorageStats } from "../tauri/invoke";
+import { clearCache, getSettings, migrateLibraryRoot, reextractAllCovers, removeOldLibrary, storageStats, type StorageStats } from "../tauri/invoke";
 import { formatFileSize } from "../library/tags";
 import { BOOKS_CHANGED_EVENT } from "../library/importRunner";
 import { invalidateAllCoverUrls } from "../library/useCoverUrls";
@@ -86,7 +86,22 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
     if (!ok) return;
     setBusy(true);
     try {
-      await showAlert("迁移完成", await migrateLibraryRoot(target));
+      // 批次16：迁移后追问是否删除旧库文件（Rust 端按迁移记录校验，bootstrap db 永不动）
+      const res = await migrateLibraryRoot(target);
+      const del = await showConfirm(
+        "迁移完成",
+        `已复制 ${formatFileSize(res.moved_bytes)}。重启应用后新库生效。\n\n是否删除旧位置的库文件以释放空间？\n${res.old_library}`,
+        { danger: true, confirmText: "删除旧文件" },
+      );
+      if (del) {
+        try {
+          await showAlert("清理完成", await removeOldLibrary(res.old_library, res.old_db));
+        } catch (e2) {
+          await showAlert("删除旧文件失败", String(e2));
+        }
+      } else {
+        await showAlert("迁移完成", `旧文件保留于 ${res.old_library}，可稍后手动删除。`);
+      }
     } catch (e) {
       await showAlert("迁移失败", String(e));
     } finally {

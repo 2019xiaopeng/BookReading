@@ -12,8 +12,8 @@ type Props = {
   fetchThumb?: (page: number) => Promise<string | undefined> | undefined;
 };
 
-// shortcut: thumbnails are full-size blobs (no Rust downscale); LRU hard cap 24 张（内存红线，超出即回收）; reader cache untouched
-const THUMB_LIMIT = 24;
+// shortcut: thumbnails are full-size blobs (no Rust downscale); LRU hard cap 48 张（批次16 随预载窗口放宽）; reader cache untouched
+const THUMB_LIMIT = 48;
 const thumbs = new Map<string, string>(); // `${bookId}:${page}` -> object URL, LRU by insertion order
 
 export default function PagesPanel({ bookId, pageCount, currentPage, goTo, getResidentUrl, fetchThumb }: Props) {

@@ -108,6 +108,8 @@ export default function ReaderPage() {
   const [percent, setPercent] = useState<number | null>(null);
   const [settings, setSettings] = useState<ReaderSettings>(defaultSettings);
   const [imageSettings, setImageSettings] = useState<ImageReaderSettings>(defaultImageReaderSettings);
+  // 批次16：阅读设置按格式分离——漫画 image_reader_settings / PDF pdf_reader_settings 各自独立记忆
+  const [pdfSettings, setPdfSettings] = useState<ImageReaderSettings>(defaultImageReaderSettings);
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const [imagePage, setImagePage] = useState<{ page: number; pageCount: number } | null>(null);
   const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings" | "pages">("toc");
@@ -185,6 +187,9 @@ export default function ReaderPage() {
   const isPdfBook = book?.format === "pdf";
   // 漫画/PDF 共用视觉阅读管线（顶栏/热区/页码/书签）；分支差异只在设置面板与 api 来源
   const isVisualBook = isImageBook || isPdfBook;
+  // 当前视觉书生效设置与持久化键（漫画/PDF 两份 state，同 UI 受控切换，互不影响）
+  const visualSettings = isPdfBook ? pdfSettings : imageSettings;
+  const visualSettingsKey = isPdfBook ? "pdf_reader_settings" : "image_reader_settings";
   const imageEdgeSwap = isImageBook && imageSettings.rtl;
   const pagerEnabled =
     !drawerOpen &&
@@ -192,7 +197,7 @@ export default function ReaderPage() {
     !selection &&
     !noteDraft &&
     (isVisualBook || settings.readingMode === "paginated") &&
-    !(isVisualBook && imageSettings.mode === "webtoon");
+    !(isVisualBook && visualSettings.mode === "webtoon");
 
   const flatToc = useMemo(() => {
     const out: TocItem[] = [];
@@ -223,14 +228,14 @@ export default function ReaderPage() {
   }, [spreadMode]);
 
   useEffect(() => {
-    const continuous = isVisualBook && imageSettings.mode === "webtoon";
+    const continuous = isVisualBook && visualSettings.mode === "webtoon";
     imageCtxRef.current = {
       active: isVisualBook,
-      rtl: isImageBook && imageSettings.rtl,
+      rtl: isImageBook && visualSettings.rtl,
       webtoon: continuous,
       autoscroll: continuous,
     };
-  }, [isVisualBook, isImageBook, imageSettings]);
+  }, [isVisualBook, isImageBook, visualSettings]);
 
   useEffect(() => {
     locationSearchRef.current = location.search;
@@ -262,6 +267,8 @@ export default function ReaderPage() {
         reader_font: normalizeReaderFont(map.reader_font),
       });
       setImageSettings(normalizeImageReaderSettings(map.image_reader_settings));
+      // 批次16 旧数据迁移：pdf_reader_settings 缺失时继承 image_reader_settings（用户调过的值继承一次），此后独立演化
+      setPdfSettings(normalizeImageReaderSettings(map.pdf_reader_settings ?? map.image_reader_settings));
     })();
     return () => {
       cancelled = true;
@@ -613,7 +620,7 @@ export default function ReaderPage() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [book, drawerOpen, chrome, imageSettings, chapterTitle, settings.pageAnimation, settings.readingMode]);
+  }, [book, drawerOpen, chrome, visualSettings, chapterTitle, settings.pageAnimation, settings.readingMode]);
 
   useEffect(() => {
     // B12：热区条上移到根级预留带（viewer overflow:hidden 会裁掉负偏移），滚轮监听同步挂根级
@@ -735,11 +742,12 @@ export default function ReaderPage() {
 
   // B12 条漫播放中 ↑/↓ 调速：±10 并钳 20-240，实时写入设置（ImageReader autoSpeedRef 即时生效）+ 轻提示
   function nudgeAutoScrollSpeed(delta: number) {
-    const speed = Math.min(240, Math.max(20, imageSettings.autoScrollSpeed + delta));
-    const next = { ...imageSettings, autoScrollSpeed: speed };
-    setImageSettings(next);
+    const speed = Math.min(240, Math.max(20, visualSettings.autoScrollSpeed + delta));
+    const next = { ...visualSettings, autoScrollSpeed: speed };
+    if (isPdfBook) setPdfSettings(next);
+    else setImageSettings(next);
     settingsTouchedRef.current = true;
-    void setSetting("image_reader_settings", JSON.stringify(next));
+    void setSetting(visualSettingsKey, JSON.stringify(next));
     setSpeedToast(speed);
     if (speedToastTimerRef.current) window.clearTimeout(speedToastTimerRef.current);
     speedToastTimerRef.current = window.setTimeout(() => setSpeedToast(null), 1200);
@@ -1069,12 +1077,13 @@ export default function ReaderPage() {
           >
             {sideTab === "settings" && isVisualBook ? (
               <ImageSettingsPanel
-                value={imageSettings}
+                value={visualSettings}
                 pdf={isPdfBook}
                 onChange={(next) => {
-                  setImageSettings(next);
+                  if (isPdfBook) setPdfSettings(next);
+                  else setImageSettings(next);
                   settingsTouchedRef.current = true;
-                  void setSetting("image_reader_settings", JSON.stringify(next));
+                  void setSetting(visualSettingsKey, JSON.stringify(next));
                 }}
               />
             ) : null}
@@ -1299,7 +1308,7 @@ export default function ReaderPage() {
                 <ImageReader
                   key={book.id}
                   book={book}
-                  settings={imageSettings}
+                  settings={visualSettings}
                   turnSpeedMs={settings.turnSpeedMs}
                   onRelocated={handleImageRelocated}
                   theme={theme}
@@ -1311,7 +1320,7 @@ export default function ReaderPage() {
                 <PdfReader
                   key={book.id}
                   book={book}
-                  settings={imageSettings}
+                  settings={visualSettings}
                   onRelocated={handleImageRelocated}
                   theme={theme}
                   onApi={(api) => {

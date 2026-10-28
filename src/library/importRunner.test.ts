@@ -7,11 +7,13 @@ vi.mock("../tauri/invoke", () => ({
   probePaths: vi.fn(),
 }));
 vi.mock("../reader/image/api", () => ({ importImageFolder: vi.fn() }));
-vi.mock("../ui/dialog", () => ({ showAlert: vi.fn() }));
+vi.mock("../ui/dialog", () => ({ showAlert: vi.fn(), showConfirm: vi.fn(), showChoice: vi.fn() }));
 vi.mock("../tauri/frontendLog", () => ({ logFrontend: vi.fn() }));
 
-import type { Book } from "../tauri/invoke";
-import { buildDedupIndex, checkDuplicate, isImportableFile } from "./importRunner";
+import { importImageFolder } from "../reader/image/api";
+import { listBooks, probePaths, type Book, type PathInfo } from "../tauri/invoke";
+import { showAlert } from "../ui/dialog";
+import { buildDedupIndex, checkDuplicate, importSingle, isImportableFile } from "./importRunner";
 
 function makeBook(partial: Partial<Book>): Book {
   return {
@@ -89,5 +91,27 @@ describe("isImportableFile", () => {
     expect(isImportableFile("a.PDF")).toBe(true);
     expect(isImportableFile("a.mobi")).toBe(false);
     expect(isImportableFile("noext")).toBe(false);
+  });
+});
+
+describe("importSingle（批次16：单本导入交互式查重）", () => {
+  test("exists：提示后跳过，不导入、不弹汇总", async () => {
+    vi.mocked(listBooks).mockResolvedValue([
+      makeBook({ library_path: "D:\\Comics\\A", format: "images", file_size: 1 }),
+    ]);
+    vi.mocked(probePaths).mockResolvedValue([info("A", 1, "D:/Comics/A", true) as PathInfo]);
+    vi.mocked(showAlert).mockResolvedValue(undefined);
+    const res = await importSingle("D:/Comics/A");
+    expect(res.kind).toBe("exists");
+    expect(importImageFolder).not.toHaveBeenCalled();
+  });
+
+  test("failed：错误透传给调用方分流", async () => {
+    vi.mocked(listBooks).mockResolvedValue([]);
+    vi.mocked(probePaths).mockResolvedValue([info("B", 1, "D:/Comics/B", true) as PathInfo]);
+    vi.mocked(importImageFolder).mockRejectedValue(new Error("未找到图片"));
+    const res = await importSingle("D:/Comics/B");
+    expect(res.kind).toBe("failed");
+    expect(res.error).toContain("未找到图片");
   });
 });

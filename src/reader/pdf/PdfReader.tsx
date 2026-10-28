@@ -43,8 +43,8 @@ type Props = {
   onApi: (api: PdfReaderApi) => void;
 };
 
-// 与漫画同一红线：当前页 ±2 常驻位图，其余回收
-const PRELOAD_PAGES = 2;
+// 与漫画同一红线：当前页 ±3 常驻位图，其余回收（批次16 由 ±2 放宽一页，翻页少一次重渲等待）
+const PRELOAD_PAGES = 3;
 
 type PageDim = { w: number; h: number };
 
@@ -66,7 +66,7 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
   const [tick, setTick] = useState(0); // 位图缓存版本：缓存变动后触发重画
   const [zoom, setZoom] = useState({ scale: 1, tx: 0, ty: 0 });
   const zoomed = zoom.scale !== 1;
-  // 批次15：连续滚动自动滚动（复制条漫 B11/B12 实现，速度共用 image_reader_settings）
+  // 批次15：连续滚动自动滚动（复制条漫 B11/B12 实现，速度随批次16 改存 pdf_reader_settings）
   const [autoScroll, setAutoScroll] = useState(false);
   const [autoEndToast, setAutoEndToast] = useState(false);
 
