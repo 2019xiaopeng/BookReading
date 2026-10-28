@@ -1,4 +1,12 @@
-import { computeBookStats, importBook, listBooks, probePaths, type Book, type PathInfo } from "../tauri/invoke";
+import {
+  computeBookStats,
+  importBook,
+  listBooks,
+  moveBooksToShelf,
+  probePaths,
+  type Book,
+  type PathInfo,
+} from "../tauri/invoke";
 import { importImageFolder } from "../reader/image/api";
 import { logFrontend } from "../tauri/frontendLog";
 import { showAlert, showChoice, showConfirm } from "../ui/dialog";
@@ -88,23 +96,27 @@ function enqueue<T>(fn: () => Promise<T>): Promise<T> {
   return task;
 }
 
-export async function runImports(paths: string[], opts?: { force?: boolean }): Promise<void> {
+// targetShelfId：导入成功后立即移入的书架（null=根，缺省=不动）
+export type ImportOpts = { force?: boolean; targetShelfId?: number | null };
+
+export async function runImports(paths: string[], opts?: ImportOpts): Promise<void> {
   if (paths.length === 0) return;
   const force = opts?.force === true;
+  const targetShelfId = opts?.targetShelfId ?? null;
   // 汇总与"导入全部副本"都在队列外进行：次按钮重新入队的批次不会卡在当前任务后面
-  const outcomes = await enqueue(() => runImportBatch(paths, force));
+  const outcomes = await enqueue(() => runImportBatch(paths, force, targetShelfId));
   const hasIssue = outcomes.some((o) => o.kind !== "success");
   const interactive = !force && paths.length === 1;
   // 单项全部成功保持静默；单项交互式（exists/dup 已当面处理）无失败也不打扰
   if (interactive && !outcomes.some((o) => o.kind === "failed")) return;
-  if (outcomes.length > 1 || hasIssue) await showSummary(outcomes);
+  if (outcomes.length > 1 || hasIssue) await showSummary(outcomes, targetShelfId);
 }
 
 export type SingleImportResult = { kind: Outcome["kind"]; error?: string };
 
 /** 批次16：单本导入（按钮/拖单文件）——查重当面交互（exists 提示 / dup 问副本），无汇总弹窗；错误交调用方分流 */
-export async function importSingle(path: string): Promise<SingleImportResult> {
-  const [o] = await enqueue(() => runImportBatch([path], false));
+export async function importSingle(path: string, opts?: ImportOpts): Promise<SingleImportResult> {
+  const [o] = await enqueue(() => runImportBatch([path], false, opts?.targetShelfId ?? null));
   return o ? { kind: o.kind, error: o.error } : { kind: "failed", error: "无法读取" };
 }
 
@@ -124,27 +136,28 @@ async function buildLiveDedupIndex(): Promise<DedupIndex> {
   return buildDedupIndex(books);
 }
 
-async function importOne(info: PathInfo): Promise<void> {
+// 返回新导入书的 id（importBook / importImageFolder 均返回完整 Book）
+async function importOne(info: PathInfo): Promise<string> {
   if (info.is_dir) {
-    await importImageFolder(info.path, null);
-    return;
+    return (await importImageFolder(info.path, null)).id;
   }
   if (!isImportableFile(info.name)) throw new Error("不支持的格式（仅 EPUB / TXT / CBZ / PDF / 漫画文件夹）");
   if (info.name.toLowerCase().endsWith(".cbz")) {
-    await importImageFolder(info.path, null);
-    return;
+    return (await importImageFolder(info.path, null)).id;
   }
-  await importBook({
+  const book = await importBook({
     source_path: info.path,
     title: null,
     author: null,
     cover_bytes_base64: null,
     cover_ext: null,
   });
+  return book.id;
 }
 
-async function runImportBatch(paths: string[], force: boolean): Promise<Outcome[]> {
+async function runImportBatch(paths: string[], force: boolean, targetShelfId: number | null): Promise<Outcome[]> {
   const outcomes: Outcome[] = [];
+  const importedIds: string[] = [];
   // 单本导入=交互式（exists 弹提示、dup 问是否导入副本）；批量=静默跳过，汇总里可一键补副本
   const interactive = !force && paths.length === 1;
   try {
@@ -186,7 +199,7 @@ async function runImportBatch(paths: string[], force: boolean): Promise<Outcome[
         }
       }
       try {
-        await importOne(info);
+        importedIds.push(await importOne(info));
         // 批内索引同步：同批后续项的查重不漏刚导入的书
         if (index) {
           if (info.is_dir) index.folderPaths.add(normPath(info.path));
@@ -198,6 +211,14 @@ async function runImportBatch(paths: string[], force: boolean): Promise<Outcome[
         logFrontend(`import: failed ${info.path} ${String(e)}`);
       }
     }
+    // 批次18：导入落到指定书架（成功项整体一次移动，广播前完成让刷新看到最终 shelf_id）
+    if (targetShelfId != null && importedIds.length > 0) {
+      try {
+        await moveBooksToShelf(importedIds, targetShelfId);
+      } catch (e) {
+        logFrontend(`import: move to shelf ${targetShelfId} failed ${String(e)}`);
+      }
+    }
   } finally {
     emit(null);
     if (typeof window !== "undefined") window.dispatchEvent(new Event(BOOKS_CHANGED_EVENT));
@@ -205,7 +226,7 @@ async function runImportBatch(paths: string[], force: boolean): Promise<Outcome[
   return outcomes;
 }
 
-async function showSummary(outcomes: Outcome[]) {
+async function showSummary(outcomes: Outcome[], targetShelfId: number | null) {
   const sections: string[] = [];
   const section = (label: string, items: Outcome[]) => {
     if (items.length === 0) return;
@@ -224,5 +245,5 @@ async function showSummary(outcomes: Outcome[]) {
     return;
   }
   const act = await showChoice("导入汇总", body, { confirmText: "关闭", secondaryText: `导入全部副本（${skipped.length}）` });
-  if (act === "secondary") await runImports(skipped, { force: true });
+  if (act === "secondary") await runImports(skipped, { force: true, targetShelfId });
 }

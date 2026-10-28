@@ -6,12 +6,15 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import type { Book } from "../../tauri/invoke";
 import { getReadingState } from "../../tauri/invoke";
 import type { Theme } from "../settings/types";
 import { IconPause, IconPlay, IconRefresh } from "../../ui/icons";
-import { listImagePages, readImagePage } from "./api";
+import { showAlert } from "../../ui/dialog";
+import { BOOKS_CHANGED_EVENT } from "../../library/importRunner";
+import { listImagePages, readImagePage, relinkImageBook } from "./api";
 import {
   WIDE_PAGE_RATIO,
   autoScrollStep,
@@ -66,6 +69,8 @@ function mimeFor(name: string): string {
 export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, onRelocated, onApi }: Props) {
   const [pages, setPages] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 批次18：重链接成功后 +1 触发装载 effect 重跑（book.id 不变，必须靠它重载）
+  const [reloadKey, setReloadKey] = useState(0);
   const [spreadIndex, setSpreadIndex] = useState<number | null>(null);
   const [urls, setUrls] = useState<Record<number, string>>({});
   const [wide, setWide] = useState<Record<number, boolean>>({});
@@ -175,7 +180,7 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
       for (const url of cacheRef.current.values()) URL.revokeObjectURL(url);
       cacheRef.current.clear();
     };
-  }, [book.id]);
+  }, [book.id, reloadKey]);
 
   // keep the paged view anchored to the current page when spreads are rebuilt (mode/layout flip, late wide detection)
   useEffect(() => {
@@ -617,7 +622,21 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
     </button>
   ) : null;
 
+  // 批次18：文件夹漫画源目录丢失的恢复路径——选新目录 → Rust 校验改写 library_path → 重载阅读器
+  async function relinkSource() {
+    const picked = await open({ directory: true, multiple: false, title: "重新选择漫画源文件夹" });
+    if (!picked || Array.isArray(picked)) return;
+    try {
+      await relinkImageBook(book.id, picked);
+      window.dispatchEvent(new Event(BOOKS_CHANGED_EVENT));
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      await showAlert("重链接失败", String(e));
+    }
+  }
+
   if (error) {
+    const folderComic = book.format === "images" && !book.library_path.toLowerCase().endsWith(".cbz");
     return (
       <div className="wr-image-stage" role="alert" data-theme={theme}>
         <div className="wr-state wr-state-error">
@@ -625,6 +644,13 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
           <div className="wr-state-sub" style={{ overflowWrap: "anywhere" }}>
             {error}
           </div>
+          {folderComic ? (
+            <div className="wr-state-actions">
+              <button type="button" className="wr-btn wr-btn-primary" onClick={() => void relinkSource()}>
+                源文件夹丢失？重新链接…
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     );

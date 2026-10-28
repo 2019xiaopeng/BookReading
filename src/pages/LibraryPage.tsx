@@ -235,6 +235,11 @@ export default function LibraryPage() {
     void setSetting("library_density", v);
   }
 
+  // 批次18：打开书时记下来源书架，阅读页返回按钮据此回到该 ?shelf= 视图
+  function openBook(id: string) {
+    navigate(`/read/${id}`, { state: { fromShelf: currentShelfId } });
+  }
+
   useEffect(() => {
     const pending: Promise<void>[] = [];
     for (const b of books) {
@@ -347,7 +352,7 @@ export default function LibraryPage() {
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
       if (paths.length === 0) return;
-      await runImports(paths);
+      await runImports(paths, { targetShelfId: currentShelfId });
     } finally {
       setLoading(false);
       setImporting(null);
@@ -362,7 +367,7 @@ export default function LibraryPage() {
       const dir = await open({ directory: true, multiple: false, title: "选择漫画文件夹" });
       if (!dir || Array.isArray(dir)) return;
       // 批次16：单本漫画也走 importRunner（查重交互 + BOOKS_CHANGED_EVENT 自动刷新书卡，不再手动刷新才出现）
-      const res = await importSingle(dir);
+      const res = await importSingle(dir, { targetShelfId: currentShelfId });
       if (res.kind !== "failed") return;
       const msg = res.error ?? "";
       logFrontend(`ui: import image folder failed ${dir} ${msg}`);
@@ -375,7 +380,7 @@ export default function LibraryPage() {
           `该文件夹内没有直接图片，但包含 ${subdirs.length} 个图片子文件夹。\n按每个子文件夹一本批量导入。`,
           { confirmText: "批量导入" },
         );
-        if (batch) await runImports(subdirs);
+        if (batch) await runImports(subdirs, { targetShelfId: currentShelfId });
       } else {
         await showAlert("导入失败", msg);
       }
@@ -398,7 +403,7 @@ export default function LibraryPage() {
         await showAlert("批量导入", "父目录下没有包含图片的一级子文件夹");
         return;
       }
-      await runImports(dirs);
+      await runImports(dirs, { targetShelfId: currentShelfId });
     } catch (e) {
       await showAlert("批量导入失败", String(e));
     } finally {
@@ -1256,13 +1261,13 @@ export default function LibraryPage() {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   if (selectMode) toggleSelected(b.id);
-                  else navigate(`/read/${b.id}`);
+                  else openBook(b.id);
                 }
               }}
               onClick={(e) => {
                 if ((e.target as HTMLElement).closest("button")) return;
                 if (selectMode) toggleSelected(b.id);
-                else navigate(`/read/${b.id}`);
+                else openBook(b.id);
               }}
             >
               {selectMode ? (

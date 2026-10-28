@@ -185,6 +185,8 @@ export default function ReaderPage() {
   const stage = calcPaperStage({ viewerWidth, viewerHeight, margin: 18, edgeRatio });
   const isImageBook = book?.format === "images";
   const isPdfBook = book?.format === "pdf";
+  // 批次18：从书库书架进入时带 fromShelf state——返回回原书架；其它入口（收藏页）无 state 保持回根
+  const fromShelf = (location.state as { fromShelf?: number | null } | null)?.fromShelf;
   // 漫画/PDF 共用视觉阅读管线（顶栏/热区/页码/书签）；分支差异只在设置面板与 api 来源
   const isVisualBook = isImageBook || isPdfBook;
   // 当前视觉书生效设置与持久化键（漫画/PDF 两份 state，同 UI 受控切换，互不影响）
@@ -985,7 +987,10 @@ export default function ReaderPage() {
           onMouseEnter={chrome.enter}
           onMouseLeave={chrome.leave}
         >
-          <button className="wr-btn" onClick={() => navigate("/")}>
+          <button
+            className="wr-btn"
+            onClick={() => navigate(typeof fromShelf === "number" ? `/?shelf=${fromShelf}` : "/")}
+          >
             返回书库
           </button>
           <div style={{ fontSize: 16, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

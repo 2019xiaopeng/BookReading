@@ -3,12 +3,14 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use rusqlite::{params, Connection};
 use uuid::Uuid;
 use zip::ZipArchive;
 
 use crate::app_paths;
 use crate::commands::library::{
-    atomic_copy_to, atomic_write_to, fetch_book_by_id, insert_book, now_ts, require_library_rel,
+    atomic_copy_to, atomic_write_to, fetch_book_by_id, fetch_books, insert_book, now_ts,
+    require_library_rel,
 };
 use crate::db;
 use crate::models::Book;
@@ -357,8 +359,7 @@ pub fn read_image_page(app: tauri::AppHandle, book_id: String, index: usize) -> 
 
 // 批量导入：父目录的一级子目录，仅保留"直接含图片"的（空/纯文本目录服务端跳过），目录名自然序
 #[tauri::command]
-pub fn list_image_subdirs(parent: String) -> Result<Vec<String>, String> {
-    let dir = PathBuf::from(&parent);
+pub fn list_image_subdirs(parent: String) -> Result<Vec<String>, String> {    let dir = PathBuf::from(&parent);
     if !dir.is_dir() {
         return Err(format!("{}: 不是文件夹", dir.display()));
     }
@@ -372,6 +373,57 @@ pub fn list_image_subdirs(parent: String) -> Result<Vec<String>, String> {
         .collect();
     subs.sort_by(|a, b| nat_cmp(a, b));
     Ok(subs)
+}
+
+// 批次18：文件夹漫画源目录移动/删除后的"找回"——校验后改写 library_path（原地引用书唯一恢复路径）
+#[tauri::command]
+pub fn relink_image_book(app: tauri::AppHandle, book_id: String, new_path: String) -> Result<Book, String> {
+    let conn = db::open_db(&app)?;
+    relink_image_folder(&conn, &book_id, &new_path)
+}
+
+// 与前端 normPath 同口径：反斜杠归一 + 小写 + 去尾斜杠，用于"一书一文件夹"防撞比较
+fn norm_folder_path(p: &str) -> String {
+    p.replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+fn relink_image_folder(conn: &Connection, book_id: &str, new_path: &str) -> Result<Book, String> {
+    let book = fetch_book_by_id(conn, book_id).map_err(|e| format!("failed to fetch book: {e}"))?;
+    if book.format.as_deref() != Some("images") {
+        return Err(format!("{}: 不是图片书，无法重链接", book_id));
+    }
+    // CBZ 是复制入库的库内文件（相对路径），不会丢源，也不允许改写成文件夹引用
+    if Path::new(&book.library_path.replace('\\', "/"))
+        .extension()
+        .and_then(|e| e.to_str())
+        .map_or(false, |e| e.eq_ignore_ascii_case("cbz"))
+    {
+        return Err("CBZ 漫画文件在书库内，无需重链接".to_string());
+    }
+    let dir = PathBuf::from(new_path);
+    if !dir.is_dir() {
+        return Err(format!("{}: 不是文件夹", dir.display()));
+    }
+    if !dir.is_absolute() {
+        return Err(format!("{}: 文件夹引用只支持绝对路径", dir.display()));
+    }
+    let pages = folder_image_files(&dir)?;
+    if pages.is_empty() {
+        return Err(format!("{}: 未找到图片（png/jpg/jpeg/webp/gif/avif/bmp）", dir.display()));
+    }
+    // 防一书双记录：其它在库 images 文件夹书已指向该目录则拒绝（与导入查重同口径，忽略回收站内）
+    let new_norm = norm_folder_path(new_path);
+    for b in fetch_books(conn).map_err(|e| format!("failed to list books: {e}"))? {
+        if b.id != book_id && b.format.as_deref() == Some("images") && norm_folder_path(&b.library_path) == new_norm {
+            return Err(format!("该文件夹已链接到《{}》，不能重复链接", b.title.clone().unwrap_or_else(|| b.id.clone())));
+        }
+    }
+    conn.execute(
+        "UPDATE books SET library_path = ?2, page_count = ?3 WHERE id = ?1",
+        params![book_id, dir.to_string_lossy().to_string(), pages.len() as i64],
+    )
+    .map_err(|e| format!("failed to update book: {e}"))?;
+    fetch_book_by_id(conn, book_id).map_err(|e| format!("failed to fetch book: {e}"))
 }
 
 #[cfg(test)]
@@ -503,5 +555,98 @@ mod tests {
         assert_eq!(names, vec!["vol2", "vol10"]);
         assert!(list_image_subdirs(parent.join("missing").to_string_lossy().to_string()).is_err());
         let _ = fs::remove_dir_all(&parent);
+    }
+
+    // ---- 批次18 源文件夹重链接 ----
+
+    fn test_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(db::SCHEMA_SQL).unwrap();
+        conn
+    }
+
+    fn book_row(id: &str, library_path: &str, format: Option<&str>) -> Book {
+        Book {
+            id: id.to_string(),
+            title: Some(id.to_string()),
+            author: None,
+            cover_path: None,
+            library_path: library_path.to_string(),
+            added_at: 1,
+            last_opened_at: None,
+            note: None,
+            pinned_at: None,
+            format: format.map(str::to_string),
+            page_count: None,
+            reading_percent: None,
+            is_favorite: false,
+            shelf_id: None,
+            sort_order: None,
+            deleted_at: None,
+            description: None,
+            content_chars: None,
+            file_size: None,
+            tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn relink_rejects_non_images_and_cbz() {
+        let conn = test_conn();
+        insert_book(&conn, &book_row("b1", "library/books/b1.epub", None)).unwrap();
+        assert!(relink_image_folder(&conn, "b1", "C:/whatever").unwrap_err().contains("不是图片书"));
+        insert_book(&conn, &book_row("b2", "library/books/b2.cbz", Some("images"))).unwrap();
+        assert!(relink_image_folder(&conn, "b2", "C:/whatever").unwrap_err().contains("CBZ"));
+        assert!(relink_image_folder(&conn, "missing", "C:/whatever").is_err());
+    }
+
+    #[test]
+    fn relink_rejects_missing_or_empty_dir() {
+        let conn = test_conn();
+        insert_book(&conn, &book_row("b1", "D:/gone/comic", Some("images"))).unwrap();
+        let root = std::env::temp_dir().join(format!("bookreading-relink-{}", Uuid::new_v4()));
+        let empty = root.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        assert!(relink_image_folder(&conn, "b1", root.join("missing").to_string_lossy().as_ref())
+            .unwrap_err()
+            .contains("不是文件夹"));
+        assert!(relink_image_folder(&conn, "b1", empty.to_string_lossy().as_ref())
+            .unwrap_err()
+            .contains("未找到图片"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn relink_updates_path_and_page_count() {
+        let conn = test_conn();
+        insert_book(&conn, &book_row("b1", "D:/gone/comic", Some("images"))).unwrap();
+        let dir = std::env::temp_dir().join(format!("bookreading-relink-ok-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("p2.png"), b"x").unwrap();
+        fs::write(dir.join("p10.png"), b"x").unwrap();
+
+        let updated = relink_image_folder(&conn, "b1", dir.to_string_lossy().as_ref()).unwrap();
+        assert_eq!(updated.library_path, dir.to_string_lossy().to_string());
+        assert_eq!(updated.page_count, Some(2));
+        let again = fetch_book_by_id(&conn, "b1").unwrap();
+        assert_eq!(again.library_path, dir.to_string_lossy().to_string());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn relink_rejects_folder_already_linked_by_another_book() {
+        let conn = test_conn();
+        let dir = std::env::temp_dir().join(format!("bookreading-relink-dup-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("p1.png"), b"x").unwrap();
+        // 已有书指向同一目录（反斜杠 + 大小写差异也要撞车：规范化比较）
+        let other = dir.to_string_lossy().replace('/', "\\").to_uppercase();
+        insert_book(&conn, &book_row("other", &other, Some("images"))).unwrap();
+        insert_book(&conn, &book_row("b2", "D:/gone/other", Some("images"))).unwrap();
+        let err = relink_image_folder(&conn, "b2", dir.to_string_lossy().as_ref()).unwrap_err();
+        assert!(err.contains("已链接"), "unexpected: {err}");
+        // 自身路径不变
+        assert_eq!(fetch_book_by_id(&conn, "b2").unwrap().library_path, "D:/gone/other");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

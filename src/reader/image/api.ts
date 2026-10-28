@@ -13,3 +13,8 @@ export async function readImagePage(bookId: string, index: number): Promise<Uint
 export async function importImageFolder(sourcePath: string, titleOpt: string | null): Promise<Book> {
   return invoke<Book>("import_image_folder", { sourcePath, titleOpt });
 }
+
+// 批次18：文件夹漫画源目录丢失后的重链接（Rust 端校验目录含图且不与其它书撞路径），返回更新后的书
+export async function relinkImageBook(bookId: string, newPath: string): Promise<Book> {
+  return invoke<Book>("relink_image_book", { bookId, newPath });
+}

@@ -88,6 +88,11 @@ export default function AppShell(props: {
   const [searchParams] = useSearchParams();
   const activeShelf = props.active === "library" ? searchParams.get("shelf") : null;
   const trashActive = props.active === "library" && searchParams.get("trash") === "1";
+  // 批次18：拖拽导入落到书库页当前书架（与 LibraryPage.currentShelfId 同口径；回收站/其它页=根）
+  const dropShelfParam = props.active === "library" && !trashActive ? searchParams.get("shelf") : null;
+  const dropShelfParsed = dropShelfParam ? Number(dropShelfParam) : null;
+  const dropShelfId =
+    dropShelfParsed != null && Number.isFinite(dropShelfParsed) ? dropShelfParsed : null;
 
   // 启动纠偏：DB 主题覆盖 localStorage 缓存；同一份 settings 顺带解析全局背景；书架换背景后广播重读，即时换肤
   useEffect(() => {
@@ -119,7 +124,7 @@ export default function AppShell(props: {
     const unlisten = getCurrentWebview().onDragDropEvent((e) => {
       if (e.payload.type === "drop") {
         setDragOver(false);
-        if (e.payload.paths.length > 0) void runImports(e.payload.paths);
+        if (e.payload.paths.length > 0) void runImports(e.payload.paths, { targetShelfId: dropShelfId });
       } else {
         setDragOver(e.payload.type !== "leave");
       }
@@ -127,7 +132,7 @@ export default function AppShell(props: {
     return () => {
       void unlisten.then((f) => f());
     };
-  }, []);
+  }, [dropShelfId]);
 
   // close the theme menu on outside pointerdown / Escape
   useEffect(() => {

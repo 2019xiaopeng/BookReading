@@ -13,7 +13,9 @@ use commands::library::{
     repair_book_metadata, save_reader_background, save_reader_font, set_book_cover,
     update_book_metadata,
 };
-use commands::images::{import_image_folder, list_image_pages, list_image_subdirs, read_image_page};
+use commands::images::{
+    import_image_folder, list_image_pages, list_image_subdirs, read_image_page, relink_image_book,
+};
 use commands::annotations::{
     add_bookmark, add_highlight, delete_bookmark, delete_highlight, list_bookmarks, list_highlights,
 };
@@ -77,6 +79,7 @@ pub fn run() {
             list_image_pages,
             list_image_subdirs,
             read_image_page,
+            relink_image_book,
             repair_book_metadata,
             set_book_cover,
             reextract_all_covers,

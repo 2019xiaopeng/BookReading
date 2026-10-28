@@ -5,13 +5,14 @@ vi.mock("../tauri/invoke", () => ({
   importBook: vi.fn(),
   computeBookStats: vi.fn(),
   probePaths: vi.fn(),
+  moveBooksToShelf: vi.fn(),
 }));
 vi.mock("../reader/image/api", () => ({ importImageFolder: vi.fn() }));
 vi.mock("../ui/dialog", () => ({ showAlert: vi.fn(), showConfirm: vi.fn(), showChoice: vi.fn() }));
 vi.mock("../tauri/frontendLog", () => ({ logFrontend: vi.fn() }));
 
 import { importImageFolder } from "../reader/image/api";
-import { listBooks, probePaths, type Book, type PathInfo } from "../tauri/invoke";
+import { listBooks, moveBooksToShelf, probePaths, type Book, type PathInfo } from "../tauri/invoke";
 import { showAlert } from "../ui/dialog";
 import { buildDedupIndex, checkDuplicate, importSingle, isImportableFile } from "./importRunner";
 
@@ -113,5 +114,16 @@ describe("importSingle（批次16：单本导入交互式查重）", () => {
     const res = await importSingle("D:/Comics/B");
     expect(res.kind).toBe("failed");
     expect(res.error).toContain("未找到图片");
+  });
+
+  test("批次18 targetShelfId：成功项移入指定书架；未传不动", async () => {
+    vi.mocked(listBooks).mockResolvedValue([]);
+    vi.mocked(probePaths).mockResolvedValue([info("C", 1, "D:/Comics/C", true) as PathInfo]);
+    vi.mocked(importImageFolder).mockResolvedValue(makeBook({ id: "nid" }));
+    await importSingle("D:/Comics/C", { targetShelfId: 7 });
+    expect(moveBooksToShelf).toHaveBeenCalledWith(["nid"], 7);
+    vi.mocked(moveBooksToShelf).mockClear();
+    await importSingle("D:/Comics/C");
+    expect(moveBooksToShelf).not.toHaveBeenCalled();
   });
 });
