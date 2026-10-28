@@ -40,7 +40,7 @@ describe("createImmersiveMachine", () => {
     expect(m.visible).toBe(false);
   });
 
-  test("dismiss 点击即收：栏/热区外 pointerdown 立即隐藏，disabled/locked 下无操作", () => {
+  test("dismiss 翻页即收：栏可见时立即隐藏（B12：单击正文不再承担收栏职责），disabled/locked 下无操作", () => {
     const m = machine();
     m.enter();
     m.dismiss();
@@ -52,21 +52,25 @@ describe("createImmersiveMachine", () => {
     expect(m.visible).toBe(false);
     const d = machine(true);
     d.dismiss();
-    expect(d.visible).toBe(true);
+    expect(d.visible).toBe(false);
     const l = machine();
     l.setLocked(true);
     l.dismiss();
     expect(l.visible).toBe(false);
   });
 
-  test("disabled 强制可见且计时暂停", () => {
+  test("disabled（抽屉/错误/选区开）强制隐藏；关闭后回到默认隐藏，热区可再唤出", () => {
     const m = machine(true);
+    expect(m.visible).toBe(false);
+    m.enter();
+    m.wake();
+    vi.advanceTimersByTime(10_000);
+    expect(m.visible).toBe(false);
+    m.setDisabled(false);
+    expect(m.visible).toBe(false); // 浮层关闭后默认隐藏，指针进热区再唤出
+    m.enter();
     expect(m.visible).toBe(true);
     m.leave();
-    vi.advanceTimersByTime(10_000);
-    expect(m.visible).toBe(true);
-    m.setDisabled(false);
-    expect(m.visible).toBe(true); // 关抽屉回到自动隐藏态：先可见
     vi.advanceTimersByTime(1200);
     expect(m.visible).toBe(false);
   });

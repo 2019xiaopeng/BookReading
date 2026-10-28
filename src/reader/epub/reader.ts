@@ -70,6 +70,8 @@ export type RelocatedPayload = {
   endSectionIndex: number;
   pageStart: PageEdge | null;
   pageEnd: PageEdge | null;
+  /** B12 全局"位置页"（估算，1024 字/页粒度）：locations 就绪后 index=当前页-1、total=总页数；未就绪 null */
+  locPage: { index: number; total: number } | null;
 };
 
 function pageEdge(edge: any): PageEdge | null {
@@ -278,15 +280,19 @@ export async function createReader(opts: {
           margin: "0 auto",
           padding: "24px 20px",
           "line-height": String(lineHeight),
-          "font-family": FONT_STACKS[fontFamily],
+          "font-family": `${FONT_STACKS[fontFamily]} !important`,
           "word-break": "break-word",
           "overflow-wrap": "anywhere",
           // epub 自带浅底会透出暗色壳：dark/darkcontrast 注入不透明纸面（!important 压过 epub 自身规则），浅色主题保持 transparent
           background: opaque ? `${s.paper} !important` : "transparent",
           color: opaque ? `${s.fg} !important` : s.fg,
         },
-        // 段落常自带 line-height（比 body 继承更具体），须直接命中 p 且加 !important
-        [`body.${t} p, body.${t}`]: { "line-height": `${lineHeight} !important` },
+        // 段落常自带 line-height / font-family（比 body 继承更具体——继承必输给直命中 p 的声明），
+        // 须直接命中 p 且加 !important（B12 字体不生效根因即书内 p/类选择器压过了 body 继承）
+        [`body.${t} p, body.${t}`]: {
+          "line-height": `${lineHeight} !important`,
+          "font-family": `${FONT_STACKS[fontFamily]} !important`,
+        },
       });
     }
     rendition.themes.select(currentTheme);
@@ -306,6 +312,13 @@ export async function createReader(opts: {
       typeof book.locations?.percentageFromCfi === "function"
         ? (book.locations.percentageFromCfi(cfi) as number)
         : null;
+    // B12 全局位置页（估算页，locations.generate(1024) 粒度）：locationFromCfi 返回索引数字（-1=未就绪）
+    let locPage: { index: number; total: number } | null = null;
+    const locTotal = typeof book.locations?.length === "function" ? book.locations.length() : 0;
+    if (locTotal > 0 && typeof book.locations?.locationFromCfi === "function") {
+      const loc = book.locations.locationFromCfi(cfi);
+      if (typeof loc === "number" && loc >= 0) locPage = { index: loc, total: locTotal };
+    }
     const href = String(location?.start?.href ?? "").split("#")[0];
     const sectionIndex = typeof location?.start?.index === "number" ? location.start.index : -1;
     const endSectionIndex = typeof location?.end?.index === "number" ? location.end.index : sectionIndex;
@@ -317,6 +330,7 @@ export async function createReader(opts: {
       endSectionIndex,
       pageStart: pageEdge(location?.start),
       pageEnd: pageEdge(location?.end),
+      locPage,
     });
   };
   rendition.on("relocated", onRelocated);

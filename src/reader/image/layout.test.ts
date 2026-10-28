@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  autoScrollStep,
   buildSpreads,
   clampPage,
   clampZoomScale,
@@ -176,5 +177,35 @@ describe("slideDirection", () => {
     expect(slideDirection(1, true)).toBe(-1);
     expect(slideDirection(-1, true)).toBe(1);
     expect(slideDirection(0, true)).toBe(0);
+  });
+});
+
+describe("batch12 autoScrollStep", () => {
+  const FRAMES = (speed: number, dt: number, n: number) => {
+    let accum = 0;
+    let px = 0;
+    for (let i = 0; i < n; i++) {
+      const s = autoScrollStep(accum, speed, dt);
+      accum = s.accum;
+      px += s.px;
+    }
+    return px;
+  };
+
+  test("20/60/120/240 px/s 全程线性：60 帧 1/60s 的整像素写入合计≈速度（±1px 浮点容差，余数不丢）", () => {
+    const dt = 1 / 60;
+    for (const speed of [20, 60, 120, 240]) {
+      expect(Math.abs(FRAMES(speed, dt, 60) - speed)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  test("低速 <1px/帧也能起步（旧 scrollTop += 写法在整数化下恒为 0）且余数跨帧保留", () => {
+    expect(Math.abs(FRAMES(20, 1 / 144, 144) - 20)).toBeLessThanOrEqual(1); // 0.139px/帧：144Hz 下同样线性
+    const slow = autoScrollStep(0, 20, 1 / 60);
+    expect(slow.px).toBe(0);
+    expect(slow.accum).toBeCloseTo(20 / 60, 10);
+    const fast = autoScrollStep(slow.accum, 240, 1 / 60);
+    expect(fast.px).toBe(4); // 0.333+4=4.33 → 4px 写入、余数留存
+    expect(fast.accum).toBeGreaterThan(0);
   });
 });

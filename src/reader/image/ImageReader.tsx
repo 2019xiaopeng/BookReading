@@ -14,6 +14,7 @@ import { IconPause, IconPlay, IconRefresh } from "../../ui/icons";
 import { listImagePages, readImagePage } from "./api";
 import {
   WIDE_PAGE_RATIO,
+  autoScrollStep,
   buildSpreads,
   clampPage,
   clampZoomScale,
@@ -33,6 +34,10 @@ export type ImageReaderApi = {
   getPageUrl: (page: number) => string | undefined;
   /** B6: true while Ctrl+wheel zoom is active — 仅用于滚轮分流（缩放态滚轮=平移）；翻页不受缩放阻塞 */
   zoomed: () => boolean;
+  /** B12: 条漫空格键播放/暂停自动滚动（非条漫/缩放态起点为无操作） */
+  toggleAutoScroll: () => void;
+  /** B12: 自动滚动播放中（条漫）——ReaderPage 键盘 ↑/↓ 调速用 */
+  autoActive: () => boolean;
 };
 
 type Props = {
@@ -71,6 +76,7 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
   const [autoScroll, setAutoScroll] = useState(false);
   const [autoEndToast, setAutoEndToast] = useState(false);
   const autoSpeedRef = useRef(settings.autoScrollSpeed);
+  const autoScrollRef = useRef(false);
   const zoomRef = useRef(zoom);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const fitRef = useRef<HTMLDivElement | null>(null);
@@ -98,6 +104,11 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
   useEffect(() => {
     autoSpeedRef.current = settings.autoScrollSpeed;
   }, [settings.autoScrollSpeed]);
+
+  // B12: onApi 回调长期持有，须走 ref 读实时播放态（闭包 state 会过期）
+  useEffect(() => {
+    autoScrollRef.current = autoScroll;
+  }, [autoScroll]);
 
   useEffect(() => {
     zoomRef.current = zoom;
@@ -334,6 +345,13 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
       },
       getPageUrl: (page: number) => cacheRef.current.get(page),
       zoomed: () => zoomRef.current.scale !== 1,
+      toggleAutoScroll: () => {
+        if (settings.mode !== "webtoon") return;
+        // 缩放态容器锁滚：允许暂停、不允许启动
+        if (!autoScrollRef.current && zoomRef.current.scale !== 1) return;
+        setAutoScroll((v) => !v);
+      },
+      autoActive: () => settings.mode === "webtoon" && autoScrollRef.current,
     });
   }, [onApi, spreads, settings.mode, pages]);
 
@@ -380,15 +398,23 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
     if (!el) return;
     let raf = 0;
     let last = performance.now();
+    let accum = 0; // B12：浮点累积器——scrollTop 整像素化会吞 <1px/帧增量，攒满整像素才写、余数留存，速度 20-240 全程线性
     const stop = () => setAutoScroll(false);
-    const onUserInput = () => stop();
+    // B12：空格/↑/↓ 已被 ReaderPage 接管为播放暂停与调速键，不算“用户接管滚动”，不触发停止
+    const onUserInput = (e: Event) => {
+      const k = (e as KeyboardEvent).key;
+      if (k === " " || k === "ArrowUp" || k === "ArrowDown") return;
+      stop();
+    };
     el.addEventListener("wheel", onUserInput, { passive: true });
     el.addEventListener("keydown", onUserInput);
     el.addEventListener("pointerdown", onUserInput, { passive: true });
     const tick = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000); // 后台页回来的大间隔不做跳变
       last = now;
-      el.scrollTop += autoSpeedRef.current * dt;
+      const step = autoScrollStep(accum, autoSpeedRef.current, dt);
+      accum = step.accum;
+      if (step.px > 0) el.scrollTop += step.px;
       if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) {
         stop();
         setAutoEndToast(true);
@@ -516,11 +542,9 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
         ? `center ${(scrollRef.current?.scrollTop ?? 0) + vh2}px`
         : `${(fitRef.current?.scrollLeft ?? 0) + (stage?.clientWidth ?? 0) / 2}px ${(fitRef.current?.scrollTop ?? 0) + vh2}px`;
   }
-  // 浮动小钮公共样式：z(17) 高于热区(14)与两栏(16)——B11 前复原钮 z=3 埋在底热区 48px 带下被吞点击
+  // 浮动小钮公共样式：B12 居中组（bottom:12 落在 62px 底部预留带内，栏浮现也不遮内容）；
+  // 组 z(17) 高于热区(14)与两栏(16)——B11 前复原钮 z=3 埋在底热区带下被吞点击
   const HUD_FLOAT: CSSProperties = {
-    position: "absolute",
-    bottom: 12,
-    zIndex: 17,
     display: "inline-flex",
     alignItems: "center",
     gap: 4,
@@ -532,17 +556,39 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
     color: "var(--wr-muted)",
     cursor: "pointer",
   };
-  // B6：缩放中可见的“复原”浮动钮（一键回 1x，保持当前阅读位置）；B11 移到左下角且抬出热区层
+  const HUD_GROUP: CSSProperties = {
+    position: "absolute",
+    bottom: 12,
+    left: "50%",
+    transform: "translateX(-50%)",
+    zIndex: 17,
+    display: "inline-flex",
+    gap: 8,
+  };
+  // B6：缩放中可见的“复原”浮动钮（一键回 1x，保持当前阅读位置）
   const resetBtn = zoomed ? (
     <button
       type="button"
       aria-label="复原缩放"
       title="复原缩放"
       onClick={resetZoom}
-      style={{ ...HUD_FLOAT, left: 12 }}
+      style={HUD_FLOAT}
     >
       <IconRefresh />
       复原
+    </button>
+  ) : null;
+  // B11 条漫自动滚动 HUD：缩放态隐藏（缩放中容器锁滚，先复原再播）；B12 移入底部居中组（复原钮左侧）
+  const autoBtn = !zoomed ? (
+    <button
+      type="button"
+      aria-pressed={autoScroll}
+      title={autoScroll ? "暂停自动滚动" : "自动滚动"}
+      onClick={() => setAutoScroll((v) => !v)}
+      style={HUD_FLOAT}
+    >
+      {autoScroll ? <IconPause /> : <IconPlay />}
+      {autoScroll ? "暂停" : "自动"}
     </button>
   ) : null;
 
@@ -622,20 +668,10 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
             ))}
           </div>
         </div>
-        {resetBtn}
-        {/* B11 条漫自动滚动 HUD：缩放态隐藏（缩放中容器锁滚，先复原再播） */}
-        {!zoomed ? (
-          <button
-            type="button"
-            aria-pressed={autoScroll}
-            title={autoScroll ? "暂停自动滚动" : "自动滚动"}
-            onClick={() => setAutoScroll((v) => !v)}
-            style={{ ...HUD_FLOAT, right: 12 }}
-          >
-            {autoScroll ? <IconPause /> : <IconPlay />}
-            {autoScroll ? "暂停" : "自动"}
-          </button>
-        ) : null}
+        <div style={HUD_GROUP}>
+          {resetBtn}
+          {autoBtn}
+        </div>
         {autoEndToast ? (
           <div
             role="status"
@@ -706,7 +742,7 @@ export default function ImageReader({ book, theme, settings, onRelocated, onApi 
         ),
       )}
     </div>
-    {resetBtn}
+    <div style={HUD_GROUP}>{resetBtn}</div>
   </div>
 );
 }

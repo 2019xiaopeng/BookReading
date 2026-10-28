@@ -649,13 +649,16 @@
   flex: 1;
   min-height: 0;
   display: flex;
-  /* B11：栏浮现时纸面让位（62px≈顶栏定高/底栏内容高），隐藏/锁定回弹 0；由 data-chrome 驱动，不逐帧 JS */
+  /* B12 固定预留：非锁定态上下各恒定让位 62px（≈顶栏定高/底栏内容高），栏在预留区内淡入淡出——
+     内容永不动、栏也不遮字；仅锁定态一次过渡收 0（进/出沉浸各跳一次可接受） */
+  padding-top: 62px;
+  padding-bottom: 62px;
   transition: padding 200ms ease;
 }
 
-.wr-reader-stage[data-chrome="visible"] {
-  padding-top: 62px;
-  padding-bottom: 62px;
+.wr-reader-stage[data-locked="true"] {
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .wr-reader-viewer {
@@ -723,12 +726,13 @@
   backdrop-filter: blur(10px);
 }
 
-/* B6 热区条：顶/底 48px 透明带，鼠标进入唤出上下栏；z 低于边缘翻页区(15)，点击照常翻页 */
+/* B6→B12 热区条：恒为根级顶/底预留带（62px，正对栏位置），鼠标进入唤出上下栏；
+   z 低于边缘翻页区(15)与栏(16)，点击穿透照常翻页；挂根级因 viewer overflow:hidden 会裁掉负偏移 */
 .wr-chrome-hotzone {
   position: absolute;
   left: 0;
   right: 0;
-  height: 48px;
+  height: 62px;
   z-index: 14;
 }
 

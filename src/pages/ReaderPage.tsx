@@ -117,12 +117,17 @@ export default function ReaderPage() {
   const [noteText, setNoteText] = useState("");
   const [chapterHref, setChapterHref] = useState("");
   const [pageBadge, setPageBadge] = useState<{ left: { page: number; total: number } | null; right: { page: number; total: number } | null }>({ left: null, right: null });
+  // B12 全局“位置页”（估算，1024 字/页粒度）：locations 就绪后 X/Y 全书页码；未就绪回退章内页码
+  const [locPage, setLocPage] = useState<{ index: number; total: number } | null>(null);
   const [lockToast, setLockToast] = useState(false);
+  const [speedToast, setSpeedToast] = useState<number | null>(null);
   const [pagerHover, setPagerHover] = useState<"left" | "right" | null>(null);
   const [locationsReady, setLocationsReady] = useState(false);
   const [dragPct, setDragPct] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
+  const readerRootRef = useRef<HTMLDivElement | null>(null);
+  const speedToastTimerRef = useRef<number | null>(null);
   const viewerSize = useElementSize(viewerRef);
   const controllerRef = useRef<ReaderController | null>(null);
   const settingsRef = useRef<ReaderSettings>(settings);
@@ -141,7 +146,8 @@ export default function ReaderPage() {
   const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false });
   const progressRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
-  // 沉浸 chrome（B6 热区版）：默认净屏，鼠标进顶/底热区或栏内浮现，离开 1.2s 淡出、栏外点击即收；锁定=全藏+热区禁用；抽屉开/加载失败/选区气泡开强制可见
+  // 沉浸 chrome（B12 精简版）：显示=指针进顶/底热区（无延迟）；隐藏=离开热区与栏 1.2s / 翻页动作即收 /
+  // 开始选字或打开抽屉、错误浮层（disabled=栏隐藏）；锁定=全藏+热区禁用。单击正文不承担收栏职责。
   const chrome = useImmersiveChrome({ disabled: drawerOpen || !!readerError || !!selection || !!noteDraft });
 
   useEffect(() => {
@@ -266,6 +272,7 @@ export default function ReaderPage() {
       setLocationsReady(false);
       setDragPct(null);
       setPageBadge({ left: null, right: null });
+      setLocPage(null);
       setChapterHref("");
       restoredRef.current = false;
       setAnnotationsLoaded(false);
@@ -280,8 +287,9 @@ export default function ReaderPage() {
         if (typeof percent === "number") setPercent(percent);
         setDragPct(null);
         setSelection(null);
-        // 视觉页码徽标（epub paginated 专属；scrolled 无分页语义，image 书不走此回调）
-        if (settingsRef.current.readingMode === "paginated") {
+        // 视觉页码徽标：优先全局“位置页”（B12，locations 估算 1024 字/页）；paginated 无 locPage 时回退章内页码
+        setLocPage(payload.locPage ?? null);
+        if (settingsRef.current.readingMode === "paginated" && !payload.locPage) {
           const left = payload.pageStart;
           const right =
             payload.pageEnd && (payload.endSectionIndex !== payload.sectionIndex || payload.pageEnd.page !== left?.page) ? payload.pageEnd : null;
@@ -338,10 +346,9 @@ export default function ReaderPage() {
           onLocationsReady: () => {
             if (!cancelled) setLocationsReady(true);
           },
-          // iframe 内按下（含开始新选区）即收起旧气泡，并按"点击即收"同步收栏
+          // iframe 内按下（含开始新选区）即收起旧气泡；B12：单击正文不再承担收栏职责（与点击翻页/选字冲突）
           onContentsPress: () => {
             setSelection(null);
-            chrome.dismiss();
           },
           onError,
         });
@@ -465,24 +472,13 @@ export default function ReaderPage() {
     applyReaderFont(settings.reader_font).catch((e) => logFrontend(`reader: font load failed ${String(e)}`));
   }, [settings.reader_font]);
 
-  // B6：栏改为 overlay 后纸面高度恒定，锁定切换不再需要 resize 联动（原底部空白根因已消除）
-  // B11 让位 padding 又改回纸面高度可变：栏显隐切换在过渡（200ms）结束后补一次 epub 重排
+  // B12 固定预留：栏显隐只做淡入淡出、布局零变化（不再需要 visible-keyed resize）；
+  // 仅锁定切换（padding 62↔0 的一次性 200ms 过渡）后补一次 epub 重排，保持分页正确
   useEffect(() => {
     if (isImageBook) return;
     const t = window.setTimeout(() => controllerRef.current?.resize(), 220);
     return () => window.clearTimeout(t);
-  }, [chrome.visible, isImageBook]);
-
-  // B11 点击即收：pointerdown 落在栏/热区之外立即隐藏（栏与热区内点击保留，按钮可点）；epub iframe 内经 onContentsPress 中继
-  useEffect(() => {
-    const onPointerDown = (e: PointerEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t?.closest?.(".wr-reader-topbar, .wr-reader-footer, .wr-chrome-hotzone")) return;
-      chrome.dismiss();
-    };
-    window.addEventListener("pointerdown", onPointerDown, true);
-    return () => window.removeEventListener("pointerdown", onPointerDown, true);
-  }, [chrome]);
+  }, [chrome.locked, isImageBook]);
 
   useEffect(() => {
     if (!chrome.locked) return;
@@ -535,9 +531,24 @@ export default function ReaderPage() {
       if (isTyping) return;
 
       if (imageCtxRef.current.active) {
+        // B12 条漫：空格=自动滚动播放/暂停（缩放态、输入焦点除外，不再触发原生下跳）；
+        // 播放中 ↑/↓=速度 ±10（实时生效+轻提示当前速度）
+        if (imageCtxRef.current.webtoon && !imageApiRef.current?.zoomed?.()) {
+          if (e.key === " ") {
+            e.preventDefault();
+            imageApiRef.current?.toggleAutoScroll();
+            return;
+          }
+          if ((e.key === "ArrowUp" || e.key === "ArrowDown") && imageApiRef.current?.autoActive?.()) {
+            e.preventDefault();
+            nudgeAutoScrollSpeed(e.key === "ArrowUp" ? 10 : -10);
+            return;
+          }
+        }
         const imageDir = turnKeyDirection(e.key, imageCtxRef.current.rtl);
         if (imageDir) {
           e.preventDefault();
+          chrome.dismiss(); // B12：翻页动作即收栏（栏可见时）
           void animateTurn(imageDir);
           return;
         }
@@ -547,6 +558,7 @@ export default function ReaderPage() {
       ) {
         // 分页=翻页；滚动模式由 animateTurn 内部分流为章节导航
         e.preventDefault();
+        chrome.dismiss(); // B12：翻页动作即收栏（栏可见时）
         void animateTurn(e.key === "ArrowLeft" || e.key === "PageUp" ? "prev" : "next");
         return;
       }
@@ -573,10 +585,11 @@ export default function ReaderPage() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [book, drawerOpen, chrome.locked, chrome.visible, chrome.wake, chrome.setLocked, chapterTitle, settings.pageAnimation, settings.readingMode]);
+  }, [book, drawerOpen, chrome, imageSettings, chapterTitle, settings.pageAnimation, settings.readingMode]);
 
   useEffect(() => {
-    const el = viewerRef.current;
+    // B12：热区条上移到根级预留带（viewer overflow:hidden 会裁掉负偏移），滚轮监听同步挂根级
+    const el = readerRootRef.current;
     if (!el) return;
 
     // 热区条盖住的顶/底 48px 带内，iframe/内嵌滚动收不到 wheel——接力给实际滚动容器
@@ -614,6 +627,7 @@ export default function ReaderPage() {
       wheelCooldownRef.current = now;
       const dir = wheelAccumRef.current > 0 ? "next" : "prev";
       wheelAccumRef.current = 0;
+      chrome.dismiss(); // B12：滚轮翻页即收栏（栏可见时）
       void animateTurn(dir);
     };
 
@@ -634,6 +648,18 @@ export default function ReaderPage() {
     await setSetting("readingMode", next.readingMode);
     await setSetting("reader_bg", JSON.stringify(next.reader_bg));
     await setSetting("reader_font", JSON.stringify(next.reader_font));
+  }
+
+  // B12 条漫播放中 ↑/↓ 调速：±10 并钳 20-240，实时写入设置（ImageReader autoSpeedRef 即时生效）+ 轻提示
+  function nudgeAutoScrollSpeed(delta: number) {
+    const speed = Math.min(240, Math.max(20, imageSettings.autoScrollSpeed + delta));
+    const next = { ...imageSettings, autoScrollSpeed: speed };
+    setImageSettings(next);
+    settingsTouchedRef.current = true;
+    void setSetting("image_reader_settings", JSON.stringify(next));
+    setSpeedToast(speed);
+    if (speedToastTimerRef.current) window.clearTimeout(speedToastTimerRef.current);
+    speedToastTimerRef.current = window.setTimeout(() => setSpeedToast(null), 1200);
   }
 
   function handleImageRelocated(page: number, pageCount: number) {
@@ -852,6 +878,7 @@ export default function ReaderPage() {
     <div
       data-theme={theme}
       className="wr-reader-root"
+      ref={readerRootRef}
     >
       {!chrome.locked ? (
         <div
@@ -934,8 +961,8 @@ export default function ReaderPage() {
         </div>
       ) : null}
 
-      {/* data-chrome 驱动让位 padding（B11）：栏可见=纸面上下压 62px，隐藏/锁定=0 */}
-      <div className="wr-reader-stage" data-chrome={chrome.visible ? "visible" : "hidden"}>
+      {/* B12 固定预留：非锁定态 stage 恒定 padding 62px（栏在预留区内淡入淡出，内容零位移）；锁定态一次性收 0 */}
+      <div className="wr-reader-stage" data-locked={chrome.locked ? "true" : undefined}>
         <div
           ref={viewerRef}
           className="wr-reader-viewer"
@@ -1230,7 +1257,26 @@ export default function ReaderPage() {
                 >
                   {bgUrl ? <div className="wr-reader-bg-veil" aria-hidden="true" /> : null}
                   <div ref={containerRef} style={{ height: "100%", position: "relative" }} />
-                  {pageBadge.left || pageBadge.right ? (
+                  {/* B12 页码徽标：locations 就绪显示全书“位置页” X / Y（1024 字/页估算；双页两角 X 与 X+1 近似）；未就绪回退章内页码 */}
+                  {locPage ? (
+                    <div aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 2 }}>
+                      {pageBadge.right ? (
+                        <>
+                          <span style={pageBadgeStyle("left")}>
+                            {locPage.index + 1} / {locPage.total}
+                          </span>
+                          <span style={pageBadgeStyle("right")}>
+                            {Math.min(locPage.index + 2, locPage.total)} / {locPage.total}
+                          </span>
+                        </>
+                      ) : (
+                        // 单页：只右下角一枚
+                        <span style={pageBadgeStyle("right")}>
+                          {locPage.index + 1} / {locPage.total}
+                        </span>
+                      )}
+                    </div>
+                  ) : pageBadge.left || pageBadge.right ? (
                     <div aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 2 }}>
                       {pageBadge.right ? (
                         <>
@@ -1277,6 +1323,7 @@ export default function ReaderPage() {
               ) : null}
               <div
                 onClick={() => {
+                  chrome.dismiss(); // B12：边缘热区点击翻页即收栏
                   void animateTurn(imageEdgeSwap ? "next" : "prev");
                 }}
                 onMouseEnter={() => setPagerHover("left")}
@@ -1293,6 +1340,7 @@ export default function ReaderPage() {
               />
               <div
                 onClick={() => {
+                  chrome.dismiss(); // B12：边缘热区点击翻页即收栏
                   void animateTurn(imageEdgeSwap ? "prev" : "next");
                 }}
                 onMouseEnter={() => setPagerHover("right")}
@@ -1308,23 +1356,6 @@ export default function ReaderPage() {
                 }}
               />
             </div>
-          ) : null}
-          {!chrome.locked ? (
-            <>
-              {/* 顶/底热区条：透明覆盖、z(14) 低于边缘翻页区(15) 点击照常翻页；置于 viewer 子树内滚轮照常冒泡翻页 */}
-              <div
-                aria-hidden="true"
-                className="wr-chrome-hotzone wr-chrome-hotzone--top"
-                onMouseEnter={chrome.enter}
-                onMouseLeave={chrome.leave}
-              />
-              <div
-                aria-hidden="true"
-                className="wr-chrome-hotzone wr-chrome-hotzone--bottom"
-                onMouseEnter={chrome.enter}
-                onMouseLeave={chrome.leave}
-              />
-            </>
           ) : null}
           <SelectionToolbar
             open={!!selection && !drawerOpen && !readerError}
@@ -1424,6 +1455,25 @@ export default function ReaderPage() {
         </div>
       </div>
 
+      {/* B12 顶/底热区条：根级正对 stage 的 62px 预留带（栏所在处；viewer overflow:hidden 会裁掉负偏移故挂根级），
+          鼠标进入唤出栏；透明覆盖、z(14) 低于栏(16)与抽屉(20)，点击穿透照常翻页 */}
+      {!chrome.locked ? (
+        <>
+          <div
+            aria-hidden="true"
+            className="wr-chrome-hotzone wr-chrome-hotzone--top"
+            onMouseEnter={chrome.enter}
+            onMouseLeave={chrome.leave}
+          />
+          <div
+            aria-hidden="true"
+            className="wr-chrome-hotzone wr-chrome-hotzone--bottom"
+            onMouseEnter={chrome.enter}
+            onMouseLeave={chrome.leave}
+          />
+        </>
+      ) : null}
+
       {!chrome.locked ? (
         <div
           className="wr-reader-footer"
@@ -1491,9 +1541,12 @@ export default function ReaderPage() {
           <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
             {isImageBook && imagePage !== null
               ? `${imagePage.page + 1} / ${imagePage.pageCount}`
-              : typeof percent === "number"
-                ? `${Math.round(percent * 100)}%`
-                : ""}
+              : locPage
+                ? // B12 全局位置页（估算，与角标一致）；未就绪回退百分比
+                  `${locPage.index + 1} / ${locPage.total}`
+                : typeof percent === "number"
+                  ? `${Math.round(percent * 100)}%`
+                  : ""}
           </div>
         </div>
       ) : null}
@@ -1533,6 +1586,29 @@ export default function ReaderPage() {
           }}
         >
           已锁定 · Esc 解锁
+        </div>
+      ) : null}
+
+      {speedToast !== null ? (
+        <div
+          role="status"
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            fontSize: 12,
+            color: "var(--wr-muted)",
+            background: "var(--panel-solid)",
+            border: "1px solid var(--wr-hairline)",
+            borderRadius: 999,
+            padding: "6px 14px",
+            boxShadow: "var(--shadow-sm)",
+            pointerEvents: "none",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          自动滚动 {speedToast}px/s
         </div>
       ) : null}
     </div>

@@ -15,6 +15,8 @@ const RETENTION_LABELS: Record<string, string> = { "7": "7 天", "30": "30 天",
 const READER_KEYS: [string, string][] = [
   ["← / → / PgUp / PgDn", "翻页（漫画 RTL 下方向语义反转）"],
   ["滚轮", "滚动阅读 / 翻页"],
+  ["空格", "条漫模式：自动滚动播放 / 暂停"],
+  ["↑ / ↓", "自动滚动播放中：速度 ±10px/s"],
   ["Esc", "关抽屉 → 解除界面锁定 → 唤醒工具栏"],
   ["F11", "窗口全屏开关（独立于沉浸锁定）"],
   ["Ctrl+F", "书内搜索（EPUB）"],

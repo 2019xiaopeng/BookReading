@@ -10,7 +10,7 @@ export type ImmersiveChrome = {
   enter: () => void;
   /** 鼠标离开热区与栏：起 1.2s 计时后隐藏 */
   leave: () => void;
-  /** 点击即收：pointerdown 落在栏/热区之外时立即隐藏（不等计时） */
+  /** 翻页动作（键盘/滚轮/边缘热区点击）时立即收栏（不等计时）；单击正文不承担收栏职责 */
   dismiss: () => void;
   /** Esc 唤醒：浮现并起计时（期间无鼠标进入热区则自动隐藏，1.2s） */
   wake: () => void;
@@ -21,10 +21,12 @@ export type ImmersiveMachine = ImmersiveChrome & {
 };
 
 /**
- * 沉浸 chrome 状态机（B6 热区版）：栏默认隐藏，鼠标进入顶/底热区或栏内才浮现；
- * 离开热区与栏 1.2s 后淡出，栏/热区外的 pointerdown 立即隐藏（点击即收）；
- * locked=全藏且热区无效；disabled（抽屉开/加载失败/选区气泡开）恒可见。
- * 键盘/滚轮/边缘翻页不经过此状态机，任何栏状态下照常。纯逻辑可脱离 React 在 node 单测。
+ * 沉浸 chrome 状态机（B12 精简版）。规则：
+ * 显示 = 指针进入顶/底热区或栏内（无延迟）；
+ * 隐藏 = ①指针离开热区与栏 1.2s ②发生翻页动作（键盘/滚轮/边缘热区点击，调 dismiss）
+ *        ③开始选中文字（selected → 宿主置 selection → disabled）④抽屉/错误浮层打开（disabled）；
+ * disabled = 抽屉开/加载失败/选区气泡开时栏隐藏（抽屉与浮层有自己的头部）；
+ * 锁定态不变：全藏、热区禁用。键盘/滚轮/边缘翻页不经过此状态机照常发生。纯逻辑可脱离 React 在 node 单测。
  */
 export function createImmersiveMachine(opts: {
   hideMs?: number;
@@ -97,15 +99,15 @@ export function createImmersiveMachine(opts: {
   const setDisabled = (v: boolean) => {
     if (v === disabled) return;
     disabled = v;
-    hidden = false;
-    if (v || locked) clearTimer();
-    else arm();
+    // B12：disabled=栏隐藏（原 11a 为恒可见）；浮层关闭后回到默认隐藏，热区再唤出
+    hidden = true;
+    clearTimer();
     // disabled 变化总伴随宿主重渲染（props 变化），无需 onChange
   };
 
   return {
     get visible() {
-      return !locked && (disabled || !hidden);
+      return !locked && !disabled && !hidden;
     },
     get locked() {
       return locked;

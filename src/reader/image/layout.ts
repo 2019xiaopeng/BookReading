@@ -105,6 +105,16 @@ export function slideDirection(delta: number, rtl: boolean): 1 | -1 | 0 {
   if (d === 0) return 0;
   return (rtl ? -d : d) as 1 | -1;
 }
+
+/**
+ * B12 自动滚动帧步进：scrollTop 赋值按整像素截断，直接 `scrollTop += speed*dt` 会把 <1px/帧的
+ * 增量逐帧吃掉（低速全灭、中速齐步走同速）。浮点累积 speed*dt，攒满 ≥1px 才输出整像素写入量并保留余数。
+ */
+export function autoScrollStep(accum: number, speed: number, dt: number): { accum: number; px: number } {
+  const next = accum + speed * dt;
+  const px = Math.floor(next);
+  return { accum: next - px, px };
+}
 export function imageCfi(page: number): string {
   return `img:${page}`;
 }
