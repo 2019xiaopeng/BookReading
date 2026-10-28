@@ -18,8 +18,25 @@ import {
   coverRetryDelayMs,
   getCoverUrl,
   invalidateCoverUrl,
+  planCoverDownscale,
   requestCoverUrl,
 } from "./useCoverUrls";
+
+describe("planCoverDownscale", () => {
+  test("1480px halves to 740 then lands on 512", () => {
+    expect(planCoverDownscale(1480)).toEqual([740, 512]);
+  });
+
+  test("1024 halves exactly to 512; at or below target keeps the original", () => {
+    expect(planCoverDownscale(1024)).toEqual([512]);
+    expect(planCoverDownscale(512)).toEqual([]);
+    expect(planCoverDownscale(300)).toEqual([]);
+  });
+
+  test("513 gets a single near-target step", () => {
+    expect(planCoverDownscale(513)).toEqual([512]);
+  });
+});
 
 describe("coverRetryDelayMs", () => {
   test("backoff is 200/400/800", () => {

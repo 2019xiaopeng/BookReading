@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import { clearCache, getSettings, migrateLibraryRoot, storageStats, type StorageStats } from "../tauri/invoke";
+import { clearCache, getSettings, migrateLibraryRoot, reextractAllCovers, storageStats, type StorageStats } from "../tauri/invoke";
 import { formatFileSize } from "../library/tags";
 import { BOOKS_CHANGED_EVENT } from "../library/importRunner";
 import { invalidateAllCoverUrls } from "../library/useCoverUrls";
@@ -93,6 +93,27 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  // B13：为存量 EPUB 重提最高清封面；覆盖 covers 后必须整体失效封面缓存（同 path 内容已变）
+  async function onReextractCovers() {
+    if (busy) return;
+    const ok = await showConfirm("重新提取全部封面", "将为所有 EPUB 重新选择最高清封面。\n已手动设置过封面的书也会被覆盖。", {
+      confirmText: "重新提取",
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const n = await reextractAllCovers();
+      invalidateAllCoverUrls();
+      window.dispatchEvent(new Event(BOOKS_CHANGED_EVENT));
+      await reload();
+      await showAlert("重新提取完成", `已更新 ${n} 本。`);
+    } catch (e) {
+      await showAlert("重新提取失败", String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function toggleCat(cat: string) {
     setChecked((prev) => {
       const next = new Set(prev);
@@ -159,6 +180,14 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           </span>
           <button className="wr-btn wr-btn-primary" disabled={!stats || busy} onClick={() => void onMigrate()}>
             迁移书库…
+          </button>
+        </div>
+
+        <div className="wr-settings-row">
+          <span className="wr-settings-label">封面重提取</span>
+          <span className="wr-settings-value">为存量 EPUB 重新选择最高清封面</span>
+          <button className="wr-btn" disabled={!stats || busy} onClick={() => void onReextractCovers()}>
+            重新提取全部封面
           </button>
         </div>
 

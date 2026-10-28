@@ -32,9 +32,10 @@ import {
 } from "../tauri/invoke";
 import { importImageFolder } from "../reader/image/api";
 import { needsMetadataRepair } from "../library/metadataRepair";
-import { readingStatus, READING_STATUS_LABELS, type ReadingStatus } from "../library/readingStatus";
+import { readingStatus, type ReadingStatus } from "../library/readingStatus";
 import BookDetailsDialog from "../library/BookDetailsDialog";
 import { BatchTagDialog, ManageTagsDialog, TagFilterMenu } from "../library/TagDialogs";
+import StatusFilterMenu from "../library/StatusFilterMenu";
 import {
   countByShelf,
   descendantIds,
@@ -996,18 +997,7 @@ export default function LibraryPage() {
       {!trashView ? (
         <div className="wr-filter-row" role="group" aria-label="筛选">
           <TagFilterMenu tags={tags} selected={tagFilter} onChange={setTagFilter} />
-          <select
-            className="wr-select"
-            style={{ padding: "7px 10px" }}
-            value={statusFilter}
-            aria-label="阅读状态"
-            onChange={(e) => setStatusFilter(e.currentTarget.value as "all" | ReadingStatus)}
-          >
-            <option value="all">全部状态</option>
-            <option value="unread">{READING_STATUS_LABELS.unread}</option>
-            <option value="reading">{READING_STATUS_LABELS.reading}</option>
-            <option value="finished">{READING_STATUS_LABELS.finished}</option>
-          </select>
+          <StatusFilterMenu value={statusFilter} onChange={setStatusFilter} />
           <button className="wr-btn" onClick={() => setManageTagsOpen(true)}>
             管理标签
           </button>

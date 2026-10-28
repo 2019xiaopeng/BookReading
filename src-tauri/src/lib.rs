@@ -9,8 +9,9 @@ use std::fs;
 use std::io::Write;
 
 use commands::library::{
-    delete_book, delete_reader_font, import_book, list_books, repair_book_metadata, save_reader_background,
-    save_reader_font, set_book_cover, update_book_metadata,
+    delete_book, delete_reader_font, import_book, list_books, reextract_all_covers,
+    repair_book_metadata, save_reader_background, save_reader_font, set_book_cover,
+    update_book_metadata,
 };
 use commands::images::{import_image_folder, list_image_pages, list_image_subdirs, read_image_page};
 use commands::annotations::{
@@ -78,6 +79,7 @@ pub fn run() {
             read_image_page,
             repair_book_metadata,
             set_book_cover,
+            reextract_all_covers,
             update_book_metadata,
             delete_book,
             list_shelves,

@@ -639,6 +639,19 @@ pub fn delete_reader_font(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// covers/{book_id}.* 单槽：保留 keep，删其它扩展名残留（best-effort；设置封面与重提取共用）
+fn drop_stale_covers(covers_dir: &Path, book_id: &str, keep: &str) {
+    if let Ok(entries) = fs::read_dir(covers_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(&format!("{book_id}.")) && name.as_ref() != keep {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
 // core takes covers_dir so tests can run against a tempdir instead of real appdata
 fn store_book_cover(covers_dir: &Path, book_id: &str, source_path: &str) -> Result<String, String> {
     let ext = validate_image_file(source_path)?;
@@ -649,15 +662,7 @@ fn store_book_cover(covers_dir: &Path, book_id: &str, source_path: &str) -> Resu
         .map_err(|e| format!("failed to save cover: {e}"))?;
     // single slot per book: drop stale {book_id}.* of other extensions, best-effort
     let keep = format!("{book_id}.{ext}");
-    if let Ok(entries) = fs::read_dir(covers_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with(&format!("{book_id}.")) && name.as_ref() != keep.as_str() {
-                let _ = fs::remove_file(entry.path());
-            }
-        }
-    }
+    drop_stale_covers(covers_dir, book_id, &keep);
     Ok(format!("library/covers/{keep}"))
 }
 
@@ -670,6 +675,60 @@ pub fn set_book_cover(app: tauri::AppHandle, book_id: String, source_path: Strin
     conn.execute("UPDATE books SET cover_path = ?2 WHERE id = ?1", params![book_id, cover_path])
         .map_err(|e| format!("failed to update book: {e}"))?;
     Ok(cover_path)
+}
+
+/// B13 存量书封面重提取：未软删且非 images 格式的书，读库内 epub 按 13a"选最大图"
+/// 逻辑重提封面，原子覆盖 covers/{id}.{ext}（file_size 等其余字段不动）；
+/// 库内文件缺失 / 解析失败 / 无合法封面的书跳过。返回成功更新的本数。
+// core takes dirs so tests can run against a tempdir instead of real appdata
+fn reextract_covers(conn: &Connection, books_dir: &Path, covers_dir: &Path) -> Result<usize, String> {
+    let rows: Vec<(String, Option<String>)> = conn
+        .prepare("SELECT id, cover_path FROM books WHERE deleted_at IS NULL AND (format IS NULL OR format != 'images')")
+        .map_err(|e| format!("failed to list books: {e}"))?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| format!("failed to query books: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to read books: {e}"))?;
+
+    fs::create_dir_all(covers_dir).map_err(|e| format!("failed to create covers dir: {e}"))?;
+    let mut done = 0usize;
+    for (book_id, old_cover) in rows {
+        let book_abs = books_dir.join(format!("{book_id}.epub"));
+        if !book_abs.is_file() {
+            continue;
+        }
+        let Ok(meta) = epub::extract_epub_metadata(&book_abs) else { continue };
+        let ext = meta
+            .cover_ext
+            .as_deref()
+            .map(|s| s.trim().trim_start_matches('.').to_lowercase())
+            .filter(|s| ["png", "jpg", "jpeg", "webp"].contains(&s.as_str()));
+        let (Some(ext), Some(bytes)) = (ext, meta.cover_bytes.filter(|b| !b.is_empty())) else {
+            continue;
+        };
+        let keep = format!("{book_id}.{ext}");
+        let final_cover = covers_dir.join(&keep);
+        let tmp_cover = covers_dir.join(format!("{keep}.part"));
+        atomic_write_to(&tmp_cover, &final_cover, &bytes)
+            .map_err(|e| format!("failed to write cover for {book_id}: {e}"))?;
+        drop_stale_covers(covers_dir, &book_id, &keep);
+        let cover_path = format!("library/covers/{keep}");
+        if old_cover.as_deref() != Some(cover_path.as_str()) {
+            conn.execute(
+                "UPDATE books SET cover_path = ?2 WHERE id = ?1",
+                params![book_id, cover_path],
+            )
+            .map_err(|e| format!("failed to update book {book_id}: {e}"))?;
+        }
+        done += 1;
+    }
+    Ok(done)
+}
+
+#[tauri::command]
+pub fn reextract_all_covers(app: tauri::AppHandle) -> Result<usize, String> {
+    let conn = db::open_db(&app)?;
+    reextract_covers(&conn, &app_paths::books_dir(&app)?, &app_paths::covers_dir(&app)?)
 }
 
 #[cfg(test)]
@@ -1073,7 +1132,84 @@ mod tests {
         );
         let big = dir.join("big.png");
         fs::write(&big, vec![0u8; 8 * 1024 * 1024 + 1]).unwrap();
-        assert_eq!(store_book_cover(&dir, "b1", big.to_str().unwrap()).unwrap_err(), "图片超过 8MB 限制");
+        assert_eq!(store_book_cover(&dir, "b1", big.to_str().unwrap()).unwrap_err(), "图片超过 8MB 限制".to_string());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- B13 存量封面重提取 ----
+
+    fn png_head(w: u32, h: u32) -> Vec<u8> {
+        let mut v = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        v.extend_from_slice(&13u32.to_be_bytes());
+        v.extend_from_slice(b"IHDR");
+        v.extend_from_slice(&w.to_be_bytes());
+        v.extend_from_slice(&h.to_be_bytes());
+        v.extend_from_slice(&[0u8; 9]);
+        v
+    }
+
+    // 小 cover-image（元数据语义）+ 大普通图：extract_epub_metadata 按面积应选 big.png
+    fn write_reextract_epub(path: &std::path::Path, small: &[u8], big: &[u8]) {
+        use std::io::{Cursor, Write};
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(Cursor::new(&mut buf));
+            let opts = zip::write::SimpleFileOptions::default();
+            w.start_file("META-INF/container.xml", opts).unwrap();
+            w.write_all(
+                br#"<container><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+            )
+            .unwrap();
+            w.start_file("content.opf", opts).unwrap();
+            w.write_all(
+                br#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="c" href="cover.png" media-type="image/png" properties="cover-image"/><item id="b" href="big.png" media-type="image/png"/></manifest></package>"#,
+            )
+            .unwrap();
+            w.start_file("cover.png", opts).unwrap();
+            w.write_all(small).unwrap();
+            w.start_file("big.png", opts).unwrap();
+            w.write_all(big).unwrap();
+            w.finish().unwrap();
+        }
+        fs::write(path, &buf).unwrap();
+    }
+
+    #[test]
+    fn reextract_covers_picks_largest_image_skips_comics_and_missing_files() {
+        let dir = temp_bg_dir("reextract");
+        let books_dir = dir.join("books");
+        let covers_dir = dir.join("covers");
+        fs::create_dir_all(&books_dir).unwrap();
+        fs::create_dir_all(&covers_dir).unwrap();
+
+        let small = png_head(200, 300);
+        let big = png_head(1200, 1800);
+        // 存量书 b1：封面是小图（jpg），另有旧扩展残留 webp
+        fs::write(covers_dir.join("b1.jpg"), &small).unwrap();
+        fs::write(covers_dir.join("b1.webp"), b"stale").unwrap();
+        write_reextract_epub(&books_dir.join("b1.epub"), &small, &big);
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(db::SCHEMA_SQL).unwrap();
+        let mut b1 = test_book("b1", 1);
+        b1.cover_path = Some("library/covers/b1.jpg".to_string());
+        insert_book(&conn, &b1).unwrap();
+        // b2 images 格式（漫画封面另有逻辑）、b3 库内文件缺失：都应跳过
+        let mut b2 = test_book("b2", 2);
+        b2.format = Some("images".to_string());
+        insert_book(&conn, &b2).unwrap();
+        insert_book(&conn, &test_book("b3", 3)).unwrap();
+
+        assert_eq!(reextract_covers(&conn, &books_dir, &covers_dir).unwrap(), 1);
+        // 封面换成大图字节，旧扩展残留清除，DB cover_path 同步
+        assert_eq!(fs::read(covers_dir.join("b1.png")).unwrap(), big);
+        assert!(!covers_dir.join("b1.jpg").exists());
+        assert!(!covers_dir.join("b1.webp").exists());
+        let updated = fetch_book_by_id(&conn, "b1").unwrap();
+        assert_eq!(updated.cover_path.as_deref(), Some("library/covers/b1.png"));
+        assert_eq!(updated.title, b1.title);
+        assert_eq!(updated.file_size, b1.file_size);
+
         let _ = fs::remove_dir_all(&dir);
     }
 }

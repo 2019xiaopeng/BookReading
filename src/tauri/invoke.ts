@@ -205,6 +205,11 @@ export async function setBookCover(bookId: string, sourcePath: string): Promise<
   return invoke<string>("set_book_cover", { bookId, sourcePath });
 }
 
+// B13 存量封面重提取：为所有 EPUB 重新选择最高清封面（覆盖 covers/{id}），返回更新本数
+export async function reextractAllCovers(): Promise<number> {
+  return invoke<number>("reextract_all_covers");
+}
+
 export type ReadingState = {
   book_id: string;
   cfi: string;
