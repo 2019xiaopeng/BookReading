@@ -108,3 +108,7 @@ bookreading/
 - [pdf.js](https://github.com/mozilla/pdf.js)：PDF 渲染内核
 - [legado](https://github.com/gedoor/legado)：TXT 分章规则池参考
 - 界面设计参考微信读书桌面版
+
+## 许可
+
+[MIT](./LICENSE) Copyright (c) 2026 2019xiaopeng。所依赖的开源组件（epub.js、pdf.js、Tauri 及各 crate）著作权归其作者所有。
