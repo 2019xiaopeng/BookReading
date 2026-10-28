@@ -51,6 +51,15 @@ import {
   turnKeyDirection,
   type ImageReaderSettings,
 } from "../reader/image/layout";
+import PdfReader from "../reader/pdf/PdfReader";
+import PdfSettingsPanel from "../reader/pdf/PdfSettingsPanel";
+import {
+  defaultPdfReaderSettings,
+  normalizePdfReaderSettings,
+  parsePdfCfi,
+  pdfCfi,
+  type PdfReaderSettings,
+} from "../reader/pdf/layout";
 import { defaultSettings, HIGHLIGHT_COLOR } from "../reader/settings/defaults";
 import type { ReaderSettings } from "../reader/settings/types";
 import { normalizeLayoutMode, resolveSpreadMode } from "../reader/settings/layoutMode";
@@ -88,6 +97,9 @@ import {
   IconSettings,
 } from "../ui/icons";
 
+// 漫画/PDF 共用一套翻页 api 消费面（PDF 增量提供 renderThumb 供页面面板缩略图）
+type PageReaderApi = ImageReaderApi & { renderThumb?: (page: number) => Promise<string | undefined> };
+
 export default function ReaderPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -103,6 +115,7 @@ export default function ReaderPage() {
   const [percent, setPercent] = useState<number | null>(null);
   const [settings, setSettings] = useState<ReaderSettings>(defaultSettings);
   const [imageSettings, setImageSettings] = useState<ImageReaderSettings>(defaultImageReaderSettings);
+  const [pdfSettings, setPdfSettings] = useState<PdfReaderSettings>(defaultPdfReaderSettings);
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const [imagePage, setImagePage] = useState<{ page: number; pageCount: number } | null>(null);
   const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings" | "pages">("toc");
@@ -148,8 +161,9 @@ export default function ReaderPage() {
   const wheelCooldownRef = useRef(0);
   const wheelAccumRef = useRef(0);
   const turningRef = useRef(false);
-  const imageApiRef = useRef<ImageReaderApi | null>(null);
-  const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false });
+  const imageApiRef = useRef<PageReaderApi | null>(null);
+  // 漫画/PDF 皆为“视觉书”：webtoon=原生滚动容器（条漫/PDF 连续滚动，滚轮转发不翻页）；autoscroll 仅条漫有播放语义
+  const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false, autoscroll: false });
   const progressRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
   // 沉浸 chrome（B12 精简版）：显示=指针进顶/底热区（无延迟）；隐藏=离开热区与栏 1.2s / 翻页动作即收 /
@@ -175,14 +189,17 @@ export default function ReaderPage() {
   const edgeRatio = viewerWidth >= 1400 ? 0.2 : viewerWidth >= 1100 ? 0.18 : 0.16;
   const stage = calcPaperStage({ viewerWidth, viewerHeight, margin: 18, edgeRatio });
   const isImageBook = book?.format === "images";
+  const isPdfBook = book?.format === "pdf";
+  // 漫画/PDF 共用视觉阅读管线（顶栏/热区/页码/书签）；分支差异只在设置面板与 api 来源
+  const isVisualBook = isImageBook || isPdfBook;
   const imageEdgeSwap = isImageBook && imageSettings.rtl;
   const pagerEnabled =
     !drawerOpen &&
     !readerError &&
     !selection &&
     !noteDraft &&
-    (isImageBook || settings.readingMode === "paginated") &&
-    !(isImageBook && imageSettings.mode === "webtoon");
+    (isVisualBook || settings.readingMode === "paginated") &&
+    !((isImageBook && imageSettings.mode === "webtoon") || (isPdfBook && pdfSettings.mode === "scroll"));
 
   const flatToc = useMemo(() => {
     const out: TocItem[] = [];
@@ -213,8 +230,13 @@ export default function ReaderPage() {
   }, [spreadMode]);
 
   useEffect(() => {
-    imageCtxRef.current = { active: isImageBook, rtl: imageSettings.rtl, webtoon: imageSettings.mode === "webtoon" };
-  }, [isImageBook, imageSettings]);
+    imageCtxRef.current = {
+      active: isVisualBook,
+      rtl: isImageBook && imageSettings.rtl,
+      webtoon: (isImageBook && imageSettings.mode === "webtoon") || (isPdfBook && pdfSettings.mode === "scroll"),
+      autoscroll: isImageBook && imageSettings.mode === "webtoon",
+    };
+  }, [isVisualBook, isImageBook, isPdfBook, imageSettings, pdfSettings]);
 
   useEffect(() => {
     locationSearchRef.current = location.search;
@@ -246,6 +268,7 @@ export default function ReaderPage() {
         reader_font: normalizeReaderFont(map.reader_font),
       });
       setImageSettings(normalizeImageReaderSettings(map.image_reader_settings));
+      setPdfSettings(normalizePdfReaderSettings(map.pdf_reader_settings));
     })();
     return () => {
       cancelled = true;
@@ -256,7 +279,7 @@ export default function ReaderPage() {
     let cancelled = false;
     (async () => {
       if (!book) return;
-      if (book.format === "images") {
+      if (book.format === "images" || book.format === "pdf") {
         setImagePage(null);
         lastCfiRef.current = null; // 换书后旧 CFI 不得进 img 书签/进度
         setTocLoading(false);
@@ -457,7 +480,7 @@ export default function ReaderPage() {
 
   // 阅读纸面叠加全局背景（单槽缓存与壳共用）；preset 时缓存一并释放
   useEffect(() => {
-    if (isImageBook) {
+    if (isVisualBook) {
       setBgUrl(null);
       return;
     }
@@ -472,7 +495,7 @@ export default function ReaderPage() {
     return () => {
       cancelled = true;
     };
-  }, [settings.reader_bg, isImageBook]);
+  }, [settings.reader_bg, isVisualBook]);
 
   // B11：自定义正文字体——@font-face("wr-custom") 单槽注入，preset 时回收 objectURL 与 <style>
   useEffect(() => {
@@ -482,10 +505,10 @@ export default function ReaderPage() {
   // B12 固定预留：栏显隐只做淡入淡出、布局零变化（不再需要 visible-keyed resize）；
   // 仅锁定切换（padding 62↔0 的一次性 200ms 过渡）后补一次 epub 重排，保持分页正确
   useEffect(() => {
-    if (isImageBook) return;
+    if (isVisualBook) return;
     const t = window.setTimeout(() => controllerRef.current?.resize(), 220);
     return () => window.clearTimeout(t);
-  }, [chrome.locked, isImageBook]);
+  }, [chrome.locked, isVisualBook]);
 
   useEffect(() => {
     if (!chrome.locked) return;
@@ -539,8 +562,8 @@ export default function ReaderPage() {
 
       if (imageCtxRef.current.active) {
         // B12 条漫：空格=自动滚动播放/暂停（缩放态、输入焦点除外，不再触发原生下跳）；
-        // 播放中 ↑/↓=速度 ±10（实时生效+轻提示当前速度）
-        if (imageCtxRef.current.webtoon && !imageApiRef.current?.zoomed?.()) {
+        // 播放中 ↑/↓=速度 ±10（实时生效+轻提示当前速度）——PDF 连续滚动无自动滚动，不占用空格
+        if (imageCtxRef.current.autoscroll && !imageApiRef.current?.zoomed?.()) {
           if (e.key === " ") {
             e.preventDefault();
             imageApiRef.current?.toggleAutoScroll();
@@ -654,7 +677,7 @@ export default function ReaderPage() {
   // 章切换落位的程序性滚动（整屏级大跳）不参与判定，避免落位即回跳；短章按滚动方向续读。
   useEffect(() => {
     const el = containerRef.current;
-    if (!el || isImageBook || settings.readingMode !== "scrolled" || drawerOpen) return;
+    if (!el || isVisualBook || settings.readingMode !== "scrolled" || drawerOpen) return;
     let timer: number | null = null;
     let lastTop = -1;
     let lastDelta = 1;
@@ -689,7 +712,7 @@ export default function ReaderPage() {
       clearTimer();
       el.removeEventListener("scroll", onScroll, true);
     };
-  }, [isImageBook, settings.readingMode, drawerOpen]);
+  }, [isVisualBook, settings.readingMode, drawerOpen]);
 
   // 章续读落位（relocated 更新 chapterHref）后弹 1.5s 轻提示
   useEffect(() => {
@@ -731,7 +754,7 @@ export default function ReaderPage() {
 
   function handleImageRelocated(page: number, pageCount: number) {
     if (!book) return;
-    const cfi = imageCfi(page);
+    const cfi = book.format === "pdf" ? pdfCfi(page) : imageCfi(page);
     const pct = pagePercent(page, pageCount);
     lastCfiRef.current = cfi;
     setPercent(pct);
@@ -841,11 +864,11 @@ export default function ReaderPage() {
     if (tab === "search") requestAnimationFrame(() => searchInputRef.current?.focus());
   }
 
-  // B4: 书签统一入口——image 书记 img:N + “第N页”，epub 记 CFI + 章名
+  // B4: 书签统一入口——image 书记 img:N、PDF 记 pdf:N + “第N页”，epub 记 CFI + 章名
   function addBookmarkHere() {
     const cfi = lastCfiRef.current;
     if (!book || !cfi) return;
-    const imgPage = imageCtxRef.current.active ? parseImageCfi(cfi) : null;
+    const imgPage = imageCtxRef.current.active ? (parseImageCfi(cfi) ?? parsePdfCfi(cfi)) : null;
     void (async () => {
       const bm = await addBookmark(book.id, cfi, imgPage !== null ? `第${imgPage + 1}页` : chapterTitle);
       setBookmarks((prev) => (prev.some((x) => x.cfi === bm.cfi) ? prev : [bm, ...prev]));
@@ -855,8 +878,8 @@ export default function ReaderPage() {
   function locate(target?: string) {
     setSelection(null);
     setNoteDraft(null);
-    // B4: img:N 书签在漫画模式分流到 goToPage（此时无 epub controller）
-    const imgPage = imageCtxRef.current.active ? parseImageCfi(target) : null;
+    // B4: img:N / pdf:N 书签在视觉书模式分流到 goToPage（此时无 epub controller）
+    const imgPage = imageCtxRef.current.active ? (parseImageCfi(target) ?? parsePdfCfi(target)) : null;
     if (imgPage !== null) {
       imageApiRef.current?.goToPage(imgPage);
       return;
@@ -865,7 +888,7 @@ export default function ReaderPage() {
   }
 
   // locations 就绪后进度条可拖/可点（点击=零位移拖动，同一路径）
-  const sliderReady = locationsReady && !isImageBook && !readerError;
+  const sliderReady = locationsReady && !isVisualBook && !readerError;
   // 选区与现有高亮相交 → 气泡高亮钮切换为"取消高亮"
   const overlappingHighlights = selection ? highlights.filter((h) => cfiRangesOverlap(h.cfi_range, selection.cfiRange)) : [];
 
@@ -990,7 +1013,7 @@ export default function ReaderPage() {
               </button>
             </>
           ) : null}
-          {isImageBook && book ? (
+          {isVisualBook && book ? (
             <>
               <button
                 className="wr-btn wr-icon-btn"
@@ -1038,7 +1061,7 @@ export default function ReaderPage() {
       <div
         className="wr-reader-stage"
         data-locked={chrome.locked ? "true" : undefined}
-        data-image={isImageBook || undefined}
+        data-image={isVisualBook || undefined}
       >
         <div
           ref={viewerRef}
@@ -1062,7 +1085,18 @@ export default function ReaderPage() {
               />
             ) : null}
 
-            {sideTab === "settings" && !isImageBook ? (
+            {sideTab === "settings" && isPdfBook ? (
+              <PdfSettingsPanel
+                value={pdfSettings}
+                onChange={(next) => {
+                  setPdfSettings(next);
+                  settingsTouchedRef.current = true;
+                  void setSetting("pdf_reader_settings", JSON.stringify(next));
+                }}
+              />
+            ) : null}
+
+            {sideTab === "settings" && !isVisualBook ? (
               <SettingsPanel
                 value={settings}
                 bgUrl={bgUrl}
@@ -1073,13 +1107,14 @@ export default function ReaderPage() {
               />
             ) : null}
 
-            {sideTab === "pages" && isImageBook && book && imagePage ? (
+            {sideTab === "pages" && isVisualBook && book && imagePage ? (
               <PagesPanel
                 bookId={book.id}
                 pageCount={imagePage.pageCount}
                 currentPage={imagePage.page}
                 goTo={(p) => imageApiRef.current?.goToPage(p)}
-                getResidentUrl={(p) => imageApiRef.current?.getPageUrl(p)}
+                getResidentUrl={isImageBook ? (p) => imageApiRef.current?.getPageUrl(p) : undefined}
+                fetchThumb={isPdfBook ? (p) => imageApiRef.current?.renderThumb?.(p) : undefined}
               />
             ) : null}
 
@@ -1273,21 +1308,34 @@ export default function ReaderPage() {
           </Drawer>
 
           <div
-            className={isImageBook ? "wr-reader-paper-wrap wr-paper-image" : "wr-reader-paper-wrap"}
-            style={isImageBook ? undefined : { position: "relative" }}
+            className={isVisualBook ? "wr-reader-paper-wrap wr-paper-image" : "wr-reader-paper-wrap"}
+            style={isVisualBook ? undefined : { position: "relative" }}
           >
-            {isImageBook && book ? (
-              <ImageReader
-                key={book.id}
-                book={book}
-                settings={imageSettings}
-                turnSpeedMs={settings.turnSpeedMs}
-                onRelocated={handleImageRelocated}
-                theme={theme}
-                onApi={(api) => {
-                  imageApiRef.current = api;
-                }}
-              />
+            {isVisualBook && book ? (
+              isImageBook ? (
+                <ImageReader
+                  key={book.id}
+                  book={book}
+                  settings={imageSettings}
+                  turnSpeedMs={settings.turnSpeedMs}
+                  onRelocated={handleImageRelocated}
+                  theme={theme}
+                  onApi={(api) => {
+                    imageApiRef.current = api;
+                  }}
+                />
+              ) : (
+                <PdfReader
+                  key={book.id}
+                  book={book}
+                  settings={pdfSettings}
+                  onRelocated={handleImageRelocated}
+                  theme={theme}
+                  onApi={(api) => {
+                    imageApiRef.current = api;
+                  }}
+                />
+              )
             ) : (
               <>
                 {chrome.locked ? null : (
@@ -1567,17 +1615,17 @@ export default function ReaderPage() {
         >
           <button
             className="wr-btn wr-icon-btn"
-            onClick={() => (isImageBook ? void animateTurn("prev") : navChapter("prev"))}
+            onClick={() => (isVisualBook ? void animateTurn("prev") : navChapter("prev"))}
           >
             <IconChevronLeft />
-            {isImageBook ? "上一页" : "上一章"}
+            {isVisualBook ? "上一页" : "上一章"}
           </button>
           <button
             className="wr-btn wr-icon-btn"
-            onClick={() => (isImageBook ? void animateTurn("next") : navChapter("next"))}
+            onClick={() => (isVisualBook ? void animateTurn("next") : navChapter("next"))}
           >
             <IconChevronRight />
-            {isImageBook ? "下一页" : "下一章"}
+            {isVisualBook ? "下一页" : "下一章"}
           </button>
           <div
             ref={progressRef}
@@ -1616,7 +1664,7 @@ export default function ReaderPage() {
             ) : null}
           </div>
           <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
-            {isImageBook && imagePage !== null
+            {isVisualBook && imagePage !== null
               ? `${imagePage.page + 1} / ${imagePage.pageCount}`
               : locPage
                 ? // B12 全局位置页（估算，与角标一致）；未就绪回退百分比
@@ -1631,7 +1679,7 @@ export default function ReaderPage() {
       {!chrome.locked ? null : (
         /* 锁定态常驻退出控件：半透明、hover 提亮，角落 24px 内边距不遮正文 */
         <div className="wr-immersive-exit">
-          <span className="wr-immersive-exit-chapter">{isImageBook ? book?.title : chapterTitle}</span>
+          <span className="wr-immersive-exit-chapter">{isVisualBook ? book?.title : chapterTitle}</span>
           <button
             type="button"
             className="wr-immersive-exit-btn"

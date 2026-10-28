@@ -72,7 +72,7 @@ export function checkDuplicate(info: PathInfo, index: DedupIndex): ImportCheck {
   return { kind: sizes?.has(info.size) ? "dup" : null };
 }
 
-const IMPORTABLE_EXTS = new Set(["epub", "txt", "cbz"]);
+const IMPORTABLE_EXTS = new Set(["epub", "txt", "cbz", "pdf"]);
 
 export function isImportableFile(name: string): boolean {
   return IMPORTABLE_EXTS.has((name.split(".").pop() ?? "").toLowerCase());
@@ -142,7 +142,7 @@ async function runImportBatch(paths: string[]) {
           const basename = info.name.toLowerCase();
           addSize(index.byName, basename, info.size);
         } else {
-          outcomes.push({ kind: "failed", name: info.name, error: "不支持的格式（仅 EPUB / TXT / CBZ / 漫画文件夹）" });
+          outcomes.push({ kind: "failed", name: info.name, error: "不支持的格式（仅 EPUB / TXT / CBZ / PDF / 漫画文件夹）" });
           continue;
         }
         outcomes.push(dup.kind === "dup" ? { kind: "dup", name: info.name } : { kind: "success", name: info.name });

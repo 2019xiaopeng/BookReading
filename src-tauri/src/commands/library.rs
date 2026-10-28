@@ -309,19 +309,29 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
     fs::File::open(&req.source_path)
         .and_then(|mut f| f.read(&mut head))
         .map_err(|e| format!("failed to read {}: {e}", req.source_path))?;
-    if head.starts_with(b"%PDF-") {
-        return Err(format!("{}: 暂不支持该格式（PDF 见路线图批次4）", req.source_path));
-    }
 
     let ext = Path::new(&req.source_path)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase());
     let is_txt = ext.as_deref() == Some("txt");
+    // PDF（魔数优先，扩展名兜底）：原样入库 format='pdf'，无封面（文字卡）、页数由前端 pdfjs 读取
+    let is_pdf = head.starts_with(b"%PDF-") || ext.as_deref() == Some("pdf");
 
-    let final_book_abs: PathBuf = books_dir.join(format!("{book_id}.epub"));
-    let tmp_book_abs: PathBuf = books_dir.join(format!("{book_id}.epub.part"));
-    if is_txt {
+    let final_book_abs: PathBuf;
+    let tmp_book_abs: PathBuf;
+    let mut book_format: Option<String> = None;
+    let library_path: String;
+    if is_pdf {
+        final_book_abs = books_dir.join(format!("{book_id}.pdf"));
+        tmp_book_abs = books_dir.join(format!("{book_id}.pdf.part"));
+        atomic_copy_to(&req.source_path, &tmp_book_abs, &final_book_abs)
+            .map_err(|e| format!("failed to copy pdf into library: {e}"))?;
+        book_format = Some("pdf".to_string());
+        library_path = format!("library/books/{book_id}.pdf");
+    } else if is_txt {
+        final_book_abs = books_dir.join(format!("{book_id}.epub"));
+        tmp_book_abs = books_dir.join(format!("{book_id}.epub.part"));
         let bytes = fs::read(&req.source_path)
             .map_err(|e| format!("failed to read {}: {e}", req.source_path))?;
         let text = txt::decode_txt(&bytes).map_err(|e| format!("{}: {e}", req.source_path))?;
@@ -329,14 +339,18 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
             .map_err(|e| format!("{}: {e}", req.source_path))?;
         atomic_write_to(&tmp_book_abs, &final_book_abs, &epub_bytes)
             .map_err(|e| format!("failed to write book into library: {e}"))?;
+        library_path = format!("library/books/{book_id}.epub");
     } else if ext.as_deref() == Some("epub") {
+        final_book_abs = books_dir.join(format!("{book_id}.epub"));
+        tmp_book_abs = books_dir.join(format!("{book_id}.epub.part"));
         atomic_copy_to(&req.source_path, &tmp_book_abs, &final_book_abs)
             .map_err(|e| format!("failed to copy epub into library: {e}"))?;
+        library_path = format!("library/books/{book_id}.epub");
     } else {
-        return Err(format!("{}: 暂不支持该格式（PDF 见路线图批次4）", req.source_path));
+        return Err(format!("{}: 暂不支持该格式", req.source_path));
     }
 
-    let extracted = if is_txt {
+    let extracted = if is_txt || is_pdf {
         None
     } else {
         epub::extract_epub_metadata(&final_book_abs).ok()
@@ -368,7 +382,6 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         _ => None,
     };
 
-    let library_path = format!("library/books/{book_id}.epub");
     let cover_path = cover_abs
         .as_ref()
         .and_then(|p| p.extension().and_then(|e| e.to_str()))
@@ -384,7 +397,7 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         last_opened_at: None,
         note: None,
         pinned_at: None,
-        format: None,
+        format: book_format,
         page_count: None,
         reading_percent: None,
         is_favorite: false,

@@ -339,7 +339,7 @@ export default function LibraryPage() {
     try {
       const selected = await open({
         multiple: true,
-        filters: [{ name: "EPUB / TXT / CBZ", extensions: ["epub", "txt", "cbz"] }],
+        filters: [{ name: "EPUB / TXT / CBZ / PDF", extensions: ["epub", "txt", "cbz", "pdf"] }],
       });
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];

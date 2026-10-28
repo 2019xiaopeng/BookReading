@@ -12,6 +12,9 @@ function formatLabel(book: Book): string {
   if (book.format === "images") {
     return book.library_path.toLowerCase().endsWith(".cbz") ? "漫画（CBZ）" : "漫画（文件夹）";
   }
+  if (book.format === "pdf") {
+    return "PDF";
+  }
   return "EPUB";
 }
 

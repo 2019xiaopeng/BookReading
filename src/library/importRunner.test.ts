@@ -82,11 +82,12 @@ describe("checkDuplicate", () => {
 });
 
 describe("isImportableFile", () => {
-  test("epub/txt/cbz in any case; others rejected", () => {
+  test("epub/txt/cbz/pdf in any case; others rejected", () => {
     expect(isImportableFile("a.epub")).toBe(true);
     expect(isImportableFile("a.TXT")).toBe(true);
     expect(isImportableFile("a.Cbz")).toBe(true);
-    expect(isImportableFile("a.pdf")).toBe(false);
+    expect(isImportableFile("a.PDF")).toBe(true);
+    expect(isImportableFile("a.mobi")).toBe(false);
     expect(isImportableFile("noext")).toBe(false);
   });
 });

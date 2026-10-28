@@ -23,6 +23,7 @@ const READER_KEYS: [string, string][] = [
   ["Ctrl+B", "在当前位置加书签"],
   ["Ctrl+D", "锁定 / 解锁界面"],
   ["Ctrl+滚轮 / 双击", "漫画缩放 / 复位缩放"],
+  ["PDF", "复用漫画键位与热区（翻页 / 缩放 / Ctrl+B 书签；连续滚动模式无自动滚动）"],
 ];
 const LIBRARY_KEYS: [string, string][] = [
   ["Enter / Space", "打开选中的书或书架"],

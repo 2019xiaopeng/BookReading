@@ -8,21 +8,25 @@ type Props = {
   goTo: (page: number) => void;
   /** resident blob from the reader preload window, avoids a duplicate fetch */
   getResidentUrl?: (page: number) => string | undefined;
+  /** PDF 等非图片源：由 reader 自渲染缩略图并返回 objectURL（缺省走 readImagePage）；暂不可用可返回 undefined */
+  fetchThumb?: (page: number) => Promise<string | undefined> | undefined;
 };
 
 // shortcut: thumbnails are full-size blobs (no Rust downscale); LRU hard cap 24 张（内存红线，超出即回收）; reader cache untouched
 const THUMB_LIMIT = 24;
 const thumbs = new Map<string, string>(); // `${bookId}:${page}` -> object URL, LRU by insertion order
 
-export default function PagesPanel({ bookId, pageCount, currentPage, goTo, getResidentUrl }: Props) {
+export default function PagesPanel({ bookId, pageCount, currentPage, goTo, getResidentUrl, fetchThumb }: Props) {
   const [loaded, setLoaded] = useState<Set<number>>(new Set());
   const gridRef = useRef<HTMLDivElement | null>(null);
   const cellsRef = useRef(new Map<number, HTMLElement>());
   const inflightRef = useRef(new Set<number>());
   const residentRef = useRef(getResidentUrl);
+  const fetchThumbRef = useRef(fetchThumb);
 
   useEffect(() => {
     residentRef.current = getResidentUrl;
+    fetchThumbRef.current = fetchThumb;
   });
 
   useEffect(() => {
@@ -47,9 +51,17 @@ export default function PagesPanel({ bookId, pageCount, currentPage, goTo, getRe
       }
       if (inflightRef.current.has(page)) return;
       inflightRef.current.add(page);
-      readImagePage(bookId, page)
-        .then((bytes) => {
-          const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
+      const load =
+        fetchThumbRef.current ??
+        ((p: number) => readImagePage(bookId, p).then((bytes) => URL.createObjectURL(new Blob([new Uint8Array(bytes)]))));
+      const urlPromise = load(page);
+      if (!urlPromise) {
+        inflightRef.current.delete(page); // reader 尚未就绪：不标记已加载，下次进入视口重试
+        return;
+      }
+      urlPromise
+        .then((url) => {
+          if (!url) return; // 暂不可用：不标记已加载，下次进入视口重试
           const key2 = `${bookId}:${page}`;
           thumbs.delete(key2);
           thumbs.set(key2, url);
