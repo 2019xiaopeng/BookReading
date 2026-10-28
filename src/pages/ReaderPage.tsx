@@ -546,19 +546,7 @@ export default function ReaderPage() {
         return;
       }
 
-      // F11 窗口全屏（独立于沉浸锁定；Esc 不退全屏，浏览器惯例由用户 F11 自控）
-      if (e.key === "F11") {
-        e.preventDefault();
-        void (async () => {
-          const win = getCurrentWindow();
-          try {
-            await win.setFullscreen(!(await win.isFullscreen()));
-          } catch (e) {
-            logFrontend(`reader: fullscreen toggle failed ${String(e)}`);
-          }
-        })();
-        return;
-      }
+      // F11 已上提到 App 全局 keydown（批次19），此处不再处理避免双触发
 
       if (isTyping) return;
 
@@ -944,6 +932,18 @@ export default function ReaderPage() {
     if (p !== null) seekTo(p);
   }
 
+  // 批次19：返回书架先退出窗口全屏（F11 态不带回书库）；fire-and-forget，不等 setFullscreen 落地再导航
+  function backToLibrary() {
+    void (async () => {
+      try {
+        if (await getCurrentWindow().isFullscreen()) await getCurrentWindow().setFullscreen(false);
+      } catch (e) {
+        logFrontend(`reader: exit fullscreen failed ${String(e)}`);
+      }
+    })();
+    navigate(typeof fromShelf === "number" ? `/?shelf=${fromShelf}` : "/");
+  }
+
   const drawerTitle =
     sideTab === "toc"
       ? "目录"
@@ -989,7 +989,7 @@ export default function ReaderPage() {
         >
           <button
             className="wr-btn"
-            onClick={() => navigate(typeof fromShelf === "number" ? `/?shelf=${fromShelf}` : "/")}
+            onClick={backToLibrary}
           >
             返回书库
           </button>

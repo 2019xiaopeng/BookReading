@@ -8,6 +8,10 @@ mod txt;
 use std::fs;
 use std::io::Write;
 
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager, WindowEvent};
+
 use commands::library::{
     delete_book, delete_reader_font, import_book, list_books, reextract_all_covers,
     repair_book_metadata, save_reader_background, save_reader_font, set_book_cover,
@@ -49,6 +53,12 @@ fn append_startup_log(app: &tauri::AppHandle, line: &str) {
     let _ = writeln!(f, "{line}");
 }
 
+/// 批次19：退出应用（绕过 CloseRequested 拦截；AppHandle::exit 走 ExitRequested 不触发窗口关闭事件）
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -66,8 +76,55 @@ pub fn run() {
                 return Err(e.into());
             }
 
+            // 批次19：系统托盘——✕ 最小化到托盘后的常驻入口；左键单击恢复主窗口，右键菜单 显示/退出。
+            // 常驻：窗口 hide 后任务栏图标消失（Windows 默认），托盘不随窗口隐藏消失。
+            let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let mut tray = TrayIconBuilder::with_id("main")
+                .tooltip("BookReading")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().0.as_str() {
+                    "show" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
+
             append_startup_log(&handle, "startup: ready");
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                // 批次19：✕ 不直接关窗，交给前端三选（托盘/退出/取消）。
+                // shortcut: 系统关机/NSIS 升级不走此路径（tao 不处理 WM_QUERYENDSESSION，安装器 taskkill），
+                // prevent_close 只拦常规关闭，若未来支持 Linux 关机协议需加守卫。
+                api.prevent_close();
+                let _ = window.app_handle().emit("wr:close-requested", ());
+            }
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -131,7 +188,8 @@ pub fn run() {
             remove_old_library,
             clear_cache,
             probe_paths,
-            read_library_file
+            read_library_file,
+            quit_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
