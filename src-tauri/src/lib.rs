@@ -13,18 +13,23 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager, WindowEvent};
 
 use commands::library::{
-    delete_book, delete_reader_font, import_book, list_books, reextract_all_covers,
-    repair_book_metadata, save_reader_background, save_reader_font, set_book_cover,
-    update_book_metadata,
+    delete_book, delete_reader_font, generate_cover_thumbs, get_book, import_book, list_books,
+    reextract_all_covers, repair_book_metadata, save_reader_background, save_reader_font,
+    set_book_cover, update_book_metadata,
 };
 use commands::images::{
-    import_image_folder, list_image_pages, list_image_subdirs, read_image_page, relink_image_book,
+    import_image_folder, list_image_page_meta, list_image_pages, list_image_subdirs,
+    read_image_page, relink_image_book, AppState as ImageState,
 };
 use commands::annotations::{
-    add_bookmark, add_highlight, delete_bookmark, delete_highlight, list_bookmarks, list_highlights,
+    add_bookmark, add_highlight, delete_bookmark, delete_highlight, export_annotations,
+    list_bookmarks, list_highlights,
 };
-use commands::reading::{get_settings, set_setting};
-use commands::reading::{get_reading_state, upsert_reading_state};
+use commands::reading::{get_settings, set_setting, set_settings};
+use commands::reading::{
+    add_reading_time, get_reading_state, list_reading_times, load_book_locations,
+    save_book_locations, upsert_reading_state,
+};
 use commands::logging::append_frontend_log;
 use commands::storage::{clear_cache, migrate_library_root, probe_paths, read_library_file, remove_old_library, storage_stats};
 use commands::favorites::{
@@ -54,7 +59,7 @@ fn append_startup_log(app: &tauri::AppHandle, line: &str) {
 }
 
 /// 批次19：退出应用（绕过 CloseRequested 拦截；AppHandle::exit 走 ExitRequested 不触发窗口关闭事件）
-#[tauri::command]
+#[tauri::command(async)]
 fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
@@ -62,6 +67,8 @@ fn quit_app(app: tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // A12 窗口状态记忆（大小/位置/最大化），须在窗口创建（setup 内）前注册
+        .plugin(tauri_plugin_window_state::Builder::new().build())
         .setup(|app| {
             let handle = app.handle();
             append_startup_log(&handle, "startup: begin");
@@ -75,6 +82,11 @@ pub fn run() {
                 append_startup_log(&handle, &format!("startup: init_db failed: {e}"));
                 return Err(e.into());
             }
+
+            // A2 图片书页缓存与 CBZ 句柄缓存（async 并发下 Mutex 保护）
+            app.manage(ImageState::default());
+            // A5 存量封面缩略档补生成（幂等；后台线程 + cover-thumbs-progress 事件报进度）
+            let _ = generate_cover_thumbs(handle.clone());
 
             // 批次19：系统托盘——✕ 最小化到托盘后的常驻入口；左键单击恢复主窗口，右键菜单 显示/退出。
             // 常驻：窗口 hide 后任务栏图标消失（Windows 默认），托盘不随窗口隐藏消失。
@@ -131,15 +143,18 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             list_books,
+            get_book,
             import_book,
             import_image_folder,
             list_image_pages,
+            list_image_page_meta,
             list_image_subdirs,
             read_image_page,
             relink_image_book,
             repair_book_metadata,
             set_book_cover,
             reextract_all_covers,
+            generate_cover_thumbs,
             update_book_metadata,
             delete_book,
             list_shelves,
@@ -170,6 +185,7 @@ pub fn run() {
             list_highlights,
             add_highlight,
             delete_highlight,
+            export_annotations,
             set_book_favorite,
             list_favorite_books,
             add_favorite_quote,
@@ -177,6 +193,11 @@ pub fn run() {
             list_favorite_quotes,
             get_settings,
             set_setting,
+            set_settings,
+            save_book_locations,
+            load_book_locations,
+            add_reading_time,
+            list_reading_times,
             save_reader_background,
             save_reader_font,
             delete_reader_font,

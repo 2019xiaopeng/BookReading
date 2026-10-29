@@ -95,7 +95,17 @@ pub struct Highlight {
     pub cfi_range: String,
     pub color: String,
     pub note: Option<String>,
+    // 选中文本（quick-highlight 迁移后与 note 分离：text=原文，note=纯笔记）
+    #[serde(default)]
+    pub text: Option<String>,
     pub created_at: i64,
+}
+
+/// 漫画页元数据：与 list_image_pages 顺序逐 index 对齐
+#[derive(Debug, Clone, Serialize)]
+pub struct PageMetaOut {
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

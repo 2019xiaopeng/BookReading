@@ -1,6 +1,16 @@
 # 更新日志
 
-## v2.0.0 · 2026-10-28
+## v2.5.0 · 开发中（性能根治 + 功能补齐 + M2「碳墨刊头」改版）
+
+### 批次 20 · 后端性能与管线（2026-10-30）
+- **async 化**：全部 40+ Tauri 命令并发执行，多页读盘不再阻塞主线程与 IPC
+- **缓存**：页列表缓存（mtime 失效）+ CBZ 句柄复用，翻完整本从 O(N²) 降为 O(N)；read_image_page 支持 maxWidth 降采样（LANCZOS3）
+- **封面缩略档**：covers/thumbs/ 480px 缩略（不放大），导入/换封面/重提取即时生成 + 启动后台幂等补全存量（进度事件）；书架滚动与启动开销从原图直出降为小图
+- **数据层**：SQLite 托管连接 + WAL + busy_timeout；books/book_tags/highlights/reading_state 二级索引
+- **新命令**：get_book、set_settings 批量、book_locations 表（EPUB locations 持久化）、reading_sessions 表（阅读时长）、export_annotations（Markdown 导出）、高亮 text 列迁移（note 回归纯笔记）
+- **窗口**：记住大小/位置/最大化（tauri-plugin-window-state）；minWidth 720 / minHeight 480
+
+
 
 首个公开发布版。从单格式 EPUB 阅读器起步，经 2026 年 5 月基础建设与 10 月路线图十四个批次迭代，成为覆盖 EPUB / TXT / 漫画 / PDF 的 Windows 桌面全格式阅读器。以下按批次归纳，完整过程见 `docs/superpowers/plans/`。
 

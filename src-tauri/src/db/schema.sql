@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS highlights (
   cfi_range TEXT NOT NULL,
   color TEXT NOT NULL,
   note TEXT,
+  text TEXT,
   created_at INTEGER NOT NULL
 );
 
@@ -81,3 +82,26 @@ CREATE TABLE IF NOT EXISTS favorite_quotes (
   note TEXT,
   created_at INTEGER NOT NULL
 );
+
+-- EPUB 分页 locations 缓存（epubjs 生成结果按 book_id+档位持久化，换字体字号档才重算）
+CREATE TABLE IF NOT EXISTS book_locations (
+  book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  cache_key TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(book_id, cache_key)
+);
+
+-- 阅读时长：每书每日一行累加（date 为本地日期 YYYY-MM-DD）
+CREATE TABLE IF NOT EXISTS reading_sessions (
+  book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  seconds INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(book_id, date)
+);
+
+-- 二级索引（书库增长后 book_id/shelf_id 点查不再全表扫）
+CREATE INDEX IF NOT EXISTS idx_books_shelf_id ON books(shelf_id);
+CREATE INDEX IF NOT EXISTS idx_book_tags_book_id ON book_tags(book_id);
+CREATE INDEX IF NOT EXISTS idx_highlights_book_id ON highlights(book_id);
+CREATE INDEX IF NOT EXISTS idx_reading_state_book_id ON reading_state(book_id);

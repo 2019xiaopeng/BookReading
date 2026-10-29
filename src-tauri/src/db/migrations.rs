@@ -90,6 +90,37 @@ pub fn ensure_book_columns(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// 高亮原文列迁移（幂等）：加 highlights.text；仅在本次真正加列时回填存量——
+/// quick-highlight 旧版把选中文本塞进 note，note==text 即其痕迹（真实笔记几乎不可能与选中文本
+/// 完全相等），故 text:=note 后清空 note，原文语义归位、零数据丢失。
+pub fn ensure_highlight_text(conn: &Connection) -> Result<(), String> {
+    let added = match conn.execute("ALTER TABLE highlights ADD COLUMN text TEXT", []) {
+        Ok(_) => true,
+        Err(e) => {
+            if e.to_string().contains("duplicate column name") {
+                false
+            } else {
+                return Err(format!("failed to migrate highlights.text column: {e}"));
+            }
+        }
+    };
+    if !added {
+        return Ok(());
+    }
+
+    conn.execute(
+        "UPDATE highlights SET text = note WHERE text IS NULL AND note IS NOT NULL AND note <> ''",
+        [],
+    )
+    .map_err(|e| format!("failed to backfill highlights.text: {e}"))?;
+    conn.execute(
+        "UPDATE highlights SET note = '' WHERE note IS NOT NULL AND note = text",
+        [],
+    )
+    .map_err(|e| format!("failed to reset highlights.note: {e}"))?;
+    Ok(())
+}
+
 /// 一次性 group_name → shelves 迁移（幂等）：每个非空唯一分组名对应一个根级书架（存在同名根书架则复用，判重防重复建），
 /// 把 shelf_id 仍为空且带该分组的书挂上去。group_name 列保留不再读写。
 pub fn migrate_groups_to_shelves(conn: &Connection) -> Result<(), String> {
@@ -311,5 +342,56 @@ mod tests {
 
         assert_eq!(new_lib, "library/books/b1.epub");
         assert_eq!(new_cover, "library/covers/b1.jpg");
+    }
+
+    #[test]
+    fn highlight_text_backfill_moves_quick_highlight_notes() {
+        let conn = Connection::open_in_memory().unwrap();
+        // 旧库：schema 无 text 列（模拟 v2.1 库）
+        conn.execute_batch(
+            "CREATE TABLE highlights (
+                id TEXT PRIMARY KEY,
+                book_id TEXT NOT NULL,
+                cfi_range TEXT NOT NULL,
+                color TEXT NOT NULL,
+                note TEXT,
+                created_at INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+        let insert = |id: &str, note: Option<&str>| {
+            conn.execute(
+                "INSERT INTO highlights (id, book_id, cfi_range, color, note, created_at) VALUES (?1, 'b1', 'cfi', '#fff', ?2, 1)",
+                rusqlite::params![id, note],
+            )
+            .unwrap();
+        };
+        insert("h1", Some("被选中的原文句子")); // quick-highlight 痕迹：note=选中文本
+        insert("h2", None); // 纯高亮无笔记
+
+        ensure_highlight_text(&conn).unwrap();
+        ensure_highlight_text(&conn).unwrap(); // 幂等：二次跑不再清 note
+
+        let row = |id: &str| -> (Option<String>, Option<String>) {
+            conn.query_row(
+                "SELECT note, text FROM highlights WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        // 原 note（=选中文本）迁到 text，note 清空
+        assert_eq!(row("h1"), (Some("".to_string()), Some("被选中的原文句子".to_string())));
+        // 原本无笔记的行不动
+        assert_eq!(row("h2"), (None, None));
+
+        // 迁移后的新行：note 是真笔记，重启不被误清（note != text）
+        conn.execute(
+            "INSERT INTO highlights (id, book_id, cfi_range, color, note, text, created_at) VALUES ('h3', 'b1', 'cfi', '#fff', '真笔记', '原文', 1)",
+            [],
+        )
+        .unwrap();
+        ensure_highlight_text(&conn).unwrap();
+        assert_eq!(row("h3"), (Some("真笔记".to_string()), Some("原文".to_string())));
     }
 }

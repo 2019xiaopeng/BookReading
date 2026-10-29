@@ -1,19 +1,24 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
+use image::ImageEncoder;
 use rusqlite::{params, Connection};
+use tauri::Manager;
 use uuid::Uuid;
 use zip::ZipArchive;
 
 use crate::app_paths;
 use crate::commands::library::{
-    atomic_copy_to, atomic_write_to, fetch_book_by_id, fetch_books, insert_book, now_ts,
-    require_library_rel,
+    atomic_copy_to, atomic_write_to, encode_jpeg, fetch_book_by_id, fetch_books, gen_cover_thumb,
+    insert_book, now_ts, require_library_rel, thumbs_dir,
 };
 use crate::db;
-use crate::models::Book;
+use crate::models::{Book, PageMetaOut};
 
 const IMAGE_EXTS: [&str; 7] = ["png", "jpg", "jpeg", "webp", "gif", "avif", "bmp"];
 
@@ -78,9 +83,9 @@ pub(crate) fn folder_image_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
-fn open_cbz(path: &Path) -> Result<ZipArchive<fs::File>, String> {
+fn open_cbz(path: &Path) -> Result<ZipArchive<BufReader<fs::File>>, String> {
     let f = fs::File::open(path).map_err(|e| format!("failed to open {}: {e}", path.display()))?;
-    ZipArchive::new(f).map_err(|e| format!("failed to read cbz {}: {e}", path.display()))
+    ZipArchive::new(BufReader::new(f)).map_err(|e| format!("failed to read cbz {}: {e}", path.display()))
 }
 
 // CBZ 按压缩包内条目顺序取页
@@ -119,6 +124,133 @@ enum ImageSource {
     // 文件夹：原地引用的绝对路径，不复制、不改动源目录
     Folder(PathBuf),
     Cbz(PathBuf),
+}
+
+// ---- 页元数据缓存与 CBZ 句柄缓存（A2/A3；async 并发后必须持锁访问）----
+
+#[derive(Clone)]
+pub struct PageMeta {
+    // 展示名：文件夹书=文件名（单层遍历，文件名即相对路径）；CBZ=zip 内条目名
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    // CBZ 的 zip 条目序号（文件夹书不用）
+    pub entry: usize,
+}
+
+pub struct PageCacheEntry {
+    // 失效键：文件夹=目录 mtime（增删/改名页文件会变）；CBZ=cbz 文件 mtime
+    pub mtime: SystemTime,
+    pub pages: Vec<PageMeta>,
+}
+
+/// 图片书阅读态缓存（lib.rs manage）：①页列表+宽高；②打开的 CBZ 句柄（消除每页重开 zip 的 O(N²)）
+#[derive(Default)]
+pub struct AppState {
+    pub pages: Mutex<HashMap<String, PageCacheEntry>>,
+    pub cbz: Mutex<HashMap<PathBuf, Arc<Mutex<ZipArchive<BufReader<fs::File>>>>>>,
+}
+
+// 宽高嗅探只读文件头（JPEG SOF/PNG IHDR 等都在前 128KB 内；失败得 0/0，前端回退占位）
+const DIMENSIONS_HEAD_BYTES: u64 = 128 * 1024;
+
+fn sniff_dimensions(head: &[u8]) -> (u32, u32) {
+    image::ImageReader::new(std::io::Cursor::new(head))
+        .with_guessed_format()
+        .ok()
+        .and_then(|r| r.into_dimensions().ok())
+        .unwrap_or((0, 0))
+}
+
+fn file_head(path: &Path) -> Vec<u8> {
+    let mut buf = Vec::new();
+    if let Ok(mut f) = fs::File::open(path) {
+        let _ = Read::take(&mut f, DIMENSIONS_HEAD_BYTES).read_to_end(&mut buf);
+    }
+    buf
+}
+
+fn source_mtime(path: &Path) -> Result<SystemTime, String> {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map_err(|e| format!("failed to stat {}: {e}", path.display()))
+}
+
+fn page_cache_get(state: &AppState, book_id: &str, mtime: SystemTime) -> Option<Vec<PageMeta>> {
+    let cache = state.pages.lock().ok()?;
+    let entry = cache.get(book_id)?;
+    (entry.mtime == mtime).then(|| entry.pages.clone())
+}
+
+fn page_cache_put(state: &AppState, book_id: &str, mtime: SystemTime, pages: &[PageMeta]) {
+    if let Ok(mut cache) = state.pages.lock() {
+        cache.insert(book_id.to_string(), PageCacheEntry { mtime, pages: pages.to_vec() });
+    }
+}
+
+fn cbz_handle(
+    app: &tauri::AppHandle,
+    path: &Path,
+) -> Result<Arc<Mutex<ZipArchive<BufReader<fs::File>>>>, String> {
+    let state = app.state::<AppState>();
+    let mut cache = state.cbz.lock().map_err(|e| format!("cbz cache lock: {e}"))?;
+    if let Some(h) = cache.get(path) {
+        return Ok(h.clone());
+    }
+    let handle = Arc::new(Mutex::new(open_cbz(path)?));
+    cache.insert(path.to_path_buf(), handle.clone());
+    Ok(handle)
+}
+
+// 首次访问逐页嗅探宽高后整体入缓存；此后读页/列页零 read_dir、零重开 zip
+fn cached_pages(app: &tauri::AppHandle, book: &Book) -> Result<Vec<PageMeta>, String> {
+    let state = app.state::<AppState>();
+    match resolve_image_source(app, book)? {
+        ImageSource::Folder(dir) => {
+            let mtime = source_mtime(&dir)?;
+            if let Some(hit) = page_cache_get(&state, &book.id, mtime) {
+                return Ok(hit);
+            }
+            let files = folder_image_files(&dir)?;
+            let pages: Vec<PageMeta> = files
+                .iter()
+                .map(|p| {
+                    let (width, height) = sniff_dimensions(&file_head(p));
+                    PageMeta {
+                        name: p.file_name().map_or(String::new(), |n| n.to_string_lossy().to_string()),
+                        width,
+                        height,
+                        entry: 0,
+                    }
+                })
+                .collect();
+            page_cache_put(&state, &book.id, mtime, &pages);
+            Ok(pages)
+        }
+        ImageSource::Cbz(path) => {
+            let mtime = source_mtime(&path)?;
+            if let Some(hit) = page_cache_get(&state, &book.id, mtime) {
+                return Ok(hit);
+            }
+            let handle = cbz_handle(app, &path)?;
+            let mut zip = handle.lock().map_err(|e| format!("cbz handle lock: {e}"))?;
+            let mut pages = Vec::new();
+            for i in 0..zip.len() {
+                let mut entry = zip.by_index(i).map_err(|e| format!("failed to read cbz entry: {e}"))?;
+                if entry.is_dir() || !is_image_name(entry.name()) {
+                    continue;
+                }
+                let name = entry.name().to_string();
+                let mut head = Vec::new();
+                let _ = Read::take(&mut entry, DIMENSIONS_HEAD_BYTES).read_to_end(&mut head);
+                let (width, height) = sniff_dimensions(&head);
+                pages.push(PageMeta { name, width, height, entry: i });
+            }
+            drop(zip);
+            page_cache_put(&state, &book.id, mtime, &pages);
+            Ok(pages)
+        }
+    }
 }
 
 fn resolve_image_source(app: &tauri::AppHandle, book: &Book) -> Result<ImageSource, String> {
@@ -174,7 +306,7 @@ fn resolve_comic_meta(base: Option<&str>, title_opt: Option<String>) -> (Option<
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_image_folder(
     app: tauri::AppHandle,
     source_path: String,
@@ -253,6 +385,9 @@ fn import_folder(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) 
         let _ = fs::remove_file(&final_cover_abs);
         return Err(format!("failed to insert book: {e}"));
     }
+    if let Ok(thumbs) = thumbs_dir(app) {
+        gen_cover_thumb(&thumbs, &book_id, &final_cover_abs);
+    }
     Ok(book)
 }
 
@@ -325,40 +460,104 @@ fn import_cbz(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) -> 
         let _ = fs::remove_file(&final_cover_abs);
         return Err(format!("failed to insert book: {e}"));
     }
+    if let Ok(thumbs) = thumbs_dir(app) {
+        gen_cover_thumb(&thumbs, &book_id, &final_cover_abs);
+    }
     Ok(book)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_image_pages(app: tauri::AppHandle, book_id: String) -> Result<Vec<String>, String> {
     let conn = db::open_db(&app)?;
     let book = fetch_book_by_id(&conn, &book_id).map_err(|e| format!("failed to fetch book: {e}"))?;
-    match resolve_image_source(&app, &book)? {
-        ImageSource::Folder(dir) => Ok(folder_image_files(&dir)?
-            .iter()
-            .map(|p| p.file_name().map_or(String::new(), |n| n.to_string_lossy().to_string()))
-            .collect()),
-        ImageSource::Cbz(path) => cbz_image_names(&path),
-    }
+    Ok(cached_pages(&app, &book)?.into_iter().map(|p| p.name).collect())
 }
 
-#[tauri::command]
-pub fn read_image_page(app: tauri::AppHandle, book_id: String, index: usize) -> Result<tauri::ipc::Response, String> {
+/// 每页原始宽高（A3）：顺序与 list_image_pages 完全一致，按 index 对齐，前端据此精确预留占位宽高比
+#[tauri::command(async)]
+pub fn list_image_page_meta(app: tauri::AppHandle, book_id: String) -> Result<Vec<PageMetaOut>, String> {
     let conn = db::open_db(&app)?;
     let book = fetch_book_by_id(&conn, &book_id).map_err(|e| format!("failed to fetch book: {e}"))?;
-    match resolve_image_source(&app, &book)? {
-        ImageSource::Folder(dir) => {
-            let pages = folder_image_files(&dir)?;
-            let path = pages
-                .get(index)
-                .ok_or_else(|| format!("页码 {index} 超出范围（共 {} 页）", pages.len()))?;
-            fs::read(path).map(tauri::ipc::Response::new).map_err(|e| format!("failed to read page {}: {e}", path.display()))
+    Ok(cached_pages(&app, &book)?
+        .into_iter()
+        .map(|p| PageMetaOut { width: p.width, height: p.height })
+        .collect())
+}
+
+// A4 大页降采样：原图宽 > max_width 才缩（LANCZOS3 按宽等比）；JPEG 源出 JPEG q85，
+// 带透明的出 PNG（无损保 alpha），其余不透明格式也出 JPEG；解码失败回退原图字节
+fn downscale_page(bytes: Vec<u8>, known_width: u32, max_width: u32) -> Vec<u8> {
+    let shrink = || -> Result<Vec<u8>, String> {
+        let img = image::load_from_memory(&bytes).map_err(|e| format!("decode: {e}"))?;
+        if img.width() <= max_width {
+            return Ok(bytes.clone());
         }
-        ImageSource::Cbz(path) => read_cbz_page(&path, index).map(tauri::ipc::Response::new),
+        let src_jpeg = image::ImageReader::new(std::io::Cursor::new(&bytes))
+            .with_guessed_format()
+            .ok()
+            .and_then(|r| r.format())
+            .is_some_and(|f| f == image::ImageFormat::Jpeg);
+        let has_alpha = img.color().has_alpha();
+        let resized = img.resize(max_width, u32::MAX, image::imageops::FilterType::Lanczos3);
+        if src_jpeg || !has_alpha {
+            encode_jpeg(&resized, 85)
+        } else {
+            let rgba = resized.to_rgba8();
+            let mut buf = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut buf)
+                .write_image(rgba.as_raw(), rgba.width(), rgba.height(), image::ExtendedColorType::Rgba8)
+                .map_err(|e| format!("png encode: {e}"))?;
+            Ok(buf)
+        }
+    };
+    // 已知宽高且不超限时零解码直通
+    if known_width > 0 && known_width <= max_width {
+        return bytes;
     }
+    shrink().unwrap_or(bytes)
+}
+
+#[tauri::command(async)]
+pub fn read_image_page(
+    app: tauri::AppHandle,
+    book_id: String,
+    index: usize,
+    max_width: Option<u32>,
+) -> Result<tauri::ipc::Response, String> {
+    let conn = db::open_db(&app)?;
+    let book = fetch_book_by_id(&conn, &book_id).map_err(|e| format!("failed to fetch book: {e}"))?;
+    let pages = cached_pages(&app, &book)?;
+    let meta = pages
+        .get(index)
+        .ok_or_else(|| format!("页码 {index} 超出范围（共 {} 页）", pages.len()))?;
+    let bytes = match resolve_image_source(&app, &book)? {
+        ImageSource::Folder(dir) => {
+            let path = dir.join(&meta.name);
+            fs::read(&path).map_err(|e| format!("failed to read page {}: {e}", path.display()))?
+        }
+        ImageSource::Cbz(path) => {
+            let handle = cbz_handle(&app, &path)?;
+            let mut zip = handle.lock().map_err(|e| format!("cbz handle lock: {e}"))?;
+            let mut entry = zip
+                .by_index(meta.entry)
+                .map_err(|e| format!("failed to read cbz entry: {e}"))?;
+            let mut buf = Vec::new();
+            entry
+                .read_to_end(&mut buf)
+                .map_err(|e| format!("failed to read cbz page: {e}"))?;
+            buf
+        }
+    };
+    // 不传 max_width = 原图直出（现状行为）
+    let bytes = match max_width.filter(|w| *w > 0) {
+        Some(mw) => downscale_page(bytes, meta.width, mw),
+        None => bytes,
+    };
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 // 批量导入：父目录的一级子目录，仅保留"直接含图片"的（空/纯文本目录服务端跳过），目录名自然序
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_image_subdirs(parent: String) -> Result<Vec<String>, String> {    let dir = PathBuf::from(&parent);
     if !dir.is_dir() {
         return Err(format!("{}: 不是文件夹", dir.display()));
@@ -376,10 +575,15 @@ pub fn list_image_subdirs(parent: String) -> Result<Vec<String>, String> {    le
 }
 
 // 批次18：文件夹漫画源目录移动/删除后的"找回"——校验后改写 library_path（原地引用书唯一恢复路径）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn relink_image_book(app: tauri::AppHandle, book_id: String, new_path: String) -> Result<Book, String> {
     let conn = db::open_db(&app)?;
-    relink_image_folder(&conn, &book_id, &new_path)
+    let book = relink_image_folder(&conn, &book_id, &new_path)?;
+    // 换目录后清页缓存（新目录 mtime 不同也会自动失效，这里显式清除兜底）
+    if let Ok(mut cache) = app.state::<AppState>().pages.lock() {
+        cache.remove(&book_id);
+    }
+    Ok(book)
 }
 
 // 与前端 normPath 同口径：反斜杠归一 + 小写 + 去尾斜杠，用于"一书一文件夹"防撞比较
@@ -531,6 +735,30 @@ mod tests {
         assert_eq!(read_cbz_page(&path, 1).unwrap(), b"one");
         assert!(read_cbz_page(&path, 2).is_err());
         let _ = fs::remove_file(&path);
+    }
+
+    // ---- A4 大页降采样 ----
+
+    #[test]
+    fn downscale_page_resizes_by_width_and_passes_small_through() {
+        let png = {
+            let img = image::RgbImage::from_pixel(1000, 400, image::Rgb([10, 20, 30]));
+            let mut buf = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut buf)
+                .write_image(img.as_raw(), 1000, 400, image::ExtendedColorType::Rgb8)
+                .unwrap();
+            buf
+        };
+
+        // 已知宽 ≤ max_width：零处理直通（字节不变）
+        let out = downscale_page(png.clone(), 1000, 2000);
+        assert_eq!(out, png);
+
+        // 原图宽 > max_width：LANCZOS3 缩到 max_width（不透明 PNG → JPEG）
+        let out = downscale_page(png, 1000, 400);
+        let decoded = image::load_from_memory(&out).unwrap();
+        assert_eq!(decoded.width(), 400);
+        assert_eq!(decoded.height(), 160); // 等比 1000x400 → 400x160
     }
 
     #[test]

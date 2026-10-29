@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::app_paths;
 use crate::commands::images::folder_image_files;
-use crate::commands::library::{atomic_copy_to, require_library_rel};
+use crate::commands::library::{atomic_copy_to, gen_cover_thumb, require_library_rel};
 use crate::db;
 
 pub(crate) fn dir_size_bytes(path: &Path) -> u64 {
@@ -242,7 +242,7 @@ pub struct MigrateResult {
     pub old_db: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn migrate_library_root(app: tauri::AppHandle, new_root: String) -> Result<MigrateResult, String> {
     let new_root = PathBuf::from(new_root.trim());
     let roots = app_paths::roots(&app)?;
@@ -251,7 +251,10 @@ pub fn migrate_library_root(app: tauri::AppHandle, new_root: String) -> Result<M
         db: roots.db.clone(),
         bootstrap_db: roots.bootstrap_db.clone(),
     };
-    // 命令内不持有任何 sqlite 连接（各命令自开自关、同步串行），db 文件可安全复制
+    // 托管连接全程持锁（挂起其它命令的 DB 访问），复制前 checkpoint 把 WAL 折回主文件，
+    // 保证复制到新根的 app.sqlite 自洽（旧版各命令自开自关天然串行，改托管后需显式做）
+    let conn = db::open_db(&app)?;
+    let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
     let used = migrate_library_root_core(&paths, &new_root)?;
     Ok(MigrateResult {
         moved_bytes: used,
@@ -303,7 +306,7 @@ pub(crate) fn remove_old_library_core(
     Ok(freed)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remove_old_library(app: tauri::AppHandle, old_library: String, old_db: String) -> Result<String, String> {
     let old_library = PathBuf::from(old_library.trim());
     let old_db = PathBuf::from(old_db.trim());
@@ -357,7 +360,7 @@ pub(crate) fn storage_stats_core(library: &Path, db: &Path, logs: &Path) -> Stor
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn storage_stats(app: tauri::AppHandle) -> Result<StorageStats, String> {
     let library = app_paths::library_dir(&app)?;
     let db = app_paths::db_path(&app)?;
@@ -422,7 +425,11 @@ fn clear_covers_core(conn: &Connection, covers_dir: &Path) -> Result<u64, String
                     let tmp_cover = covers_dir.join(format!("{id}.{ext}.part"));
                     atomic_copy_to(&first.to_string_lossy(), &tmp_cover, &final_cover)
                         .ok()
-                        .map(|_| format!("library/covers/{id}.{ext}"))
+                        .map(|_| {
+                            // 清空 covers 会连 thumbs/ 一起清掉，重建的漫画封面顺手补缩略档
+                            gen_cover_thumb(&covers_dir.join("thumbs"), &id, &final_cover);
+                            format!("library/covers/{id}.{ext}")
+                        })
                 })
         } else {
             None
@@ -454,7 +461,7 @@ pub struct ClearCacheResult {
 
 const CLEARABLE_CATEGORIES: [&str; 3] = ["covers", "bg", "logs"];
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn clear_cache(app: tauri::AppHandle, categories: Vec<String>) -> Result<ClearCacheResult, String> {
     if categories.is_empty() {
         return Err("请选择要清理的类别".to_string());
@@ -497,7 +504,7 @@ pub struct PathInfo {
     pub size: u64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn probe_paths(paths: Vec<String>) -> Result<Vec<PathInfo>, String> {
     paths
         .iter()
@@ -519,7 +526,7 @@ pub fn probe_paths(paths: Vec<String>) -> Result<Vec<PathInfo>, String> {
 
 /// 前端读库内文件（封面/背景/epub）的唯一入口：按当前库根解析 "library/..." 相对路径。
 /// 库根可配置后不再能直接用 AppData 作为 baseDir 读这些文件。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn read_library_file(app: tauri::AppHandle, rel: String) -> Result<tauri::ipc::Response, String> {
     let v = rel.replace('\\', "/");
     require_library_rel(&v)?;

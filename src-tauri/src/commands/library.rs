@@ -3,7 +3,9 @@ use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 
+use image::ImageEncoder;
 use rusqlite::{params, Connection};
+use tauri::Emitter;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -225,7 +227,7 @@ fn merge_optional_text(update: Option<String>, existing: Option<String>) -> Opti
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn repair_book_metadata(app: tauri::AppHandle, book_id: String) -> Result<Book, String> {
     let conn = db::open_db(&app)?;
     let existing =
@@ -267,6 +269,7 @@ pub fn repair_book_metadata(app: tauri::AppHandle, book_id: String) -> Result<Bo
                     let tmp_cover_abs = covers_dir.join(format!("{book_id}.{ext}.part"));
                     atomic_write_to(&tmp_cover_abs, &final_cover_abs, bytes)
                         .map_err(|e| format!("failed to write cover: {e}"))?;
+                    gen_cover_thumb(&covers_dir.join("thumbs"), &book_id, &final_cover_abs);
                     cover_path = Some(format!("library/covers/{book_id}.{ext}"));
                 }
             }
@@ -282,13 +285,24 @@ pub fn repair_book_metadata(app: tauri::AppHandle, book_id: String) -> Result<Bo
     fetch_book_by_id(&conn, &book_id).map_err(|e| format!("failed to fetch book: {e}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_books(app: tauri::AppHandle) -> Result<Vec<Book>, String> {
     let conn = db::open_db(&app)?;
     fetch_books(&conn).map_err(|e| format!("failed to list books: {e}"))
 }
 
-#[tauri::command]
+/// 单书查询（替换前端三处全量 list_books 拉书）
+#[tauri::command(async)]
+pub fn get_book(app: tauri::AppHandle, book_id: String) -> Result<Option<Book>, String> {
+    let conn = db::open_db(&app)?;
+    match fetch_book_by_id(&conn, &book_id) {
+        Ok(b) => Ok(Some(b)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(format!("failed to fetch book: {e}")),
+    }
+}
+
+#[tauri::command(async)]
 pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book, String> {
     let book_id = Uuid::new_v4().to_string();
 
@@ -419,6 +433,11 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         return Err(format!("failed to insert book: {e}"));
     }
 
+    // 封面落库成功后顺手生成缩略档（best-effort，失败不影响导入）
+    if let (Some(abs), Ok(thumbs)) = (cover_abs.as_ref(), thumbs_dir(&app)) {
+        gen_cover_thumb(&thumbs, &book.id, abs);
+    }
+
     Ok(book)
 }
 
@@ -469,7 +488,7 @@ fn merge_metadata(existing: &Book, req: &UpdateBookMetadataRequest, now: i64) ->
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_book_metadata(app: tauri::AppHandle, req: UpdateBookMetadataRequest) -> Result<Book, String> {
     let conn = db::open_db(&app)?;
 
@@ -487,7 +506,7 @@ pub fn update_book_metadata(app: tauri::AppHandle, req: UpdateBookMetadataReques
     fetch_book_by_id(&conn, &req.book_id).map_err(|e| format!("failed to fetch book: {e}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_book(app: tauri::AppHandle, book_id: String) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     let (library_path, cover_path) =
@@ -583,7 +602,7 @@ fn store_reader_background(bg_dir: &Path, source_path: &str) -> Result<String, S
     Ok(keep)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_reader_background(app: tauri::AppHandle, source_path: String) -> Result<String, String> {
     let bg_dir = app_paths::library_dir(&app)?.join("bg");
     let name = store_reader_background(&bg_dir, &source_path)?;
@@ -629,7 +648,7 @@ fn store_reader_font(fonts_dir: &Path, source_path: &str) -> Result<String, Stri
     Ok(keep)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_reader_font(app: tauri::AppHandle, source_path: String) -> Result<String, String> {
     let fonts_dir = app_paths::library_dir(&app)?.join("fonts");
     let name = store_reader_font(&fonts_dir, &source_path)?;
@@ -637,7 +656,7 @@ pub fn save_reader_font(app: tauri::AppHandle, source_path: String) -> Result<St
 }
 
 /// B11 恢复默认：删除字体单槽（目录不存在/已空视为成功）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_reader_font(app: tauri::AppHandle) -> Result<(), String> {
     let fonts_dir = app_paths::library_dir(&app)?.join("fonts");
     if let Ok(entries) = fs::read_dir(&fonts_dir) {
@@ -665,6 +684,111 @@ fn drop_stale_covers(covers_dir: &Path, book_id: &str, keep: &str) {
     }
 }
 
+pub(crate) fn thumbs_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app_paths::covers_dir(app)?.join("thumbs"))
+}
+
+// 缩略档宽（覆盖 120px 格 ×3DPR=360px 留余量）
+pub(crate) const THUMB_WIDTH: u32 = 480;
+
+// shortcut: image 0.25 的 webp 只有无损编码（有损需 libwebp C 库），
+// 不透明封面按文档退路直接走 JPEG q80；带透明的图才用无损 webp（保 alpha）
+fn encode_webp_lossless(img: &image::DynamicImage) -> Result<Vec<u8>, String> {
+    let rgba = img.to_rgba8();
+    let mut buf = Vec::new();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut buf)
+        .write_image(rgba.as_raw(), rgba.width(), rgba.height(), image::ExtendedColorType::Rgba8)
+        .map_err(|e| format!("webp encode: {e}"))?;
+    Ok(buf)
+}
+
+pub(crate) fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
+    let rgb = img.to_rgb8();
+    let mut buf = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality)
+        .write_image(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
+        .map_err(|e| format!("jpeg encode: {e}"))?;
+    Ok(buf)
+}
+
+/// 封面缩略档（A5）：covers/thumbs/{id}.{webp|jpg} 宽 480，只缩不放——原图宽 ≤480 或解码
+/// 失败时跳过（前端回退原图路径）。best-effort：任何失败静默放弃，绝不影响主封面写入。
+/// 扩展名与实际格式一致：不透明封面 JPEG q80（.jpg），带透明封面无损 webp（.webp），前端按扩展名推 mime。
+// core takes thumbs_dir so tests can run against a tempdir instead of real appdata
+pub(crate) fn gen_cover_thumb(thumbs_dir: &Path, book_id: &str, cover_abs: &Path) {
+    let build = || -> Result<(), String> {
+        let bytes = fs::read(cover_abs).map_err(|e| format!("failed to read cover: {e}"))?;
+        let img = image::load_from_memory(&bytes).map_err(|e| format!("failed to decode cover: {e}"))?;
+        if img.width() <= THUMB_WIDTH {
+            return Ok(()); // 小图源不放大也不落盘
+        }
+        let resized = img.resize(THUMB_WIDTH, u32::MAX, image::imageops::FilterType::Lanczos3);
+        let has_alpha = resized.color().has_alpha();
+        // JPEG 无 alpha：带透明的图只走 webp，失败即放弃缩略图（前端回退原图）
+        let (bytes, ext) = if has_alpha {
+            (encode_webp_lossless(&resized)?, "webp")
+        } else {
+            (encode_jpeg(&resized, 80)?, "jpg")
+        };
+        fs::create_dir_all(thumbs_dir).map_err(|e| format!("failed to create thumbs dir: {e}"))?;
+        let keep = format!("{book_id}.{ext}");
+        let final_thumb = thumbs_dir.join(&keep);
+        let tmp_thumb = thumbs_dir.join(format!("{keep}.part"));
+        atomic_write_to(&tmp_thumb, &final_thumb, &bytes)?;
+        drop_stale_covers(thumbs_dir, book_id, &keep);
+        Ok(())
+    };
+    let _ = build();
+}
+
+// 已有缩略档即跳过（幂等闸；generate_cover_thumbs 与前端探测共用）
+pub(crate) fn thumb_exists(thumbs_dir: &Path, book_id: &str) -> bool {
+    thumbs_dir.join(format!("{book_id}.webp")).is_file() || thumbs_dir.join(format!("{book_id}.jpg")).is_file()
+}
+
+#[derive(Clone, serde::Serialize)]
+struct CoverThumbsProgress {
+    done: usize,
+    total: usize,
+}
+
+/// 存量封面补生成缩略档：立即返回，后台线程遍历有封面的书逐本补（已有跳过），
+/// 每本完成 emit "cover-thumbs-progress" {done,total}。setup 启动时自动触发一次。
+#[tauri::command(async)]
+pub fn generate_cover_thumbs(app: tauri::AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let conn = match db::open_db_bg(&handle) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let rows: Vec<(String, String)> = match conn
+            .prepare("SELECT id, cover_path FROM books WHERE deleted_at IS NULL AND cover_path IS NOT NULL")
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                    .map(|rows| rows.collect::<Result<Vec<_>, _>>())
+            }) {
+            Ok(Ok(v)) => v,
+            _ => return,
+        };
+        let total = rows.len();
+        let Ok(thumbs) = thumbs_dir(&handle) else { return };
+        for (i, (book_id, rel)) in rows.iter().enumerate() {
+            if !thumb_exists(&thumbs, book_id) {
+                let abs = rel.replace('\\', "/");
+                let abs = abs.strip_prefix("library/").map(|rest| app_paths::library_dir(&handle).ok().map(|root| root.join(rest)));
+                if let Some(Some(abs)) = abs {
+                    if abs.is_file() {
+                        gen_cover_thumb(&thumbs, book_id, &abs);
+                    }
+                }
+            }
+            let _ = handle.emit("cover-thumbs-progress", CoverThumbsProgress { done: i + 1, total });
+        }
+    });
+    Ok(())
+}
+
 // core takes covers_dir so tests can run against a tempdir instead of real appdata
 fn store_book_cover(covers_dir: &Path, book_id: &str, source_path: &str) -> Result<String, String> {
     let ext = validate_image_file(source_path)?;
@@ -679,7 +803,7 @@ fn store_book_cover(covers_dir: &Path, book_id: &str, source_path: &str) -> Resu
     Ok(format!("library/covers/{keep}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_book_cover(app: tauri::AppHandle, book_id: String, source_path: String) -> Result<String, String> {
     let conn = db::open_db(&app)?;
     // 仅确认书存在（uuid 为文件名，不存在即报错）；无封面书同样可设
@@ -687,6 +811,9 @@ pub fn set_book_cover(app: tauri::AppHandle, book_id: String, source_path: Strin
     let cover_path = store_book_cover(&app_paths::covers_dir(&app)?, &book_id, &source_path)?;
     conn.execute("UPDATE books SET cover_path = ?2 WHERE id = ?1", params![book_id, cover_path])
         .map_err(|e| format!("failed to update book: {e}"))?;
+    let thumbs = thumbs_dir(&app)?;
+    let cover_name = cover_path.rsplit('/').next().unwrap_or(cover_path.as_str());
+    gen_cover_thumb(&thumbs, &book_id, &app_paths::covers_dir(&app)?.join(cover_name));
     Ok(cover_path)
 }
 
@@ -724,6 +851,7 @@ fn reextract_covers(conn: &Connection, books_dir: &Path, covers_dir: &Path) -> R
         let tmp_cover = covers_dir.join(format!("{keep}.part"));
         atomic_write_to(&tmp_cover, &final_cover, &bytes)
             .map_err(|e| format!("failed to write cover for {book_id}: {e}"))?;
+        gen_cover_thumb(&covers_dir.join("thumbs"), &book_id, &final_cover);
         drop_stale_covers(covers_dir, &book_id, &keep);
         let cover_path = format!("library/covers/{keep}");
         if old_cover.as_deref() != Some(cover_path.as_str()) {
@@ -738,7 +866,7 @@ fn reextract_covers(conn: &Connection, books_dir: &Path, covers_dir: &Path) -> R
     Ok(done)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn reextract_all_covers(app: tauri::AppHandle) -> Result<usize, String> {
     let conn = db::open_db(&app)?;
     reextract_covers(&conn, &app_paths::books_dir(&app)?, &app_paths::covers_dir(&app)?)
@@ -1223,6 +1351,43 @@ mod tests {
         assert_eq!(updated.title, b1.title);
         assert_eq!(updated.file_size, b1.file_size);
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- A5 封面缩略档 ----
+
+    fn write_test_cover(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {
+        let path = dir.join(name);
+        image::RgbImage::from_pixel(w, h, image::Rgb([200u8, 30, 30]))
+            .save_with_format(&path, image::ImageFormat::Png)
+            .unwrap();
+        path
+    }
+
+    #[test]
+    fn cover_thumb_shrinks_big_covers_and_skips_small() {
+        let dir = temp_bg_dir("thumb");
+        let thumbs = dir.join("thumbs");
+        let big = write_test_cover(&dir, "big.png", 1200, 1800);
+
+        gen_cover_thumb(&thumbs, "b1", &big);
+        let thumb = thumbs.join("b1.jpg"); // 不透明 → JPEG 退路 + .jpg 扩展名
+        assert!(thumb.is_file(), "thumb missing");
+        let decoded = image::ImageReader::open(&thumb).unwrap().decode().unwrap();
+        assert_eq!(decoded.width(), THUMB_WIDTH);
+        assert_eq!(decoded.height(), 720); // 等比：1200x1800 → 480x720
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cover_thumb_never_upscales_small_covers() {
+        let dir = temp_bg_dir("thumb-small");
+        let thumbs = dir.join("thumbs");
+        let small = write_test_cover(&dir, "s.png", 200, 300);
+
+        gen_cover_thumb(&thumbs, "b2", &small);
+        assert!(!thumbs.join("b2.jpg").exists());
+        assert!(!thumbs.join("b2.webp").exists()); // 小图不放大也不落盘
         let _ = fs::remove_dir_all(&dir);
     }
 }

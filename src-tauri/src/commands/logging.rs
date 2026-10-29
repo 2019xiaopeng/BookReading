@@ -10,7 +10,7 @@ fn now_line(line: &str) -> String {
     format!("{ts} {line}")
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn append_frontend_log(app: tauri::AppHandle, line: String) -> Result<(), String> {
     let dir = app_paths::app_data_dir(&app)?.join("logs");
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create logs dir: {e}"))?;

@@ -68,7 +68,7 @@ fn delete_favorite_quote_db(conn: &Connection, quote_id: &str) -> Result<(), rus
     Ok(())
 }
 
-fn list_favorite_quotes_db(
+pub(crate) fn list_favorite_quotes_db(
     conn: &Connection,
     book_id: Option<&str>,
     query: Option<&str>,
@@ -120,7 +120,7 @@ fn list_favorite_quotes_db(
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_book_favorite(app: tauri::AppHandle, book_id: String, is_favorite: bool) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     set_book_favorite_db(&conn, &book_id, is_favorite)
@@ -128,13 +128,13 @@ pub fn set_book_favorite(app: tauri::AppHandle, book_id: String, is_favorite: bo
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_favorite_books(app: tauri::AppHandle) -> Result<Vec<Book>, String> {
     let conn = db::open_db(&app)?;
     list_favorite_books_db(&conn).map_err(|e| format!("failed to list favorite books: {e}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_favorite_quote(
     app: tauri::AppHandle,
     book_id: String,
@@ -155,7 +155,7 @@ pub fn add_favorite_quote(
     Ok(q)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_favorite_quote(app: tauri::AppHandle, quote_id: String) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     delete_favorite_quote_db(&conn, &quote_id)
@@ -163,7 +163,7 @@ pub fn delete_favorite_quote(app: tauri::AppHandle, quote_id: String) -> Result<
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_favorite_quotes(
     app: tauri::AppHandle,
     book_id: Option<String>,

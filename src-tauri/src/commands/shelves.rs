@@ -202,7 +202,7 @@ pub(crate) fn purge_expired_trash(conn: &Connection, data_dir: &Path, now: i64) 
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_shelves(app: tauri::AppHandle) -> Result<Vec<Shelf>, String> {
     let conn = db::open_db(&app)?;
     list_shelves_db(&conn).map_err(|e| format!("failed to list shelves: {e}"))
@@ -268,19 +268,19 @@ fn rename_shelf_db(conn: &Connection, id: i64, name: String) -> Result<(), Strin
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_shelf(app: tauri::AppHandle, name: String, parent_id: Option<i64>) -> Result<Shelf, String> {
     let conn = db::open_db(&app)?;
     create_shelf_db(&conn, name, parent_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rename_shelf(app: tauri::AppHandle, id: i64, name: String) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     rename_shelf_db(&conn, id, name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn move_shelf(app: tauri::AppHandle, id: i64, new_parent_id: Option<i64>) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     fetch_shelf(&conn, id)?;
@@ -292,13 +292,13 @@ pub fn move_shelf(app: tauri::AppHandle, id: i64, new_parent_id: Option<i64>) ->
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_shelf(app: tauri::AppHandle, id: i64) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     delete_shelf_db(&conn, id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_shelf_order(app: tauri::AppHandle, ids: Vec<i64>) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     for (idx, id) in ids.iter().enumerate() {
@@ -308,7 +308,7 @@ pub fn set_shelf_order(app: tauri::AppHandle, ids: Vec<i64>) -> Result<(), Strin
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn move_books_to_shelf(app: tauri::AppHandle, book_ids: Vec<String>, shelf_id: Option<i64>) -> Result<(), String> {
     if book_ids.is_empty() {
         return Ok(());
@@ -331,7 +331,7 @@ pub fn move_books_to_shelf(app: tauri::AppHandle, book_ids: Vec<String>, shelf_i
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_books_order(app: tauri::AppHandle, book_ids: Vec<String>) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     for (idx, id) in book_ids.iter().enumerate() {
@@ -341,7 +341,7 @@ pub fn set_books_order(app: tauri::AppHandle, book_ids: Vec<String>) -> Result<(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_books(app: tauri::AppHandle, book_ids: Vec<String>) -> Result<(), String> {
     if book_ids.is_empty() {
         return Ok(());
@@ -352,7 +352,7 @@ pub fn delete_books(app: tauri::AppHandle, book_ids: Vec<String>) -> Result<(), 
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn restore_books(app: tauri::AppHandle, book_ids: Vec<String>) -> Result<(), String> {
     if book_ids.is_empty() {
         return Ok(());
@@ -362,7 +362,7 @@ pub fn restore_books(app: tauri::AppHandle, book_ids: Vec<String>) -> Result<(),
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn purge_books(app: tauri::AppHandle, book_ids: Vec<String>) -> Result<(), String> {
     if book_ids.is_empty() {
         return Ok(());
@@ -375,13 +375,13 @@ pub fn purge_books(app: tauri::AppHandle, book_ids: Vec<String>) -> Result<(), S
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_trash(app: tauri::AppHandle) -> Result<Vec<Book>, String> {
     let conn = db::open_db(&app)?;
     list_trash_db(&conn).map_err(|e| format!("failed to list trash: {e}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_trash_retention_days(app: tauri::AppHandle, days: i64) -> Result<(), String> {
     if days < 0 {
         return Err("保留期不能为负数".to_string());

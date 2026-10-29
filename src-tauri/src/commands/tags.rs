@@ -279,55 +279,55 @@ fn compute_book_size(conn: &Connection, library_root: &Path, book: &Book) -> Res
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_tags(app: tauri::AppHandle) -> Result<Vec<Tag>, String> {
     let conn = db::open_db(&app)?;
     list_tags_db(&conn).map_err(|e| format!("failed to list tags: {e}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_tag(app: tauri::AppHandle, name: String, color: Option<String>) -> Result<Tag, String> {
     let conn = db::open_db(&app)?;
     create_tag_db(&conn, &name, color.as_deref())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rename_tag(app: tauri::AppHandle, id: i64, name: String) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     rename_tag_db(&conn, id, &name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn recolor_tag(app: tauri::AppHandle, id: i64, color: Option<String>) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     recolor_tag_db(&conn, id, color)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn merge_tags(app: tauri::AppHandle, from_id: i64, to_id: i64) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     merge_tags_db(&conn, from_id, to_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_tag(app: tauri::AppHandle, id: i64) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     delete_tag_db(&conn, id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_book_tags(app: tauri::AppHandle, book_id: String, tag_ids: Vec<i64>) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     set_book_tags_db(&conn, &book_id, &tag_ids)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_tags_to_books(app: tauri::AppHandle, book_ids: Vec<String>, tag_ids: Vec<i64>) -> Result<(), String> {
     let conn = db::open_db(&app)?;
     add_tags_to_books_db(&conn, &book_ids, &tag_ids)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn compute_book_stats(app: tauri::AppHandle, book_id: String) -> Result<Book, String> {
     let conn = db::open_db(&app)?;
     let book = fetch_book_by_id(&conn, &book_id).map_err(|e| format!("failed to fetch book: {e}"))?;
