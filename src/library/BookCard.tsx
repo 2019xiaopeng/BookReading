@@ -78,7 +78,13 @@ function BookCardImpl(props: BookCardProps) {
         </button>
       ) : null}
 
-      <div className="wr-cover" ref={coverPriorityRef}>
+      <div
+        className="wr-cover"
+        ref={coverPriorityRef}
+        // M2 骨架 shimmer：pending=有封面但缩略档未就绪；loading=url 已到但图片未解码完成
+        data-pending={!!book.cover_path && !coverUrl}
+        data-loading={!!coverUrl && !coverLoaded}
+      >
         {coverUrl ? (
           <img
             src={coverUrl}

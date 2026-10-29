@@ -55,7 +55,7 @@ import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
 import AppShell, { setShelvesCache, useShellShelves } from "../ui/AppShell";
 import { showAlert, showConfirm } from "../ui/dialog";
-import { IconBook, IconCheckSquare, IconDensity, IconFolder, IconImage, IconRefresh, IconSort, IconTrash } from "../ui/icons";
+import { IconBook, IconCheckSquare, IconDensity, IconFolder, IconImage, IconRefresh, IconShelf, IconSort, IconTrash } from "../ui/icons";
 
 type SortKey = "recent" | "title" | "added" | "custom";
 
@@ -1016,11 +1016,17 @@ export default function LibraryPage() {
     return t ? `已读 ${t}` : null;
   };
 
+  // 刊头统计口径：根视图=全库，书架视图=该书架直属书；在读=readingStatus 判定为在读
+  const mastheadScope = currentShelfId == null ? books : shelfBooks;
+  const mastheadReading = mastheadScope.filter((b) => readingStatus(b.reading_percent) === "reading").length;
+  const mastheadName = path.length > 0 ? path[path.length - 1].name : "书 架";
+
   return (
     <AppShell
       active="library"
       title={trashView ? "回收站" : "书架"}
       search={{ value: query, placeholder: trashView ? "搜索书名 / 作者" : "搜索书名 / 作者", onChange: setQuery }}
+      quickFilter={trashView ? undefined : { value: statusFilter, onChange: setStatusFilter }}
       sidebarFooter={
         <>
           <button className="wr-small-btn" disabled={loading} onClick={() => void refresh()}>
@@ -1038,6 +1044,13 @@ export default function LibraryPage() {
         </>
       }
     >
+      <div className="wr-masthead">
+        <h1 className="wr-masthead-name">{trashView ? "回 收 站" : mastheadName}</h1>
+        <div className="wr-masthead-stats">
+          {trashView ? `共 ${trash.length} 本` : `藏书 ${mastheadScope.length} · 在读 ${mastheadReading}`}
+        </div>
+      </div>
+
       {trashView ? (
         <div className="wr-toolbar-row">
           <button className="wr-btn" onClick={() => navigate("/")}>
@@ -1303,7 +1316,7 @@ export default function LibraryPage() {
           {booksFiltered.length === 0 && subShelves.length === 0 ? (
             <div className="wr-state" style={{ gridColumn: "1 / -1" }}>
               <span className="wr-state-icon" aria-hidden="true">
-                <IconBook />
+                <IconShelf width={40} height={40} />
               </span>
               {query.trim() ? (
                 <>

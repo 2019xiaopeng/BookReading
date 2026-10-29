@@ -2728,12 +2728,14 @@ input[type="range"]:focus-visible {
   }
 }
 
-/* 四宫格骨架：该书前 4 本的封面未就绪时的素色占位；
+/* 四宫格骨架：该书前 4 本的封面未就绪时的占位（M2 升级为 m2 token + shimmer）；
    无封面书不渲染格子，保持主题渐变空格（与不足 4 本时的表现一致） */
 .wr-shelf-grid .wr-shelf-skeleton {
   border-radius: 2px;
-  background: rgba(var(--wr-ink-rgb), 0.08);
-  box-shadow: inset 0 0 0 1px var(--wr-hairline);
+  background: var(--m2-skeleton);
+  box-shadow: inset 0 0 0 1px var(--m2-cover-line);
+  position: relative;
+  overflow: hidden;
 }
 
 /* ── M2 U2：工具行图标化（排序下拉 / 密度三格分段 / 选择复选）── */
@@ -2760,4 +2762,98 @@ input[type="range"]:focus-visible {
   margin-left: auto;
   font-size: 12px;
   color: var(--m2-ink);
+}
+
+/* ── M2 U3：刊头 / 侧栏快捷项 / 骨架 shimmer ── */
+
+/* 刊头：当前书架名（焦点事件）+ 等宽统计列 */
+.wr-masthead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 18px 0;
+}
+
+.wr-masthead-name {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: break-word;
+  font-size: clamp(34px, 4.5vw, 60px);
+  line-height: 1.15;
+  font-weight: 800;
+  color: var(--m2-ink);
+}
+
+.wr-masthead-stats {
+  flex: none;
+  padding-bottom: 8px;
+  font-family: var(--wr-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--m2-ink-soft);
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* 侧栏顶部快捷筛选 chips：选中态=墨色实底反白 */
+.wr-quick-row {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px 0;
+  flex-wrap: wrap;
+}
+
+.wr-quick-chip {
+  flex: 1 1 0;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--m2-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--m2-ink);
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.wr-quick-chip:hover {
+  background: var(--m2-wash);
+}
+
+.wr-quick-chip[data-active="true"] {
+  background: var(--m2-ink);
+  border-color: var(--m2-ink);
+  color: var(--m2-paper);
+}
+
+.wr-quick-chip:focus-visible {
+  outline: 2px solid var(--m2-ink);
+  outline-offset: 2px;
+}
+
+/* 骨架 shimmer（1.6s）：四宫格格子与书卡封面加载占位同款；
+   prefers-reduced-motion 由全局 .wr-shell * 回退关闭 */
+.wr-shelf-skeleton::after,
+.wr-cover[data-loading="true"]::after,
+.wr-cover[data-pending="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 25%, var(--m2-sheen) 50%, transparent 75%);
+  animation: wr-m2-shimmer 1.6s infinite;
+}
+
+@keyframes wr-m2-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
 }

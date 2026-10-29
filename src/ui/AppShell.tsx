@@ -7,6 +7,7 @@ import { applyPersistedTheme, setTheme, THEME_SWATCHES, useTheme } from "./theme
 import { getSettings, listShelves, type Shelf } from "../tauri/invoke";
 import { normalizeReaderBackground } from "../reader/settings/normalize";
 import { shelfTreeRows } from "../library/shelves";
+import type { ReadingStatus } from "../library/readingStatus";
 import { BOOKS_CHANGED_EVENT, runImports, subscribeImportProgress, type ImportProgress } from "../library/importRunner";
 import SettingsDialog from "./SettingsDialog";
 
@@ -70,6 +71,11 @@ export default function AppShell(props: {
     items: { key: string; label: string }[];
     active: string;
     onChange: (key: string) => void;
+  };
+  /** 侧栏顶部快捷筛选（全部藏书/在读/未读）：与工具行状态过滤菜单同一 state 源，双向同步 */
+  quickFilter?: {
+    value: "all" | ReadingStatus;
+    onChange: (v: "all" | ReadingStatus) => void;
   };
   sidebarFooter?: ReactNode;
   children: ReactNode;
@@ -191,6 +197,38 @@ export default function AppShell(props: {
             <span style={{ fontSize: 12 }}>本地库</span>
           </div>
         </div>
+
+        {props.quickFilter ? (
+          <div className="wr-quick-row" role="group" aria-label="快捷筛选">
+            <button
+              type="button"
+              className="wr-quick-chip"
+              data-active={props.quickFilter.value === "all"}
+              aria-pressed={props.quickFilter.value === "all"}
+              onClick={() => props.quickFilter?.onChange("all")}
+            >
+              全部藏书
+            </button>
+            <button
+              type="button"
+              className="wr-quick-chip"
+              data-active={props.quickFilter.value === "reading"}
+              aria-pressed={props.quickFilter.value === "reading"}
+              onClick={() => props.quickFilter?.onChange("reading")}
+            >
+              在读
+            </button>
+            <button
+              type="button"
+              className="wr-quick-chip"
+              data-active={props.quickFilter.value === "unread"}
+              aria-pressed={props.quickFilter.value === "unread"}
+              onClick={() => props.quickFilter?.onChange("unread")}
+            >
+              未读
+            </button>
+          </div>
+        ) : null}
 
         <div className="wr-nav" role="navigation">
           <button className="wr-nav-btn" data-active={props.active === "library" && !trashActive} aria-current={props.active === "library" && !trashActive ? "page" : undefined} onClick={() => navigate("/")}>
