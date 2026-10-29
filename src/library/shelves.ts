@@ -62,6 +62,18 @@ export function countByShelf(books: Book[]): Map<number, number> {
   return m;
 }
 
+/** 每架固定取前 max 本（书库顺序）：四宫格封面选择与加载状态无关，不随封面到达顺序洗牌 */
+export function firstBooksByShelf(books: Book[], max = 4): Map<number, Book[]> {
+  const m = new Map<number, Book[]>();
+  for (const b of books) {
+    if (b.shelf_id == null) continue;
+    const list = m.get(b.shelf_id);
+    if (list == null) m.set(b.shelf_id, [b]);
+    else if (list.length < max) list.push(b);
+  }
+  return m;
+}
+
 /** 回收站剩余保留天数：0=永不；负数不会出现（后端到期即清） */
 export function trashRemainingDays(deletedAt: number, retentionDays: number, now: number): number | null {
   if (retentionDays <= 0) return null;

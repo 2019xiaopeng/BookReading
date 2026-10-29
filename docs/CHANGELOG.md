@@ -10,7 +10,13 @@
 - **新命令**：get_book、set_settings 批量、book_locations 表（EPUB locations 持久化）、reading_sessions 表（阅读时长）、export_annotations（Markdown 导出）、高亮 text 列迁移（note 回归纯笔记）
 - **窗口**：记住大小/位置/最大化（tauri-plugin-window-state）；minWidth 720 / minHeight 480
 
+### 批次 21 · 书架前端性能（2026-10-30）
+- **书卡**：BookCard 组件化 + React.memo + content-visibility 三档；封面 lazy/async 解码
+- **封面管线**：useCoverUrls 播种缓存（回页不闪）、50ms 合帧广播、并发上限 6 + 视口优先调度、只加载当前书架；优先消费缩略档（缺失回退原图）
+- **四宫格书架卡**：固定取前 4 本 + 骨架占位，不再随加载顺序洗牌
+- **自愈循环**：元数据批量修复后一次刷新（原每本全量重拉）
 
+## v2.0.0 · 2026-10-28
 
 首个公开发布版。从单格式 EPUB 阅读器起步，经 2026 年 5 月基础建设与 10 月路线图十四个批次迭代，成为覆盖 EPUB / TXT / 漫画 / PDF 的 Windows 桌面全格式阅读器。以下按批次归纳，完整过程见 `docs/superpowers/plans/`。
 

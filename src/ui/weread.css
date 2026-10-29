@@ -2627,3 +2627,54 @@ input[type="range"]:focus-visible {
     width: 128px;
   }
 }
+
+/* ---- v2.5.0 书架滚动卡（交付文档阶段一 §1）：视口外书卡跳过渲染 + 封面就绪过渡 + 四宫格骨架 ---- */
+
+/* 视口外书卡跳过渲染/命中测试外的布局量（contain-intrinsic-size 给密度三档预估格子尺寸；
+   auto 前缀记住首次渲染后的实际尺寸，滚动条不随启用/跳过来回跳） */
+.wr-book-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px 132px;
+}
+
+.wr-book-grid--large .wr-book-card {
+  contain-intrinsic-size: auto 320px 168px;
+}
+
+.wr-book-grid--xl .wr-book-card {
+  contain-intrinsic-size: auto 420px 204px;
+}
+
+/* 封面就绪过渡：img 淡入、占位文字淡出但保留 DOM（同一容器内 opacity 切换，不卸载占位）。
+   仅命中带 data-loaded 的 img（书卡封面），收藏页等未标记的封面不受影响 */
+.wr-cover > img[data-loaded] {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.wr-cover > img[data-loaded="true"] {
+  opacity: 1;
+}
+
+.wr-cover-text[data-faded] {
+  transition: opacity 120ms ease;
+}
+
+.wr-cover-text[data-faded="true"] {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wr-cover > img[data-loaded],
+  .wr-cover-text[data-faded] {
+    transition: none;
+  }
+}
+
+/* 四宫格骨架：该书前 4 本的封面未就绪时的素色占位（--m2 token 未建，用现有 ink 系变量）；
+   无封面书不渲染格子，保持主题渐变空格（与不足 4 本时的表现一致） */
+.wr-shelf-grid .wr-shelf-skeleton {
+  border-radius: 2px;
+  background: rgba(var(--wr-ink-rgb), 0.08);
+  box-shadow: inset 0 0 0 1px var(--wr-hairline);
+}

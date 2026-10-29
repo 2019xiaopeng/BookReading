@@ -1,9 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import type { Shelf } from "../tauri/invoke";
+import type { Book, Shelf } from "../tauri/invoke";
 import {
   countByShelf,
   descendantIds,
+  firstBooksByShelf,
   shelfPath,
   shelfTreeRows,
   sortShelves,
@@ -68,6 +69,27 @@ describe("countByShelf", () => {
     ]);
     expect(m.get(1)).toBe(2);
     expect(m.get(2)).toBe(1);
+    expect(m.size).toBe(2);
+  });
+});
+
+describe("firstBooksByShelf", () => {
+  const bk = (id: string, shelfId: number | null): Book => ({ id, shelf_id: shelfId }) as Book;
+
+  test("fixed first 4 per shelf in library order, root books skipped", () => {
+    const m = firstBooksByShelf([
+      bk("a", 1),
+      bk("b", 2),
+      bk("c", 1),
+      bk("d", 1),
+      bk("e", 1),
+      bk("f", 1), // 第 5 本，不入架 1 的四宫格
+      bk("g", null),
+      bk("h", 1),
+    ]);
+    // 选择与封面加载状态无关：固定 a/c/d/e，不随到达顺序洗牌
+    expect(m.get(1)!.map((b) => b.id)).toEqual(["a", "c", "d", "e"]);
+    expect(m.get(2)!.map((b) => b.id)).toEqual(["b"]);
     expect(m.size).toBe(2);
   });
 });

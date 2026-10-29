@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -31,12 +31,15 @@ import {
 } from "../tauri/invoke";
 import { needsMetadataRepair } from "../library/metadataRepair";
 import { readingStatus, type ReadingStatus } from "../library/readingStatus";
+import { formatAuthor, formatTitle } from "../library/bookFormat";
 import BookDetailsDialog from "../library/BookDetailsDialog";
+import BookCard from "../library/BookCard";
 import { BatchTagDialog, ManageTagsDialog, TagFilterMenu } from "../library/TagDialogs";
 import StatusFilterMenu from "../library/StatusFilterMenu";
 import {
   countByShelf,
   descendantIds,
+  firstBooksByShelf,
   shelfPath,
   shelfTreeRows,
   sortShelves,
@@ -50,19 +53,7 @@ import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
 import AppShell, { setShelvesCache, useShellShelves } from "../ui/AppShell";
 import { showAlert, showConfirm } from "../ui/dialog";
-import { IconBook, IconFolder, IconImage, IconMore, IconPin, IconRefresh, IconTrash } from "../ui/icons";
-
-function formatTitle(book: Book): string {
-  return book.title?.trim() || "未命名";
-}
-
-function formatAuthor(book: Book): string {
-  return book.author?.trim() || "未知作者";
-}
-
-function progressText(book: Book): string {
-  return typeof book.reading_percent === "number" ? `读到 ${Math.round(book.reading_percent * 100)}%` : "未读";
-}
+import { IconBook, IconFolder, IconImage, IconRefresh, IconTrash } from "../ui/icons";
 
 type SortKey = "recent" | "title" | "added" | "custom";
 
@@ -116,8 +107,6 @@ export default function LibraryPage() {
   const menuTriggerRef = useRef<HTMLElement | null>(null);
   const repairingRef = useRef<Set<string>>(new Set());
   const attemptedRef = useRef<Set<string>>(new Set());
-  const coverUrls = useCoverUrls(books);
-  const trashCoverUrls = useCoverUrls(trash);
 
   // 回收站视图与当前书架都走 URL（?trash=1 / ?shelf=id），侧栏树与面包屑同源
   const trashView = searchParams.get("trash") === "1";
@@ -137,20 +126,8 @@ export default function LibraryPage() {
     () => books.filter((b) => (b.shelf_id ?? null) === currentShelfId),
     [books, currentShelfId],
   );
-  // 书架卡四宫格：每架前 4 张已就绪的封面（无封面/未加载的书跳过，格子由主题渐变占位）
-  const coversByShelf = useMemo(() => {
-    const m = new Map<number, { id: string; url: string }[]>();
-    for (const b of books) {
-      const url = b.cover_path ? coverUrls[b.cover_path] : undefined;
-      if (!url || b.shelf_id == null) continue;
-      const list = m.get(b.shelf_id) ?? [];
-      if (list.length < 4) {
-        list.push({ id: b.id, url });
-        m.set(b.shelf_id, list);
-      }
-    }
-    return m;
-  }, [books, coverUrls]);
+  // 书架卡四宫格：固定每架前 4 本（与封面加载状态无关，不随到达顺序洗牌）；未就绪格显示骨架
+  const topBooksByShelf = useMemo(() => firstBooksByShelf(books), [books]);
 
   const booksFiltered = useMemo(() => {
     let list = shelfBooks;
@@ -185,12 +162,26 @@ export default function LibraryPage() {
     });
   }, [shelfBooks, query, tagFilter, statusFilter, sortKey, sortAsc]);
 
-  async function refresh() {
+  // 封面请求集 = 当前过滤视图 + 子书架卡固定前 4 本（书架卡也要封面）；不再对全库/回收站急加载
+  const coverItems = useMemo(() => {
+    const items: { id: string; cover_path: string | null }[] = [];
+    for (const s of subShelves) {
+      for (const b of topBooksByShelf.get(s.id) ?? []) items.push(b);
+    }
+    for (const b of booksFiltered) items.push(b);
+    return items;
+  }, [subShelves, topBooksByShelf, booksFiltered]);
+  // preferThumb：书架封面走 480px 缩略档（缺失自动回退原图，见 useCoverUrls）；详情页大封面不在此列
+  const coverUrls = useCoverUrls(coverItems, { preferThumb: true });
+  const trashCoverUrls = useCoverUrls(trash, { preferThumb: true });
+
+  // refresh 只依赖稳定的 invoke 与 setter，引用恒定（供 useCallback 依赖与自愈批处理使用）
+  const refresh = useCallback(async () => {
     const [list, shelfList, tagList] = await Promise.all([listBooks(), listShelves(), listTags()]);
     setBooks(list);
     setShelvesCache(shelfList);
     setTags(tagList);
-  }
+  }, []);
 
   async function refreshTrash() {
     setTrash(await listTrash());
@@ -236,35 +227,41 @@ export default function LibraryPage() {
   }
 
   // 批次18：打开书时记下来源书架，阅读页返回按钮据此回到该 ?shelf= 视图
-  function openBook(id: string) {
-    navigate(`/read/${id}`, { state: { fromShelf: currentShelfId } });
-  }
+  const openBook = useCallback(
+    (id: string) => {
+      navigate(`/read/${id}`, { state: { fromShelf: currentShelfId } });
+    },
+    [navigate, currentShelfId],
+  );
 
+  // 元数据自愈批处理：一轮只发起修复并收集结果，全部完成后 refresh 一次
+  // （此前每修一本 await refresh() 全量重拉，N 本待修 = N 次整页重渲）
   useEffect(() => {
-    const pending: Promise<void>[] = [];
-    for (const b of books) {
-      if (!needsMetadataRepair(b)) continue;
-      if (attemptedRef.current.has(b.id)) continue;
-      if (repairingRef.current.has(b.id)) continue;
+    const targets = books.filter(
+      (b) => !attemptedRef.current.has(b.id) && !repairingRef.current.has(b.id) && needsMetadataRepair(b),
+    );
+    if (targets.length === 0) return;
+    let cancelled = false;
+    for (const b of targets) {
       repairingRef.current.add(b.id);
       attemptedRef.current.add(b.id);
-      pending.push(
-        (async () => {
-          try {
-            await repairBookMetadata(b.id);
-            await refresh();
-          } catch (e) {
-            logFrontend(`meta: repair failed ${b.id} ${String(e)}`);
-          } finally {
-            repairingRef.current.delete(b.id);
-          }
-        })(),
-      );
     }
+    void (async () => {
+      try {
+        await Promise.all(
+          targets.map((b) =>
+            repairBookMetadata(b.id).catch((e) => logFrontend(`meta: repair failed ${b.id} ${String(e)}`)),
+          ),
+        );
+        if (!cancelled) await refresh();
+      } finally {
+        for (const b of targets) repairingRef.current.delete(b.id);
+      }
+    })();
     return () => {
-      void Promise.allSettled(pending);
+      cancelled = true;
     };
-  }, [books]);
+  }, [books, refresh]);
 
   // menu keyboard semantics: open moves focus in, arrows cycle, close returns focus to the trigger
   function openMenu(next: MenuState, trigger: EventTarget | null) {
@@ -451,8 +448,8 @@ export default function LibraryPage() {
     try {
       const newPath = await setBookCover(book.id, picked);
       if (book.cover_path) invalidateCoverUrl(book.cover_path);
-      // 同路径替换时 wantedKey 不变，hook 不会自发重取，显式重取新封面
-      requestCoverUrl(newPath);
+      // 同路径替换时 wantedKey 不变，hook 不会自发重取，显式重取新封面；priority 插队（用户刚选的图不等批量队列）
+      requestCoverUrl(newPath, { priority: true });
       await refresh();
     } catch (e) {
       await showAlert("设置封面失败", String(e));
@@ -482,22 +479,28 @@ export default function LibraryPage() {
     }
   }
 
-  async function runUpdates(reqs: UpdateBookMetadataRequest[]) {
-    setLoading(true);
-    try {
-      for (const req of reqs) await updateBookMetadata(req);
-      await refresh();
-    } catch (e) {
-      await showAlert("操作失败", String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
+  const runUpdates = useCallback(
+    async (reqs: UpdateBookMetadataRequest[]) => {
+      setLoading(true);
+      try {
+        for (const req of reqs) await updateBookMetadata(req);
+        await refresh();
+      } catch (e) {
+        await showAlert("操作失败", String(e));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [refresh],
+  );
 
-  function onChipUpdate(req: UpdateBookMetadataRequest) {
-    if (loading) return;
-    void runUpdates([req]);
-  }
+  const onChipUpdate = useCallback(
+    (req: UpdateBookMetadataRequest) => {
+      if (loading) return;
+      void runUpdates([req]);
+    },
+    [loading, runUpdates],
+  );
 
   function onRenameBook(book: Book) {
     setPrompt({
@@ -855,14 +858,14 @@ export default function LibraryPage() {
 
   // ---- 批量选择 ----
 
-  function toggleSelected(id: string) {
+  const toggleSelected = useCallback((id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }
+  }, []);
 
   function exitSelect() {
     setSelectMode(false);
@@ -970,6 +973,24 @@ export default function LibraryPage() {
   // 移动树选择对话框里要排除的书架（移动书架时不能选自身/后代）
   const moveExclude =
     moveDialog?.kind === "shelf" ? descendantIds(shelves, moveDialog.shelfId) : null;
+
+  // BookCard 事件全部引用恒定：memo 只随可见 props 重渲（任意 state 变化不再全卡片重渲）。
+  // startCardDrag 闭包依赖多（排序/拖放目标/书架树），经 ref 转发最新实现
+  const startCardDragRef = useRef(startCardDrag);
+  startCardDragRef.current = startCardDrag;
+  const onCardPointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLElement>, book: Book, coverUrl?: string) =>
+      startCardDragRef.current(e, { kind: "book", id: book.id, label: formatTitle(book), cover: coverUrl }),
+    [],
+  );
+  const onCardPin = useCallback(
+    (book: Book, pinned: boolean) => onChipUpdate({ book_id: book.id, pinned }),
+    [onChipUpdate],
+  );
+  const onCardMenu = useCallback((book: Book, anchor: HTMLElement) => {
+    const r = anchor.getBoundingClientRect();
+    openMenu({ kind: "book", x: r.right, y: r.bottom + 4, book }, anchor);
+  }, []);
 
   const nowSec = Date.now() / 1000;
 
@@ -1131,7 +1152,9 @@ export default function LibraryPage() {
               return (
                 <div key={b.id} className="wr-trash-row">
                   <div className="wr-trash-cover" aria-hidden="true">
-                    {b.cover_path && trashCoverUrls[b.cover_path] ? <img src={trashCoverUrls[b.cover_path]} alt="" /> : null}
+                    {b.cover_path && trashCoverUrls[b.cover_path] ? (
+                      <img src={trashCoverUrls[b.cover_path]} alt="" loading="lazy" decoding="async" />
+                    ) : null}
                     {!b.cover_path || !trashCoverUrls[b.cover_path] ? <IconBook width={18} height={18} /> : null}
                   </div>
                   <div className="wr-trash-info">
@@ -1224,9 +1247,15 @@ export default function LibraryPage() {
             >
               <div className="wr-cover" aria-hidden="true">
                 <div className="wr-shelf-grid">
-                  {(coversByShelf.get(s.id) ?? []).map((c) => (
-                    <img key={c.id} src={c.url} alt="" />
-                  ))}
+                  {(topBooksByShelf.get(s.id) ?? []).map((b) => {
+                    if (!b.cover_path) return null;
+                    const url = coverUrls[b.cover_path];
+                    return url ? (
+                      <img key={b.id} src={url} alt="" loading="lazy" decoding="async" />
+                    ) : (
+                      <div key={b.id} className="wr-shelf-skeleton" />
+                    );
+                  })}
                 </div>
                 {count > 4 ? <span className="wr-shelf-badge">+{count - 4}</span> : null}
               </div>
@@ -1239,106 +1268,21 @@ export default function LibraryPage() {
           })}
 
           {booksFiltered.map((b) => (
-            <div
+            <BookCard
               key={b.id}
-              className="wr-book-card"
-              role="button"
-              tabIndex={0}
-              data-selected={selectMode && selected.has(b.id)}
-              data-drop="book"
-              data-book-id={b.id}
-              data-dragging={dragBookId === b.id}
-              data-pop={popKey === `book:${b.id}`}
-              onPointerDown={(e) =>
-                startCardDrag(e, {
-                  kind: "book",
-                  id: b.id,
-                  label: formatTitle(b),
-                  cover: b.cover_path ? coverUrls[b.cover_path] : undefined,
-                })
-              }
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  if (selectMode) toggleSelected(b.id);
-                  else openBook(b.id);
-                }
-              }}
-              onClick={(e) => {
-                if ((e.target as HTMLElement).closest("button")) return;
-                if (selectMode) toggleSelected(b.id);
-                else openBook(b.id);
-              }}
-            >
-              {selectMode ? (
-                <button
-                  className="wr-select-check"
-                  role="checkbox"
-                  aria-checked={selected.has(b.id)}
-                  aria-label={`选择《${formatTitle(b)}》`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleSelected(b.id);
-                  }}
-                >
-                  {selected.has(b.id) ? "✓" : ""}
-                </button>
-              ) : null}
-
-              <div className="wr-cover">
-                {b.cover_path && coverUrls[b.cover_path] ? <img src={coverUrls[b.cover_path]} alt="" /> : null}
-                {!b.cover_path || !coverUrls[b.cover_path] ? (
-                  <div className="wr-cover-text">
-                    <div className="wr-cover-title">{formatTitle(b)}</div>
-                    <div className="wr-cover-author">{formatAuthor(b)}</div>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="wr-meta">
-                <div className="wr-title" title={formatTitle(b)}>{formatTitle(b)}</div>
-                <div className="wr-author" title={`${formatAuthor(b)} · ${progressText(b)}`}>{formatAuthor(b)}</div>
-                {typeof b.reading_percent === "number" ? (
-                  <div className="wr-chip-row">
-                    <div className="wr-chip">
-                      <span className="wr-live-dot" aria-hidden="true" />
-                      <span>读到 {Math.round(b.reading_percent * 100)}%</span>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-
-              {!selectMode ? (
-                <div className="wr-card-tools" data-show={!!b.pinned_at}>
-                  <button
-                    className="wr-mini-btn"
-                    aria-label={b.pinned_at ? "取消置顶" : "置顶"}
-                    aria-pressed={!!b.pinned_at}
-                    data-pinned={!!b.pinned_at}
-                    disabled={loading}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onChipUpdate({ book_id: b.id, pinned: !b.pinned_at });
-                    }}
-                  >
-                    <IconPin fill={b.pinned_at ? "currentColor" : "none"} />
-                  </button>
-                  <button
-                    className="wr-mini-btn"
-                    aria-label="更多操作"
-                    aria-haspopup="menu"
-                    disabled={loading}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const r = e.currentTarget.getBoundingClientRect();
-                      openMenu({ kind: "book", x: r.right, y: r.bottom + 4, book: b }, e.currentTarget);
-                    }}
-                  >
-                    <IconMore />
-                  </button>
-                </div>
-              ) : null}
-            </div>
+              book={b}
+              coverUrl={b.cover_path ? coverUrls[b.cover_path] : undefined}
+              selectMode={selectMode}
+              selected={selected.has(b.id)}
+              dragging={dragBookId === b.id}
+              pop={popKey === `book:${b.id}`}
+              loading={loading}
+              onCardPointerDown={onCardPointerDown}
+              onCardActivate={openBook}
+              onCardSelectToggle={toggleSelected}
+              onCardPin={onCardPin}
+              onCardMenu={onCardMenu}
+            />
           ))}
 
           {booksFiltered.length === 0 && subShelves.length === 0 ? (
@@ -1399,7 +1343,7 @@ export default function LibraryPage() {
           aria-hidden="true"
         >
           {dragGhost.cover ? (
-            <img src={dragGhost.cover} alt="" draggable={false} />
+            <img src={dragGhost.cover} alt="" loading="lazy" decoding="async" draggable={false} />
           ) : dragGhost.shelf ? (
             <IconFolder width={20} height={20} />
           ) : (
