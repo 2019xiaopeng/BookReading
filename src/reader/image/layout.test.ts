@@ -8,11 +8,13 @@ import {
   defaultImageReaderSettings,
   displayOrder,
   imageCfi,
+  imageSettingsKey,
   maxWidthForStage,
   normalizeImageReaderSettings,
   pagePercent,
   panClamp,
   parseImageCfi,
+  resolveImageSettings,
   slideDirection,
   spreadIndexForPage,
   turnKeyDirection,
@@ -42,6 +44,22 @@ describe("buildSpreads", () => {
 
   test("zero pages yields no spreads", () => {
     expect(buildSpreads(0, [], "double")).toEqual([]);
+  });
+
+  test("E8 offset=1：第 0 页独占一组，从第 1 页起配对（日漫封面）", () => {
+    expect(buildSpreads(5, [], "double", 1)).toEqual([[0], [1, 2], [3, 4]]);
+    expect(buildSpreads(4, [], "double", 1)).toEqual([[0], [1, 2], [3]]);
+    expect(buildSpreads(1, [], "double", 1)).toEqual([[0]]);
+    expect(buildSpreads(0, [], "double", 1)).toEqual([]);
+  });
+
+  test("E8 offset=1 不改变默认配对（缺省 offset=0）且 single 布局忽略 offset", () => {
+    expect(buildSpreads(4, [], "double")).toEqual([[0, 1], [2, 3]]);
+    expect(buildSpreads(4, [], "single", 1)).toEqual([[0], [1], [2], [3]]);
+  });
+
+  test("E8 offset=1 时后续宽页仍独占整组", () => {
+    expect(buildSpreads(5, [false, false, true, false, false], "double", 1)).toEqual([[0], [1], [2], [3, 4]]);
   });
 });
 
@@ -129,7 +147,15 @@ describe("normalizeImageReaderSettings", () => {
       pageAnimation: "slide",
       webtoonWidth: 75,
       autoScrollSpeed: 60,
+      doubleOffset: 0,
     });
+  });
+
+  test("E8: doubleOffset 只认 0|1，其余回 0", () => {
+    expect(normalizeImageReaderSettings({ doubleOffset: 1 }).doubleOffset).toBe(1);
+    expect(normalizeImageReaderSettings({ doubleOffset: 0 }).doubleOffset).toBe(0);
+    expect(normalizeImageReaderSettings({ doubleOffset: 2 }).doubleOffset).toBe(0);
+    expect(normalizeImageReaderSettings({ doubleOffset: true }).doubleOffset).toBe(0);
   });
 
   test("batch5: pageAnimation keeps only none/slide, missing falls back to slide", () => {
@@ -248,5 +274,39 @@ describe("v2.5 maxWidthForStage（大页降采样上限）", () => {
     const a = maxWidthForStage(800, 1);
     const b = maxWidthForStage(830, 1);
     expect(a).toBe(b);
+  });
+});
+
+describe("E2 按书记忆（imgset:<bookId> 覆盖键）", () => {
+  test("imageSettingsKey 生成 imgset:<bookId>", () => {
+    expect(imageSettingsKey("b1")).toBe("imgset:b1");
+    expect(imageSettingsKey("uuid-4f2c")).toBe("imgset:uuid-4f2c");
+  });
+
+  test("resolveImageSettings：合法覆盖生效，未覆盖字段沿用全局默认", () => {
+    const merged = resolveImageSettings(defaultImageReaderSettings, { rtl: true, layout: "double", doubleOffset: 1 });
+    expect(merged.rtl).toBe(true);
+    expect(merged.layout).toBe("double");
+    expect(merged.doubleOffset).toBe(1);
+    expect(merged.fit).toBe(defaultImageReaderSettings.fit);
+    expect(merged.mode).toBe(defaultImageReaderSettings.mode);
+    expect(merged.autoScrollSpeed).toBe(defaultImageReaderSettings.autoScrollSpeed);
+  });
+
+  test("resolveImageSettings：settings 表里的 JSON 字符串同样可解析", () => {
+    const merged = resolveImageSettings(defaultImageReaderSettings, '{"fit":"width","webtoonWidth":92}');
+    expect(merged.fit).toBe("width");
+    expect(merged.webtoonWidth).toBe(92);
+  });
+
+  test("resolveImageSettings：非法值丢弃、webtoonWidth 钳 40-100、坏 JSON/空覆盖回全局", () => {
+    expect(resolveImageSettings(defaultImageReaderSettings, { rtl: "yes", layout: "auto", fit: "huge" })).toEqual(
+      defaultImageReaderSettings,
+    );
+    expect(resolveImageSettings(defaultImageReaderSettings, "not json")).toEqual(defaultImageReaderSettings);
+    expect(resolveImageSettings(defaultImageReaderSettings, null)).toEqual(defaultImageReaderSettings);
+    expect(resolveImageSettings(defaultImageReaderSettings, { webtoonWidth: 5 }).webtoonWidth).toBe(40);
+    expect(resolveImageSettings(defaultImageReaderSettings, { webtoonWidth: 400 }).webtoonWidth).toBe(100);
+    expect(resolveImageSettings(defaultImageReaderSettings, { doubleOffset: 3 }).doubleOffset).toBe(0);
   });
 });

@@ -81,6 +81,18 @@ export default function ImageSettingsPanel({ value, onChange, pdf = false }: Pro
         onPick={(layout: ImagePageLayout) => onChange({ ...value, layout })}
       />
 
+      {value.layout === "double" && !off ? (
+        <Seg
+          label="双页偏移"
+          value={value.doubleOffset === 1 ? "1" : "0"}
+          options={[
+            { value: "0", text: "无" },
+            { value: "1", text: "封面独占" },
+          ]}
+          onPick={(v) => onChange({ ...value, doubleOffset: v === "1" ? 1 : 0 })}
+        />
+      ) : null}
+
       <Seg
         label="阅读方向"
         value={value.rtl ? "rtl" : "ltr"}

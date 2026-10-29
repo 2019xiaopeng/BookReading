@@ -12,6 +12,7 @@ import {
   getSettings,
   listBooks,
   listImageSubdirs,
+  listReadingTimes,
   listShelves,
   listTags,
   listTrash,
@@ -31,6 +32,7 @@ import {
 } from "../tauri/invoke";
 import { needsMetadataRepair } from "../library/metadataRepair";
 import { readingStatus, type ReadingStatus } from "../library/readingStatus";
+import { formatReadingTime } from "../library/readingTime";
 import { formatAuthor, formatTitle } from "../library/bookFormat";
 import BookDetailsDialog from "../library/BookDetailsDialog";
 import BookCard from "../library/BookCard";
@@ -77,6 +79,8 @@ export default function LibraryPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [books, setBooks] = useState<Book[]>([]);
+  // E3 阅读时长：bookId → 累计秒数（书卡“已读 X 小时 Y 分”chip）
+  const [readingTimes, setReadingTimes] = useState<Record<string, number>>({});
   // 书架树与侧栏同源（AppShell 模块单例）：本页增删改后 refresh 推写，两侧零闪烁同步
   const shelves = useShellShelves();
   const [tags, setTags] = useState<Tag[]>([]);
@@ -130,8 +134,9 @@ export default function LibraryPage() {
   const topBooksByShelf = useMemo(() => firstBooksByShelf(books), [books]);
 
   const booksFiltered = useMemo(() => {
-    let list = shelfBooks;
     const q = query.trim().toLowerCase();
+    // E6 全局搜索：有搜索词时源改全库 books（跨书架命中直接以书卡列出，点击正常打开）；无搜索词仍按当前书架
+    let list = q ? books : shelfBooks;
     if (q) {
       // 搜索匹配：书名 + 作者 + 文件名（library_path basename）
       list = list.filter((b) => {
@@ -160,7 +165,7 @@ export default function LibraryPage() {
       if (sortKey === "added") return dir * (a.added_at - b.added_at);
       return dir * ((a.last_opened_at ?? a.added_at) - (b.last_opened_at ?? b.added_at));
     });
-  }, [shelfBooks, query, tagFilter, statusFilter, sortKey, sortAsc]);
+  }, [books, shelfBooks, query, tagFilter, statusFilter, sortKey, sortAsc]);
 
   // 封面请求集 = 当前过滤视图 + 子书架卡固定前 4 本（书架卡也要封面）；不再对全库/回收站急加载
   const coverItems = useMemo(() => {
@@ -202,6 +207,10 @@ export default function LibraryPage() {
         const r = Number(m.trash_retention_days);
         if (Number.isFinite(r) && r >= 0) setRetentionDays(r);
       })
+      .catch(() => {});
+    // E3：时长随书库一起拉（回书库页重挂即刷新，阅读中每 60s 落库一次）
+    listReadingTimes()
+      .then((m) => setReadingTimes(m))
       .catch(() => {});
   }, []);
 
@@ -993,6 +1002,11 @@ export default function LibraryPage() {
   }, []);
 
   const nowSec = Date.now() / 1000;
+  // E3 书卡时长 chip 文案（不足 1 分钟不显示）
+  const readingTimeText = (id: string): string | null => {
+    const t = formatReadingTime(readingTimes[id] ?? 0);
+    return t ? `已读 ${t}` : null;
+  };
 
   return (
     <AppShell
@@ -1272,6 +1286,7 @@ export default function LibraryPage() {
               key={b.id}
               book={b}
               coverUrl={b.cover_path ? coverUrls[b.cover_path] : undefined}
+              readingTimeText={readingTimeText(b.id)}
               selectMode={selectMode}
               selected={selected.has(b.id)}
               dragging={dragBookId === b.id}

@@ -311,6 +311,7 @@ export type Highlight = {
   cfi_range: string;
   color: string;
   note: string | null;
+  text: string | null;
   created_at: number;
 };
 
@@ -335,8 +336,10 @@ export async function addHighlight(
   cfiRange: string,
   color: string,
   note: string | null,
+  /** E5：选中文本入 text 列，note 回归纯笔记语义 */
+  text?: string | null,
 ): Promise<Highlight> {
-  return invoke<Highlight>("add_highlight", { bookId, cfiRange, color, note });
+  return invoke<Highlight>("add_highlight", { bookId, cfiRange, color, note, text });
 }
 
 export async function deleteHighlight(highlightId: string): Promise<void> {
@@ -386,4 +389,20 @@ export async function listFavoriteQuotes(params?: {
     bookId: params?.bookId ?? null,
     query: params?.query ?? null,
   });
+}
+
+// ---- E3 阅读时长 / E4 标注导出 ----
+
+export async function addReadingTime(bookId: string, seconds: number): Promise<void> {
+  return invoke<void>("add_reading_time", { bookId, seconds });
+}
+
+/** 每书累计阅读秒数（只统计未删除书） */
+export async function listReadingTimes(): Promise<Record<string, number>> {
+  return invoke<Record<string, number>>("list_reading_times");
+}
+
+/** 导出标注为 Markdown（bookId=null 导出全部书），返回实际写出路径 */
+export async function exportAnnotations(bookId: string | null, destPath: string): Promise<string> {
+  return invoke<string>("export_annotations", { bookId, destPath });
 }

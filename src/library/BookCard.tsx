@@ -15,6 +15,8 @@ import { IconMore, IconPin } from "../ui/icons";
 export type BookCardProps = {
   book: Book;
   coverUrl?: string;
+  /** E3 阅读时长 chip 文案（如“已读 3 小时 20 分”）；null/缺省不显示 */
+  readingTimeText?: string | null;
   selectMode: boolean;
   selected: boolean;
   dragging: boolean;
@@ -28,7 +30,7 @@ export type BookCardProps = {
 };
 
 function BookCardImpl(props: BookCardProps) {
-  const { book, coverUrl, selectMode, selected, dragging, pop, loading } = props;
+  const { book, coverUrl, readingTimeText, selectMode, selected, dragging, pop, loading } = props;
   const { onCardPointerDown, onCardActivate, onCardSelectToggle, onCardPin, onCardMenu } = props;
   const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
   // 图片就绪标记：url 变化（换封面）后自动回到未就绪态，重新走淡入
@@ -96,12 +98,19 @@ function BookCardImpl(props: BookCardProps) {
       <div className="wr-meta">
         <div className="wr-title" title={formatTitle(book)}>{formatTitle(book)}</div>
         <div className="wr-author" title={`${formatAuthor(book)} · ${progressText(book)}`}>{formatAuthor(book)}</div>
-        {typeof book.reading_percent === "number" ? (
+        {typeof book.reading_percent === "number" || readingTimeText ? (
           <div className="wr-chip-row">
-            <div className="wr-chip">
-              <span className="wr-live-dot" aria-hidden="true" />
-              <span>读到 {Math.round(book.reading_percent * 100)}%</span>
-            </div>
+            {typeof book.reading_percent === "number" ? (
+              <div className="wr-chip">
+                <span className="wr-live-dot" aria-hidden="true" />
+                <span>读到 {Math.round(book.reading_percent * 100)}%</span>
+              </div>
+            ) : null}
+            {readingTimeText ? (
+              <div className="wr-chip">
+                <span>{readingTimeText}</span>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

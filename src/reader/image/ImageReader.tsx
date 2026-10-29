@@ -144,8 +144,9 @@ function ImageReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated
       count,
       Array.from({ length: count }, (_, i) => wide[i] === true),
       settings.layout,
+      settings.doubleOffset,
     );
-  }, [pages, wide, settings.layout]);
+  }, [pages, wide, settings.layout, settings.doubleOffset]);
 
   useEffect(() => {
     let cancelled = false;
@@ -191,7 +192,7 @@ function ImageReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated
         const initialWide: Record<number, boolean> = {};
         for (let i = 0; i < wideArr.length; i++) if (wideArr[i]) initialWide[i] = true;
         setWide(initialWide);
-        setSpreadIndex(spreadIndexForPage(buildSpreads(names.length, wideArr, settingsRef.current.layout), start));
+        setSpreadIndex(spreadIndexForPage(buildSpreads(names.length, wideArr, settingsRef.current.layout, settingsRef.current.doubleOffset), start));
       } catch (e) {
         if (!cancelled) setError(String(e));
       }

@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { save } from "@tauri-apps/plugin-dialog";
 
 import type { Book, FavoriteQuote } from "../tauri/invoke";
-import { deleteFavoriteQuote, listBooks, listFavoriteBooks, listFavoriteQuotes, setBookFavorite } from "../tauri/invoke";
+import {
+  deleteFavoriteQuote,
+  exportAnnotations,
+  listBooks,
+  listFavoriteBooks,
+  listFavoriteQuotes,
+  setBookFavorite,
+} from "../tauri/invoke";
 import { useCoverUrls } from "../library/useCoverUrls";
 import AppShell from "../ui/AppShell";
-import { showConfirm } from "../ui/dialog";
+import { showAlert, showConfirm } from "../ui/dialog";
 import { IconBook, IconHeart, IconQuote, IconStar, IconTrash } from "../ui/icons";
 
 export default function FavoritesPage() {
@@ -27,10 +35,9 @@ export default function FavoritesPage() {
     return map;
   }, [allBooks]);
 
+  // E10：收藏书 tab 不再全量 listBooks（书名卡片自身就有 title）；allBooks 只服务摘录 tab（筛选下拉/书名映射），由 refreshQuotes 拉取
   async function refreshBooks() {
-    const [fav, all] = await Promise.all([listFavoriteBooks(), listBooks()]);
-    setFavoriteBooks(fav);
-    setAllBooks(all);
+    setFavoriteBooks(await listFavoriteBooks());
   }
 
   async function refreshQuotes() {
@@ -201,6 +208,28 @@ export default function FavoritesPage() {
               className="wr-btn wr-btn-primary"
             >
               搜索
+            </button>
+            {/* E4 导出全部标注/收藏（bookId=null 全书库） */}
+            <button
+              onClick={() => {
+                void (async () => {
+                  const dest = await save({
+                    defaultPath: "收藏摘录.md",
+                    filters: [{ name: "Markdown", extensions: ["md"] }],
+                  });
+                  if (typeof dest !== "string") return;
+                  try {
+                    const written = await exportAnnotations(null, dest);
+                    await showAlert("导出成功", written);
+                  } catch (e) {
+                    await showAlert("导出失败", String(e));
+                  }
+                })();
+              }}
+              disabled={loading}
+              className="wr-btn"
+            >
+              导出全部
             </button>
           </div>
 

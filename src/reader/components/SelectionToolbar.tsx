@@ -4,12 +4,13 @@ import { IconBookmark, IconHighlight, IconQuote } from "../../ui/icons";
 
 export type SelectionRect = { x: number; y: number; w: number; h: number };
 
-/** 锚定选区矩形的小浮动气泡：仅 高亮/收藏/笔记 三个图标钮，功能与去重逻辑在 ReaderPage 原有 handler 中不变。 */
+/** 锚定选区矩形的小浮动气泡：复制/高亮/收藏/笔记 四个图标钮，功能与去重逻辑在 ReaderPage 原有 handler 中不变。 */
 export default function SelectionToolbar(props: {
   open: boolean;
   rect: SelectionRect | null;
   /** 选区与现有高亮相交：高亮钮切换为"取消高亮"语义 */
   removeMode?: boolean;
+  onCopy: () => void;
   onHighlight: () => void;
   onFavorite: () => void;
   onNote: () => void;
@@ -78,6 +79,12 @@ export default function SelectionToolbar(props: {
           : { top: -9999, left: -9999, opacity: 0, pointerEvents: "none" }
       }
     >
+      <button type="button" aria-label="复制" title="复制" onClick={props.onCopy}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.6" />
+          <path d="M15 9V6.5A2.5 2.5 0 0 0 12.5 4h-6A2.5 2.5 0 0 0 4 6.5v6A2.5 2.5 0 0 0 6.5 15H9" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+        </svg>
+      </button>
       <button
         type="button"
         aria-label={props.removeMode ? "取消高亮" : "高亮"}

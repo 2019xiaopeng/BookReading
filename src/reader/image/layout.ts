@@ -11,6 +11,7 @@ export type ImageReaderSettings = {
   pageAnimation: ImagePageAnimation;
   webtoonWidth: number; // percent of the strip width, 40-100
   autoScrollSpeed: number; // webtoon auto-scroll px/s, 20-240 (B11)
+  doubleOffset: 0 | 1; // E8 双页偏移：1=第 0 页（封面）独占一组，从第 1 页起配对
 };
 
 export type TurnDirection = "prev" | "next";
@@ -25,6 +26,7 @@ export const defaultImageReaderSettings: ImageReaderSettings = {
   pageAnimation: "slide",
   webtoonWidth: 75,
   autoScrollSpeed: 60,
+  doubleOffset: 0,
 };
 
 export function normalizeImageReaderSettings(raw: unknown): ImageReaderSettings {
@@ -47,7 +49,47 @@ export function normalizeImageReaderSettings(raw: unknown): ImageReaderSettings 
     pageAnimation: o.pageAnimation === "none" ? "none" : "slide",
     webtoonWidth: Math.min(100, Math.max(40, width)),
     autoScrollSpeed: Math.min(240, Math.max(20, Math.round(speed))),
+    doubleOffset: o.doubleOffset === 1 ? 1 : 0,
   };
+}
+
+// ---- E2 漫画方向/双页按书记忆：settings 键 imgset:<bookId> 覆盖全局默认 ----
+
+/** 书级覆盖键名（settings 表存 JSON，字段可选、按书钉住） */
+export function imageSettingsKey(bookId: string): string {
+  return `imgset:${bookId}`;
+}
+
+export type ImageSettingsOverride = Partial<
+  Pick<ImageReaderSettings, "rtl" | "layout" | "fit" | "webtoonWidth" | "doubleOffset">
+>;
+
+/** 覆盖键解析：字符串/对象皆可，未知字段与非法值丢弃（webtoonWidth 钳 40-100） */
+export function parseImageSettingsOverride(raw: unknown): ImageSettingsOverride {
+  let v: unknown = raw;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return {};
+    }
+  }
+  if (typeof v !== "object" || v === null) return {};
+  const o = v as Record<string, unknown>;
+  const out: ImageSettingsOverride = {};
+  if (o.rtl === true || o.rtl === false) out.rtl = o.rtl;
+  if (o.layout === "single" || o.layout === "double") out.layout = o.layout;
+  if (o.fit === "height" || o.fit === "width" || o.fit === "original") out.fit = o.fit;
+  if (typeof o.webtoonWidth === "number" && Number.isFinite(o.webtoonWidth)) {
+    out.webtoonWidth = Math.min(100, Math.max(40, o.webtoonWidth));
+  }
+  if (o.doubleOffset === 0 || o.doubleOffset === 1) out.doubleOffset = o.doubleOffset;
+  return out;
+}
+
+/** 生效设置 = 全局 image_reader_settings 默认值 ← 书级 imgset:<bookId> 覆盖 */
+export function resolveImageSettings(global: ImageReaderSettings, perBook: unknown): ImageReaderSettings {
+  return { ...global, ...parseImageSettingsOverride(perBook) };
 }
 
 /** 宽页预判：有页元数据时按宽/高 > WIDE_PAGE_RATIO 直接判 wide（spreads 构建不再等解码后探测换组）；元数据缺失/非法的页回 false（解码探测兜底）。 */
@@ -67,8 +109,16 @@ export function maxWidthForStage(stageWidth: number, devicePixelRatio: number): 
   return Math.max(256, Math.round(raw / 256) * 256);
 }
 
-/** Pages grouped per screen; in double mode a wide page (ratio > WIDE_PAGE_RATIO) claims the full spread. */
-export function buildSpreads(pageCount: number, widePages: boolean[], layout: ImagePageLayout): number[][] {
+/**
+ * Pages grouped per screen; in double mode a wide page (ratio > WIDE_PAGE_RATIO) claims the full spread.
+ * E8 offset=1（日漫封面独占）：第 0 页独占一组，从第 1 页起配对；single 布局 offset 无意义。
+ */
+export function buildSpreads(
+  pageCount: number,
+  widePages: boolean[],
+  layout: ImagePageLayout,
+  offset: 0 | 1 = 0,
+): number[][] {
   const count = Math.max(0, Math.floor(pageCount));
   if (layout === "single") {
     const single: number[][] = [];
@@ -77,7 +127,8 @@ export function buildSpreads(pageCount: number, widePages: boolean[], layout: Im
   }
   const spreads: number[][] = [];
   let pending: number | null = null;
-  for (let i = 0; i < count; i++) {
+  if (offset === 1 && count > 0) spreads.push([0]);
+  for (let i = offset === 1 && count > 0 ? 1 : 0; i < count; i++) {
     if (widePages[i]) {
       if (pending !== null) {
         spreads.push([pending]);

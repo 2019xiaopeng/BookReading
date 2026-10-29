@@ -1,15 +1,18 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { save } from "@tauri-apps/plugin-dialog";
 
 import type { Book } from "../tauri/invoke";
 import {
   addBookmark,
   addFavoriteQuote,
   addHighlight,
+  addReadingTime,
   deleteBookmark,
   deleteFavoriteQuote,
   deleteHighlight,
+  exportAnnotations,
   getBook,
   getReadingState,
   getSettings,
@@ -48,11 +51,15 @@ import PagesPanel from "../reader/image/PagesPanel";
 import {
   defaultImageReaderSettings,
   imageCfi,
+  imageSettingsKey,
   normalizeImageReaderSettings,
   pagePercent,
   parseImageCfi,
+  parseImageSettingsOverride,
+  resolveImageSettings,
   turnKeyDirection,
   type ImageReaderSettings,
+  type ImageSettingsOverride,
 } from "../reader/image/layout";
 import PdfReader, { type PdfReaderApi } from "../reader/pdf/PdfReader";
 import { parsePdfCfi, pdfCfi } from "../reader/pdf/layout";
@@ -71,7 +78,7 @@ import {
 import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
-import { showConfirm } from "../ui/dialog";
+import { showAlert, showConfirm } from "../ui/dialog";
 import { useElementSize } from "../ui/useElementSize";
 import { useImmersiveChrome } from "../ui/useImmersiveChrome";
 import { getBackgroundUrl } from "../ui/appBackground";
@@ -295,6 +302,8 @@ export default function ReaderPage() {
   const [imageSettings, setImageSettings] = useState<ImageReaderSettings>(defaultImageReaderSettings);
   // 批次16：阅读设置按格式分离——漫画 image_reader_settings / PDF pdf_reader_settings 各自独立记忆
   const [pdfSettings, setPdfSettings] = useState<ImageReaderSettings>(defaultImageReaderSettings);
+  // E2 按书记忆：imgset:<bookId> 覆盖键（rtl/layout/fit/webtoonWidth/doubleOffset），叠加在全局默认之上
+  const [imgOverride, setImgOverride] = useState<ImageSettingsOverride>({});
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const [imagePage, setImagePage] = useState<{ page: number; pageCount: number } | null>(null);
   const [sideTab, setSideTab] = useState<SideTab>("toc");
@@ -341,6 +350,8 @@ export default function ReaderPage() {
   const wheelAccumRef = useRef(0);
   const turningRef = useRef(false);
   const imageApiRef = useRef<PageReaderApi | null>(null);
+  // E2：本书覆盖键被面板改过后置位，防迟到的 getSettings 回读覆盖用户刚写的值
+  const imgOverrideTouchedRef = useRef(false);
   // 漫画/PDF 皆为“视觉书”：webtoon=原生滚动容器（条漫/PDF 连续滚动共用 webtoon 枚举，滚轮转发不翻页）；
   // 批次15 起空格自动滚动对 PDF 连续滚动同样开放
   const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false, autoscroll: false });
@@ -376,10 +387,14 @@ export default function ReaderPage() {
   const fromShelf = (location.state as { fromShelf?: number | null } | null)?.fromShelf;
   // 漫画/PDF 共用视觉阅读管线（顶栏/热区/页码/书签）；分支差异只在设置面板与 api 来源
   const isVisualBook = isImageBook || isPdfBook;
-  // 当前视觉书生效设置与持久化键（漫画/PDF 两份 state，同 UI 受控切换，互不影响）
-  const visualSettings = isPdfBook ? pdfSettings : imageSettings;
+  // 当前视觉书生效设置与持久化键（漫画/PDF 两份全局 state，同 UI 受控切换，互不影响）；
+  // E2：生效值 = 全局默认 ← imgset:<bookId> 书级覆盖（面板显示并改的是生效值）
+  const visualSettings = useMemo(
+    () => resolveImageSettings(isPdfBook ? pdfSettings : imageSettings, imgOverride),
+    [isPdfBook, pdfSettings, imageSettings, imgOverride],
+  );
   const visualSettingsKey = isPdfBook ? "pdf_reader_settings" : "image_reader_settings";
-  const imageEdgeSwap = isImageBook && imageSettings.rtl;
+  const imageEdgeSwap = isImageBook && visualSettings.rtl;
   const pagerEnabled =
     !drawerOpen &&
     !readerError &&
@@ -463,6 +478,22 @@ export default function ReaderPage() {
       cancelled = true;
     };
   }, []);
+
+  // E2：随书加载 imgset:<bookId> 覆盖键（换书路由参数变化不重挂本页，按 bookId 重载）
+  useEffect(() => {
+    let cancelled = false;
+    imgOverrideTouchedRef.current = false;
+    setImgOverride({});
+    if (!bookId) return;
+    void getSettings()
+      .then((m) => {
+        if (!cancelled && !imgOverrideTouchedRef.current) setImgOverride(parseImageSettingsOverride(m[imageSettingsKey(bookId)]));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -658,6 +689,33 @@ export default function ReaderPage() {
     };
   }, [book?.id]);
 
+  // E3 阅读时长：页面可见时每秒累计，满 60s 落库一次；隐藏/关书补一次尾款（秒数取整）
+  useEffect(() => {
+    if (!book) return;
+    const readSecondsRef = { current: 0 };
+    const flush = () => {
+      const s = Math.floor(readSecondsRef.current);
+      if (s <= 0) return;
+      readSecondsRef.current -= s;
+      void addReadingTime(book.id, s);
+    };
+    const tick = window.setInterval(() => {
+      if (document.visibilityState === "visible") readSecondsRef.current += 1;
+      if (readSecondsRef.current >= 60) flush();
+    }, 1000);
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") flush();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.clearInterval(tick);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, [book?.id]);
+
   useEffect(() => {
     if (!controllerRef.current) return;
     controllerRef.current.setTheme(theme);
@@ -753,6 +811,21 @@ export default function ReaderPage() {
         e.preventDefault();
         addBookmarkHere();
         setSideTab("bookmarks");
+        return;
+      }
+
+      // E7 字号快捷键：Ctrl+= / Ctrl+- / Ctrl+0（走现有 setFontSizePercent 通道，钳 80-200）
+      if (e.ctrlKey && (e.key === "=" || e.key === "+" || e.key === "-" || e.key === "0")) {
+        e.preventDefault();
+        const cur = settingsRef.current.fontSizePercent;
+        const v =
+          e.key === "0"
+            ? defaultSettings.fontSizePercent
+            : Math.min(200, Math.max(80, cur + (e.key === "-" ? -5 : 5)));
+        if (v === cur) return;
+        const next = { ...settingsRef.current, fontSizePercent: v };
+        setSettings(next);
+        void persistSettings(next);
         return;
       }
 
@@ -944,9 +1017,11 @@ export default function ReaderPage() {
   }, []);
 
   // B12 条漫播放中 ↑/↓ 调速：±10 并钳 20-240，实时写入设置（ImageReader autoSpeedRef 即时生效）+ 轻提示
+  // E2：autoScrollSpeed 是全局字段（不在 imgset 书级键里），读写都走全局基值
   function nudgeAutoScrollSpeed(delta: number) {
-    const speed = Math.min(240, Math.max(20, visualSettings.autoScrollSpeed + delta));
-    const next = { ...visualSettings, autoScrollSpeed: speed };
+    const base = isPdfBook ? pdfSettings : imageSettings;
+    const speed = Math.min(240, Math.max(20, base.autoScrollSpeed + delta));
+    const next = { ...base, autoScrollSpeed: speed };
     if (isPdfBook) setPdfSettings(next);
     else setImageSettings(next);
     settingsTouchedRef.current = true;
@@ -1224,18 +1299,79 @@ export default function ReaderPage() {
   );
   const onVisualSettingsChange = useCallback(
     (next: ImageReaderSettings) => {
-      if (isPdfBook) setPdfSettings(next);
-      else setImageSettings(next);
+      // E2：书级字段（rtl/layout/fit/webtoonWidth/doubleOffset）被改动才钉进 imgset:<bookId>（面板显示合并后的生效值）；
+      // 其余字段（mode/pageAnimation/autoScrollSpeed）仍写全局键，作为新书默认
+      const prev = visualSettings;
+      const o: ImageSettingsOverride = { ...imgOverride };
+      let overrideDirty = false;
+      if (next.rtl !== prev.rtl) {
+        o.rtl = next.rtl;
+        overrideDirty = true;
+      }
+      if (next.layout !== prev.layout) {
+        o.layout = next.layout;
+        overrideDirty = true;
+      }
+      if (next.fit !== prev.fit) {
+        o.fit = next.fit;
+        overrideDirty = true;
+      }
+      if (next.webtoonWidth !== prev.webtoonWidth) {
+        o.webtoonWidth = next.webtoonWidth;
+        overrideDirty = true;
+      }
+      if (next.doubleOffset !== prev.doubleOffset) {
+        o.doubleOffset = next.doubleOffset;
+        overrideDirty = true;
+      }
+      const base = isPdfBook ? pdfSettings : imageSettings;
+      const globalNext: ImageReaderSettings = {
+        ...base,
+        mode: next.mode,
+        pageAnimation: next.pageAnimation,
+        autoScrollSpeed: next.autoScrollSpeed,
+      };
+      const globalDirty =
+        globalNext.mode !== base.mode ||
+        globalNext.pageAnimation !== base.pageAnimation ||
+        globalNext.autoScrollSpeed !== base.autoScrollSpeed;
       settingsTouchedRef.current = true;
-      void setSetting(visualSettingsKey, JSON.stringify(next));
+      if (overrideDirty) {
+        imgOverrideTouchedRef.current = true;
+        setImgOverride(o);
+        void setSetting(imageSettingsKey(bookId ?? ""), JSON.stringify(o));
+      }
+      if (globalDirty) {
+        if (isPdfBook) setPdfSettings(globalNext);
+        else setImageSettings(globalNext);
+        void setSetting(visualSettingsKey, JSON.stringify(globalNext));
+      }
     },
-    [isPdfBook, visualSettingsKey],
+    [isPdfBook, visualSettingsKey, visualSettings, imgOverride, imageSettings, pdfSettings, bookId],
   );
   const toggleFavorite = useCallback(() => {
     if (!book) return;
     const next = !book.is_favorite;
     setBook({ ...book, is_favorite: next });
     void setBookFavorite(book.id, next);
+  }, [book]);
+  // E4 标注导出：save 对话框（默认“标注-<书名>.md”）→ exportAnnotations 写出 Markdown
+  const exportHighlights = useCallback(() => {
+    void (async () => {
+      if (!book) return;
+      const safeName = (book.title ?? "未命名").replace(/[\\/:*?"<>|]/g, "_");
+      const dest = await save({
+        defaultPath: `标注-${safeName}.md`,
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+      });
+      if (typeof dest !== "string") return;
+      try {
+        const written = await exportAnnotations(book.id, dest);
+        await showAlert("导出成功", written);
+      } catch (e) {
+        await showAlert("导出失败", String(e));
+      }
+    })();
   }, [book]);
   const lockChrome = useCallback(() => chrome.setLocked(true), [chrome]);
   const footerTurn = useCallback(
@@ -1355,6 +1491,7 @@ export default function ReaderPage() {
               <HighlightsPanel
                 items={highlights}
                 loaded={annotationsLoaded}
+                onExport={exportHighlights}
                 onOpen={(cfiRange) => locate(cfiRange)}
                 onDelete={(id) => {
                   void (async () => {
@@ -1470,7 +1607,7 @@ export default function ReaderPage() {
                       const d = noteDraft;
                       if (!book || !d) return;
                       void (async () => {
-                        const h = await addHighlight(book.id, d.cfiRange, HIGHLIGHT_COLOR, noteText.trim() ? noteText : null);
+                        const h = await addHighlight(book.id, d.cfiRange, HIGHLIGHT_COLOR, noteText.trim() ? noteText : null, d.text);
                         setHighlights((prev) => (prev.some((x) => x.cfi_range === h.cfi_range) ? prev : [h, ...prev]));
                         controllerRef.current?.addHighlight(d.cfiRange);
                         setNoteDraft(null);
@@ -1671,6 +1808,15 @@ export default function ReaderPage() {
             open={!!selection && !drawerOpen && !readerError}
             rect={selection?.rect ?? null}
             removeMode={overlappingHighlights.length > 0}
+            onCopy={() => {
+              const s = selection;
+              if (!s) return;
+              // E1 划选复制：写剪贴板后收起气泡（与高亮/收藏流互不影响）
+              navigator.clipboard
+                ?.writeText(s.text)
+                .catch(() => {})
+                .finally(() => setSelection(null));
+            }}
             onHighlight={() => {
               const s = selection;
               if (!book || !s) return;
@@ -1688,7 +1834,8 @@ export default function ReaderPage() {
                 return;
               }
               void (async () => {
-                const h = await addHighlight(book.id, s.cfiRange, HIGHLIGHT_COLOR, s.text);
+                // E5：选中文本入 text 列（面板渲染原文+笔记双行），note 留空回归纯笔记语义
+                const h = await addHighlight(book.id, s.cfiRange, HIGHLIGHT_COLOR, null, s.text);
                 setHighlights((prev) => (prev.some((x) => x.cfi_range === h.cfi_range) ? prev : [h, ...prev]));
                 controllerRef.current?.addHighlight(s.cfiRange);
                 setSelection(null);

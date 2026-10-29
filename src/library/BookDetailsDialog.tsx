@@ -1,12 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type { Book, Shelf, Tag } from "../tauri/invoke";
-import { computeBookStats, createTag, setBookCover, setBookTags, updateBookMetadata } from "../tauri/invoke";
+import {
+  computeBookStats,
+  createTag,
+  exportAnnotations,
+  listReadingTimes,
+  setBookCover,
+  setBookTags,
+  updateBookMetadata,
+} from "../tauri/invoke";
 import { showAlert } from "../ui/dialog";
 import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "./useCoverUrls";
 import { DEFAULT_TAG_COLOR, formatFileSize, tagDotColor } from "./tags";
 import { shelfPath } from "./shelves";
+import { formatReadingTime } from "./readingTime";
 
 function formatLabel(book: Book): string {
   if (book.format === "images") {
@@ -46,6 +55,19 @@ export default function BookDetailsDialog({
   const coverUrls = useCoverUrls([b]);
   // B13 封面分辨率：blob objectURL 用 Image() 异步量自然尺寸（无解码依赖）
   const [coverSize, setCoverSize] = useState<{ w: number; h: number } | null>(null);
+  // E3 阅读时长（listReadingTimes 全表 Map 里取本书）
+  const [readSeconds, setReadSeconds] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    listReadingTimes()
+      .then((m) => {
+        if (!cancelled) setReadSeconds(m[book.id] ?? 0);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [book.id]);
   useEffect(() => {
     if (b.file_size != null) return;
     let cancelled = false;
@@ -305,6 +327,8 @@ export default function BookDetailsDialog({
               <span>{new Date(b.added_at * 1000).toLocaleString()}</span>
               <span>进度</span>
               <span>{progressText(b.reading_percent)}</span>
+              <span>时长</span>
+              <span>{readSeconds == null ? "—" : (formatReadingTime(readSeconds) ?? "不足 1 分钟")}</span>
               <span>书架</span>
               <span className="wr-details-ellipsis" title={pathNames.join(" / ")}>
                 {pathNames.length > 0 ? pathNames.join(" / ") : "未分组"}
@@ -314,6 +338,28 @@ export default function BookDetailsDialog({
         </div>
 
         <div className="wr-prompt-actions">
+          {/* E4 导出本书标注（Markdown）；只读操作，不影响保存表单 */}
+          <button
+            className="wr-btn"
+            style={{ marginRight: "auto" }}
+            onClick={() => {
+              void (async () => {
+                const safeName = (b.title ?? "未命名").replace(/[\\/:*?"<>|]/g, "_");
+                const dest = await save({
+                  defaultPath: `标注-${safeName}.md`,
+                  filters: [{ name: "Markdown", extensions: ["md"] }],
+                });
+                if (typeof dest !== "string") return;
+                try {
+                  await showAlert("导出成功", await exportAnnotations(b.id, dest));
+                } catch (e) {
+                  await showAlert("导出失败", String(e));
+                }
+              })();
+            }}
+          >
+            导出标注
+          </button>
           <button className="wr-btn" onClick={onClose}>
             取消
           </button>

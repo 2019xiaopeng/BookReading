@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { readImagePage } from "./api";
+import { clampPage } from "./layout";
 
 type Props = {
   bookId: string;
@@ -18,6 +19,7 @@ const thumbs = new Map<string, string>(); // `${bookId}:${page}` -> object URL, 
 
 export default function PagesPanel({ bookId, pageCount, currentPage, goTo, getResidentUrl, fetchThumb }: Props) {
   const [loaded, setLoaded] = useState<Set<number>>(new Set());
+  const [jumpText, setJumpText] = useState("");
   const gridRef = useRef<HTMLDivElement | null>(null);
   const cellsRef = useRef(new Map<number, HTMLElement>());
   const inflightRef = useRef(new Set<number>());
@@ -33,6 +35,19 @@ export default function PagesPanel({ bookId, pageCount, currentPage, goTo, getRe
     setLoaded(new Set());
     inflightRef.current.clear();
   }, [bookId]);
+
+  // E9：面板打开（挂载）即滚到当前页居中；面板开着翻页不追滚（打开行为，不是跟随行为）
+  useEffect(() => {
+    cellsRef.current.get(currentPage)?.scrollIntoView({ block: "center" });
+  }, [bookId]);
+
+  // E9：底部页码直达（钳 1..pageCount）
+  const jump = useCallback(() => {
+    const n = Number.parseInt(jumpText, 10);
+    if (!Number.isFinite(n)) return;
+    goTo(clampPage(n - 1, pageCount));
+    setJumpText("");
+  }, [jumpText, pageCount, goTo]);
 
   const ensureThumb = useCallback(
     (page: number) => {
@@ -107,35 +122,57 @@ export default function PagesPanel({ bookId, pageCount, currentPage, goTo, getRe
   }, [ensureThumb, pageCount]);
 
   return (
-    <div className="wr-image-pages" ref={gridRef} role="list" aria-label="页面目录">
-      {Array.from({ length: pageCount }, (_, i) => {
-        const url = loaded.has(i) ? thumbs.get(`${bookId}:${i}`) ?? residentRef.current?.(i) : undefined;
-        return (
-          <button
-            key={i}
-            type="button"
-            className="wr-image-pages-btn"
-            data-page={i}
-            data-current={i === currentPage}
-            aria-label={`第 ${i + 1} 页`}
-            aria-current={i === currentPage || undefined}
-            onClick={() => goTo(i)}
-            ref={(el) => {
-              if (el) cellsRef.current.set(i, el);
-              else cellsRef.current.delete(i);
-            }}
-          >
-            {url ? (
-              <img src={url} alt="" loading="lazy" decoding="async" draggable={false} />
-            ) : (
-              <span className="wr-image-pages-ph" aria-hidden="true">
-                {i + 1}
-              </span>
-            )}
-            <span>{i + 1}</span>
-          </button>
-        );
-      })}
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="wr-image-pages" ref={gridRef} role="list" aria-label="页面目录">
+        {Array.from({ length: pageCount }, (_, i) => {
+          const url = loaded.has(i) ? thumbs.get(`${bookId}:${i}`) ?? residentRef.current?.(i) : undefined;
+          return (
+            <button
+              key={i}
+              type="button"
+              className="wr-image-pages-btn"
+              data-page={i}
+              data-current={i === currentPage}
+              aria-label={`第 ${i + 1} 页`}
+              aria-current={i === currentPage || undefined}
+              onClick={() => goTo(i)}
+              ref={(el) => {
+                if (el) cellsRef.current.set(i, el);
+                else cellsRef.current.delete(i);
+              }}
+            >
+              {url ? (
+                <img src={url} alt="" loading="lazy" decoding="async" draggable={false} />
+              ) : (
+                <span className="wr-image-pages-ph" aria-hidden="true">
+                  {i + 1}
+                </span>
+              )}
+              <span>{i + 1}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input
+          className="wr-input"
+          style={{ width: 96 }}
+          inputMode="numeric"
+          aria-label={`页码（1 - ${pageCount}）`}
+          placeholder={`1 - ${pageCount}`}
+          value={jumpText}
+          onChange={(e) => setJumpText(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") jump();
+          }}
+        />
+        <button className="wr-btn" onClick={jump}>
+          跳转
+        </button>
+        <div className="wr-muted" style={{ fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
+          {currentPage + 1} / {pageCount}
+        </div>
+      </div>
     </div>
   );
 }

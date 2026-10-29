@@ -47,6 +47,9 @@ import {
   setTrashRetentionDays,
   updateBookMetadata,
   upsertReadingState,
+  addReadingTime,
+  listReadingTimes,
+  exportAnnotations,
 } from "./invoke";
 
 describe("tauri invoke arg casing", () => {
@@ -97,7 +100,23 @@ describe("tauri invoke arg casing", () => {
 
     hoisted.invokeMock.mockResolvedValueOnce(null);
     await addHighlight("b1", "cfiRange", "yellow", null);
-    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("add_highlight", { bookId: "b1", cfiRange: "cfiRange", color: "yellow", note: null });
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("add_highlight", {
+      bookId: "b1",
+      cfiRange: "cfiRange",
+      color: "yellow",
+      note: null,
+      text: undefined,
+    });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await addHighlight("b1", "cfiRange", "yellow", null, "选中文本");
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("add_highlight", {
+      bookId: "b1",
+      cfiRange: "cfiRange",
+      color: "yellow",
+      note: null,
+      text: "选中文本",
+    });
 
     hoisted.invokeMock.mockResolvedValueOnce(null);
     await deleteHighlight("h1");
@@ -234,5 +253,23 @@ describe("v2.5 新增 wrapper 参数命名", () => {
     hoisted.invokeMock.mockResolvedValueOnce(null);
     await loadBookLocations("b1", "default|120");
     expect(hoisted.invokeMock).toHaveBeenLastCalledWith("load_book_locations", { bookId: "b1", cacheKey: "default|120" });
+  });
+
+  test("E3/E4：addReadingTime / listReadingTimes / exportAnnotations 用 camelCase 键", async () => {
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await addReadingTime("b1", 60);
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("add_reading_time", { bookId: "b1", seconds: 60 });
+
+    hoisted.invokeMock.mockResolvedValueOnce({});
+    await listReadingTimes();
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("list_reading_times");
+
+    hoisted.invokeMock.mockResolvedValueOnce("F:/out/标注-b1.md");
+    await exportAnnotations("b1", "F:/out/标注-b1.md");
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("export_annotations", { bookId: "b1", destPath: "F:/out/标注-b1.md" });
+
+    hoisted.invokeMock.mockResolvedValueOnce("F:/out/收藏摘录.md");
+    await exportAnnotations(null, "F:/out/收藏摘录.md");
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("export_annotations", { bookId: null, destPath: "F:/out/收藏摘录.md" });
   });
 });
