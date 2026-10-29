@@ -53,6 +53,8 @@ export default function FavoritesPage() {
   useEffect(() => {
     setLoading(true);
     refreshBooks().finally(() => setLoading(false));
+    // 刊头统计「摘录 N」首拉（进 quotes tab 时 refreshQuotes 会再刷新）
+    void listFavoriteQuotes({ bookId: null, query: null }).then(setQuotes).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -104,6 +106,14 @@ export default function FavoritesPage() {
         },
       }}
     >
+      {/* M2 U5：小型刊头（书架刊头 60% 缩档）+ 统计列 */}
+      <div className="wr-masthead wr-masthead--sm">
+        <h1 className="wr-masthead-name">收 藏</h1>
+        <div className="wr-masthead-stats">
+          收藏 {favoriteBooks.length} · 摘录 {quotes.length}
+        </div>
+      </div>
+
       {tab === "books" ? (
         <div className="wr-book-grid">
           {filteredBooks.map((b) => (

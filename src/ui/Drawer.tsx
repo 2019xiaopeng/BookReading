@@ -18,7 +18,7 @@ export default function Drawer(props: { open: boolean; title: string; onClose: (
       >
         {/* B11：独立头部类——不得借用 .wr-reader-topbar（B6 起是 absolute overlay，会把头部锚到 overlay 全宽并让内容行塌缩） */}
         <div className="wr-drawer-head">
-          <div style={{ fontWeight: 800 }}>{props.title}</div>
+          <div style={{ fontWeight: 650 }}>{props.title}</div>
           <div style={{ flex: 1 }} />
           <button className="wr-btn" autoFocus onClick={props.onClose}>
             关闭

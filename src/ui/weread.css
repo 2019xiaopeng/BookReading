@@ -624,7 +624,8 @@
   padding: 10px 14px;
   width: 100%;
   background: rgba(var(--wr-ink-rgb), 0.03);
-  color: var(--wr-ink);
+  /* M2 U5：输入文字=当前墨（详情弹窗标题/作者等） */
+  color: var(--m2-ink);
   outline: none;
 }
 
@@ -924,7 +925,8 @@
 .wr-drawer {
   width: 390px;
   height: 100%;
-  border-radius: 0;
+  /* M2 U5：圆角统一 8px——右缘贴屏幕不卷，只卷自由的左缘 */
+  border-radius: var(--wr-radius-xs) 0 0 var(--wr-radius-xs);
   border-left: 1px solid var(--wr-hairline);
   /* B2a：抽屉实色化——半透明面板上文字发虚，--panel-solid 六主题自适配 */
   background: var(--panel-solid);
@@ -940,7 +942,12 @@
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--wr-hairline);
+  border-bottom: 1px solid var(--m2-line);
+}
+
+/* M2 U5：抽屉内外壳级文字（分组标签等 wr-muted）换 m2 墨阶，内部控件不受影响 */
+.wr-drawer .wr-muted {
+  color: var(--m2-ink-soft);
 }
 
 .wr-drawer-content {
@@ -1166,16 +1173,13 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border: 1px solid var(--wr-hairline);
+  /* M2 U5：chip 改 1px 墨线空心（去实底） */
+  border: 1px solid var(--m2-line);
   border-radius: 999px;
   padding: 6px 10px;
-  background: rgba(var(--wr-ink-rgb), 0.03);
+  background: transparent;
+  color: var(--m2-ink-soft);
   white-space: nowrap;
-}
-
-[data-theme="dark"] .wr-chip,
-[data-theme="darkcontrast"] .wr-chip {
-  background: rgba(var(--wr-ink-rgb), 0.06);
 }
 
 .wr-actions {
@@ -1335,8 +1339,13 @@
   animation: wr-menu-in 150ms ease both;
 }
 
+/* M2 U5：系统对话框（DialogHost alert/confirm/choice）容器圆角统一 8px（规范 §4，仅此容器不动内部件） */
+.wr-prompt--sys {
+  border-radius: var(--wr-radius-xs);
+}
+
 .wr-prompt-title {
-  font-weight: 700;
+  font-weight: 650;
 }
 
 .wr-prompt-body {
@@ -2214,7 +2223,8 @@ input[type="range"]:focus-visible {
   max-height: 300px;
   overflow: auto;
   padding: 8px;
-  border: 1px solid var(--wr-hairline);
+  /* M2 U5：复选列表容器线换 m2 token */
+  border: 1px solid var(--m2-line);
   border-radius: var(--wr-radius-lg);
   background: var(--panel-solid);
   color: var(--wr-ink);
@@ -2251,8 +2261,15 @@ input[type="range"]:focus-visible {
   background: rgba(var(--wr-ink-rgb), 0.06);
 }
 
+/* M2 U5：选中态=墨色实底反白（标签筛选复选列表与状态下拉 radio 共用） */
 .wr-tag-item[data-checked="true"] {
-  background: rgba(var(--wr-accent-rgb), 0.12);
+  background: var(--m2-ink);
+  color: var(--m2-paper);
+}
+
+.wr-tag-item[data-checked="true"] .wr-tag-item-name,
+.wr-tag-item[data-checked="true"] .wr-tag-item-count {
+  color: var(--m2-paper);
 }
 
 .wr-tag-item-name {
@@ -2271,26 +2288,21 @@ input[type="range"]:focus-visible {
 .wr-tag-item[data-checked="true"]::after {
   content: "✓";
   font-size: 12px;
-  color: var(--wr-accent-ink);
+  color: var(--m2-paper);
 }
 
-/* 详情对话框里的标签 chip（带移除钮） */
+/* 详情对话框里的标签 chip（带移除钮）；M2 U5：1px 墨线空心（去实底） */
 .wr-tag-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border: 1px solid var(--wr-hairline);
+  border: 1px solid var(--m2-line);
   border-radius: 999px;
   padding: 4px 6px 4px 10px;
-  background: rgba(var(--wr-ink-rgb), 0.03);
+  background: transparent;
   font-size: 12px;
-  color: var(--wr-ink);
+  color: var(--m2-ink);
   white-space: nowrap;
-}
-
-[data-theme="dark"] .wr-tag-chip,
-[data-theme="darkcontrast"] .wr-tag-chip {
-  background: rgba(var(--wr-ink-rgb), 0.06);
 }
 
 .wr-tag-chip button {
@@ -2320,13 +2332,13 @@ input[type="range"]:focus-visible {
   overflow: auto;
 }
 
-/* 批次10 设置对话框：分组标题 + 占用/只读行 + 快捷键表 */
+/* 批次10 设置对话框：分组标题 + 占用/只读行 + 快捷键表；M2 U5 分组标题/行线换 m2 token */
 .wr-settings-group {
   margin-top: 14px;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
-  color: var(--wr-muted);
+  color: var(--m2-ink-soft);
 }
 
 .wr-settings-row {
@@ -2336,7 +2348,7 @@ input[type="range"]:focus-visible {
   flex-wrap: wrap;
   padding: 7px 0;
   font-size: 13px;
-  border-bottom: 1px solid var(--wr-hairline);
+  border-bottom: 1px solid var(--m2-line);
 }
 
 .wr-settings-row:last-of-type {
@@ -2376,6 +2388,7 @@ input[type="range"]:focus-visible {
   accent-color: var(--wr-accent);
 }
 
+/* M2 U5：快捷键表格线换 --m2-line */
 .wr-kbd-table {
   width: 100%;
   border-collapse: collapse;
@@ -2389,12 +2402,14 @@ input[type="range"]:focus-visible {
   vertical-align: top;
   font-weight: 600;
   color: var(--wr-muted);
+  border-bottom: 1px solid var(--m2-line);
 }
 
 .wr-kbd-table td {
   padding: 6px 0;
   line-height: 1.7;
   color: var(--wr-muted);
+  border-bottom: 1px solid var(--m2-line);
 }
 
 .wr-kbd {
@@ -2483,7 +2498,8 @@ input[type="range"]:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  border: 1px solid var(--wr-hairline);
+  /* M2 U5：封面描边同书卡（--m2-cover-line） */
+  border: 1px solid var(--m2-cover-line);
   border-radius: var(--wr-radius-sm);
   background: var(--wr-paper);
   overflow: hidden;
@@ -2501,6 +2517,8 @@ input[type="range"]:focus-visible {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  /* M2 U5：夜间压暗封面（浅色主题值为 none 天然无感） */
+  filter: var(--m2-cover-filter);
 }
 
 .wr-details-cover:focus-visible {
@@ -2517,7 +2535,7 @@ input[type="range"]:focus-visible {
 
 .wr-details-label {
   font-size: 12px;
-  color: var(--wr-muted);
+  color: var(--m2-ink-soft);
   margin-top: 4px;
 }
 
@@ -2539,13 +2557,13 @@ input[type="range"]:focus-visible {
   grid-template-columns: 64px 1fr;
   gap: 4px 10px;
   font-size: 12px;
-  color: var(--wr-muted);
-  border-top: 1px solid var(--wr-hairline);
+  color: var(--m2-ink-soft);
+  border-top: 1px solid var(--m2-line);
   padding-top: 10px;
 }
 
 .wr-details-stats span:nth-child(even) {
-  color: var(--wr-ink);
+  color: var(--m2-ink);
   min-width: 0;
 }
 
@@ -2564,7 +2582,7 @@ input[type="range"]:focus-visible {
 }
 
 .wr-tag-manage-row {
-  border: 1px solid var(--wr-hairline);
+  border: 1px solid var(--m2-line);
   border-radius: var(--wr-radius-lg);
   padding: 8px 10px;
 }
@@ -2581,7 +2599,7 @@ input[type="range"]:focus-visible {
   gap: 8px;
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px dashed var(--wr-hairline);
+  border-top: 1px dashed var(--m2-line);
 }
 
 .wr-tag-swatch-row {
@@ -2598,12 +2616,14 @@ input[type="range"]:focus-visible {
   gap: 14px;
 }
 
+/* M2 U5：摘录卡颜色层换 m2 token（结构不动） */
 .wr-quote-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 12px;
   min-width: 0;
+  border-color: var(--m2-line);
 }
 
 .wr-quote-text {
@@ -2613,6 +2633,7 @@ input[type="range"]:focus-visible {
   overflow: hidden;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  color: var(--m2-ink);
 }
 
 .wr-quote-note {
@@ -2630,7 +2651,7 @@ input[type="range"]:focus-visible {
   flex: 1;
   min-width: 0;
   font-size: 12px;
-  color: var(--wr-muted);
+  color: var(--m2-ink-soft);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2812,6 +2833,19 @@ input[type="range"]:focus-visible {
   color: var(--m2-ink-soft);
   text-align: right;
   white-space: nowrap;
+}
+
+/* M2 U5：收藏页小型刊头——同一 clamp 公式缩档至约 60% */
+.wr-masthead--sm {
+  padding: 14px 18px 0;
+}
+
+.wr-masthead--sm .wr-masthead-name {
+  font-size: clamp(20px, 2.7vw, 36px);
+}
+
+.wr-masthead--sm .wr-masthead-stats {
+  padding-bottom: 5px;
 }
 
 /* 侧栏顶部快捷筛选 chips：选中态=墨色实底反白 */

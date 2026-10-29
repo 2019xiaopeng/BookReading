@@ -80,7 +80,7 @@ export function DialogHost() {
       }}
     >
       <div
-        className="wr-panel wr-prompt"
+        className="wr-panel wr-prompt wr-prompt--sys"
         role={req.kind === "confirm" ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-label={req.title}
