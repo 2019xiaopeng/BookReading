@@ -1274,14 +1274,7 @@ export default function ReaderPage() {
                 ? "页面"
                 : "阅读设置";
 
-  const pageBadgeStyle = (side: "left" | "right"): React.CSSProperties => ({
-    position: "absolute",
-    bottom: 6,
-    ...(side === "left" ? { left: 10 } : { right: 10 }),
-    fontSize: 11,
-    color: "var(--wr-muted)",
-    fontVariantNumeric: "tabular-nums",
-  });
+  // §8：页码徽标样式已迁 weread.css（wr-page-badge--left/--right），此处只留文案
 
   // §8：视觉书 api 回调稳定化（memo 的 ImageReader/PdfReader 不因无关重渲换引用）
   const handleImageApi = useCallback((api: ImageReaderApi) => {
@@ -1706,39 +1699,39 @@ export default function ReaderPage() {
                   <div ref={containerRef} style={{ height: "100%", position: "relative" }} />
                   {/* B12 页码徽标：locations 就绪显示全书“位置页” X / Y（1024 字/页估算；双页两角 X 与 X+1 近似）；未就绪回退章内页码 */}
                   {locPage ? (
-                    <div aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 2 }}>
+                    <div aria-hidden="true" className="wr-page-badge-layer">
                       {pageBadge.right ? (
                         <>
-                          <span style={pageBadgeStyle("left")}>
+                          <span className="wr-page-badge wr-page-badge--left">
                             {locPage.index + 1} / {locPage.total}
                           </span>
-                          <span style={pageBadgeStyle("right")}>
+                          <span className="wr-page-badge wr-page-badge--right">
                             {Math.min(locPage.index + 2, locPage.total)} / {locPage.total}
                           </span>
                         </>
                       ) : (
                         // 单页：只右下角一枚
-                        <span style={pageBadgeStyle("right")}>
+                        <span className="wr-page-badge wr-page-badge--right">
                           {locPage.index + 1} / {locPage.total}
                         </span>
                       )}
                     </div>
                   ) : pageBadge.left || pageBadge.right ? (
-                    <div aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 2 }}>
+                    <div aria-hidden="true" className="wr-page-badge-layer">
                       {pageBadge.right ? (
                         <>
                           {pageBadge.left ? (
-                            <span style={pageBadgeStyle("left")}>
+                            <span className="wr-page-badge wr-page-badge--left">
                               {pageBadge.left.page}/{pageBadge.left.total}
                             </span>
                           ) : null}
-                          <span style={pageBadgeStyle("right")}>
+                          <span className="wr-page-badge wr-page-badge--right">
                             {pageBadge.right.page}/{pageBadge.right.total}
                           </span>
                         </>
                       ) : pageBadge.left ? (
                         // 单页：只右下角一枚
-                        <span style={pageBadgeStyle("right")}>
+                        <span className="wr-page-badge wr-page-badge--right">
                           {pageBadge.left.page}/{pageBadge.left.total}
                         </span>
                       ) : null}
@@ -1750,57 +1743,33 @@ export default function ReaderPage() {
           </div>
 
           {pagerEnabled ? (
-            <div style={{ position: "absolute", inset: 18, zIndex: "var(--wr-z-pager)", pointerEvents: "none", borderRadius: "var(--wr-radius-xl)" }}>
+            /* §8：热区静态样式迁 weread.css（wr-edge-pager/glow/tap），宽度随视口计算仍内联 */
+            <div className="wr-edge-pager">
               {pagerHover ? (
                 <div
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    bottom: 0,
-                    left: pagerHover === "left" ? 0 : "auto",
-                    right: pagerHover === "right" ? 0 : "auto",
-                    width: pagerHover === "left" ? stage.leftEdgeWidth : stage.rightEdgeWidth,
-                    pointerEvents: "none",
-                    background:
-                      pagerHover === "left"
-                        ? "linear-gradient(90deg, rgba(var(--wr-ink-rgb),0.06), rgba(var(--wr-ink-rgb),0))"
-                        : "linear-gradient(270deg, rgba(var(--wr-ink-rgb),0.06), rgba(var(--wr-ink-rgb),0))",
-                  }}
+                  className={`wr-edge-glow wr-edge-glow--${pagerHover}`}
+                  style={{ width: pagerHover === "left" ? stage.leftEdgeWidth : stage.rightEdgeWidth }}
                 />
               ) : null}
               <div
+                className="wr-edge-tap wr-edge-tap--left"
+                style={{ width: stage.leftEdgeWidth }}
                 onClick={() => {
                   chrome.dismiss(); // B12：边缘热区点击翻页即收栏
                   void animateTurn(imageEdgeSwap ? "next" : "prev");
                 }}
                 onMouseEnter={() => setPagerHover("left")}
                 onMouseLeave={() => setPagerHover(null)}
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: stage.leftEdgeWidth,
-                  cursor: "pointer",
-                  pointerEvents: "auto",
-                }}
               />
               <div
+                className="wr-edge-tap wr-edge-tap--right"
+                style={{ width: stage.rightEdgeWidth }}
                 onClick={() => {
                   chrome.dismiss(); // B12：边缘热区点击翻页即收栏
                   void animateTurn(imageEdgeSwap ? "prev" : "next");
                 }}
                 onMouseEnter={() => setPagerHover("right")}
                 onMouseLeave={() => setPagerHover(null)}
-                style={{
-                  position: "absolute",
-                  right: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: stage.rightEdgeWidth,
-                  cursor: "pointer",
-                  pointerEvents: "auto",
-                }}
               />
             </div>
           ) : null}
@@ -1976,68 +1945,19 @@ export default function ReaderPage() {
       )}
 
       {chrome.locked && lockToast ? (
-        <div
-          role="status"
-          style={{
-            position: "fixed",
-            bottom: 24,
-            left: "50%",
-            transform: "translateX(-50%)",
-            fontSize: 12,
-            color: "var(--wr-muted)",
-            background: "var(--panel-solid)",
-            border: "1px solid var(--wr-hairline)",
-            borderRadius: 999,
-            padding: "6px 14px",
-            boxShadow: "var(--shadow-sm)",
-            pointerEvents: "none",
-          }}
-        >
+        <div role="status" className="wr-toast">
           已锁定 · Esc 解锁
         </div>
       ) : null}
 
       {speedToast !== null ? (
-        <div
-          role="status"
-          style={{
-            position: "fixed",
-            bottom: 24,
-            left: "50%",
-            transform: "translateX(-50%)",
-            fontSize: 12,
-            color: "var(--wr-muted)",
-            background: "var(--panel-solid)",
-            border: "1px solid var(--wr-hairline)",
-            borderRadius: 999,
-            padding: "6px 14px",
-            boxShadow: "var(--shadow-sm)",
-            pointerEvents: "none",
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
+        <div role="status" className="wr-toast wr-toast--tabular">
           自动滚动 {speedToast}px/s
         </div>
       ) : null}
 
       {chapterToast !== null ? (
-        <div
-          role="status"
-          style={{
-            position: "fixed",
-            bottom: 84,
-            left: "50%",
-            transform: "translateX(-50%)",
-            fontSize: 12,
-            color: "var(--wr-muted)",
-            background: "var(--panel-solid)",
-            border: "1px solid var(--wr-hairline)",
-            borderRadius: 999,
-            padding: "6px 14px",
-            boxShadow: "var(--shadow-sm)",
-            pointerEvents: "none",
-          }}
-        >
+        <div role="status" className="wr-toast wr-toast--up">
           已进入 {chapterToast}
         </div>
       ) : null}

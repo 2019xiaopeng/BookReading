@@ -175,17 +175,16 @@ export default function AppShell(props: {
     );
   }
 
-  // 全局背景：cover 居中铺满 + 半透明主题色纱保证六主题下内容对比度（底色 var(--wr-bg) 仍兜底）
+  // 全局背景：cover 居中铺满 + 半透明主题色纱保证八主题下内容对比度（底色 var(--wr-bg) 仍兜底）；
+  // §8 静态铺法（cover/center）迁入 .wr-shell--userbg，动态 url 留内联
   const shellStyle: CSSProperties | undefined = bgUrl
     ? {
         backgroundImage: `linear-gradient(color-mix(in srgb, var(--wr-bg) 88%, transparent), color-mix(in srgb, var(--wr-bg) 88%, transparent)), url("${bgUrl}")`,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
       }
     : undefined;
 
   return (
-    <div className="wr-shell" style={shellStyle}>
+    <div className={`wr-shell${bgUrl ? " wr-shell--userbg" : ""}`} style={shellStyle}>
       <div className="wr-panel wr-side">
         <div className="wr-side-top">
           <div className="wr-brand">
