@@ -14,3 +14,15 @@
 
 对照时点：根治包完成后（阶段一/二合并验证）一次；U7 UI 改版完成后一次。指标不得回退：
 jank50 / jank100 / maxGap / p95 同场景对比，回退即返工。
+
+## 根治包复测（batch 20-22 合入后，2026-10-30，results-perf-fixed.json）
+
+| 场景 | 基线 → 复测（jank50 / jank100 / maxGap） |
+|---|---|
+| shelfScroll 61 卡 | 11/4/394ms → **1/0/73ms**（avgFps 135.8→158.9） |
+| comicPaged20 | 1/0/54ms → **0/0/42ms** |
+| comicWebtoon10s | 7/0/79ms（p95 24.3） → **1/0/55ms（p95 6.3）** |
+| epubFontSlider 20 步 | 3/0/67ms（Layout 0.3s） → **0/0/19ms（Layout 0.1s）** |
+| epubOpenIdle30s | 0/0/24ms → 0/0/24ms（本次命中持久化 locations，未触发生成） |
+
+结论：全部场景改善或持平，无回退。缩略档回填完毕后测量（91 书 90 张，一张源图缺档由幂等回填补）。
