@@ -159,7 +159,7 @@ export default function SettingsPanel(props: {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div className="wr-muted">主题</div>
-        <div role="group" aria-label="主题" style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
+        <div role="group" aria-label="主题" style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 8 }}>
           {THEME_SWATCHES.map((s) => {
             const active = theme === s.value;
             return (

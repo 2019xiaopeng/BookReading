@@ -11,8 +11,8 @@ import type { ReadingStatus } from "../library/readingStatus";
 import { BOOKS_CHANGED_EVENT, runImports, subscribeImportProgress, type ImportProgress } from "../library/importRunner";
 import SettingsDialog from "./SettingsDialog";
 
-// 六个 30px 色块 + 5*8 间距 + 12 内边距 + 2 边框
-const THEME_MENU_WIDTH = 234;
+// 八个 30px 色块 + 7*8 间距 + 12 内边距 + 2 边框
+const THEME_MENU_WIDTH = 310;
 
 // 侧栏书架树模块级单例（批次12b）：每页各渲染一个 AppShell，路由切换整树重挂曾是闪烁根因；
 // 数据上提后重挂首帧即有旧值，LibraryPage.refresh 推写，导入事件兜底（LibraryPage 卸载时也能刷新）
@@ -343,7 +343,7 @@ export default function AppShell(props: {
           className="wr-menu"
           role="group"
           aria-label="主题"
-          style={{ left: themeMenu.x, top: themeMenu.y, display: "grid", gridTemplateColumns: "repeat(6, 30px)", gap: 8 }}
+          style={{ left: themeMenu.x, top: themeMenu.y, display: "grid", gridTemplateColumns: "repeat(8, 30px)", gap: 8 }}
         >
           {THEME_SWATCHES.map((s) => (
             <button
