@@ -67,3 +67,145 @@
   --border: #2e2e2e;
   --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.28);
 }
+
+/* M2 纸墨双主题：纸墨=日间米白纸×碳墨，墨夜=夜间碳墨纸×米白墨；对比度对齐 light/dark 档 */
+[data-theme="ink"] {
+  color-scheme: light;
+  --bg: #FAFAF7;
+  --panel: rgba(255, 255, 255, 0.78);
+  --panel-solid: #FFFFFF;
+  --text: rgba(36, 35, 33, 0.92);
+  --text-muted: rgba(36, 35, 33, 0.62);
+  --border: rgba(36, 35, 33, 0.12);
+  --shadow-sm: 0 10px 30px rgba(36, 35, 33, 0.12);
+}
+
+[data-theme="ink-dark"] {
+  color-scheme: dark;
+  --bg: #191816;
+  --panel: rgba(237, 236, 231, 0.06);
+  --panel-solid: #201F1D;
+  --text: rgba(237, 236, 231, 0.92);
+  --text-muted: rgba(237, 236, 231, 0.62);
+  --border: rgba(237, 236, 231, 0.12);
+  --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+/* ── M2 纸墨层（八主题语义变量，集中一组不散落）──
+   字面值只允许出现在这里；ink/ink-dark 为 M2 定稿值，旧六主题按规范 §2 推导：
+   paper=该主题 --bg；ink/ink-soft=该主题 --text/--text-muted 的不透明近似（按各自 --bg 合成）；
+   line/cover-line/wash/ink-ghost=ink 的 20%/16%/5%/35% alpha；skeleton/sheen 浅色主题用 day 值、暗色用 night 值；
+   shadow=各主题 --shadow-sm 的颜色分量；cover-filter 仅暗色主题压暗封面。--m2-noise 不随主题变，:root 一次。 */
+:root {
+  --m2-paper: #f7f7fa;
+  --m2-ink: #222428;
+  --m2-ink-soft: #67696d;
+  --m2-line: rgba(34, 36, 40, 0.16);
+  --m2-cover-line: rgba(34, 36, 40, 0.2);
+  --m2-wash: rgba(34, 36, 40, 0.05);
+  --m2-ink-ghost: rgba(34, 36, 40, 0.35);
+  --m2-skeleton: #eceae2;
+  --m2-sheen: rgba(255, 255, 255, 0.55);
+  --m2-shadow: rgba(20, 24, 32, 0.12);
+  --m2-cover-filter: none;
+  /* 纸底噪点：仅 alpha 通道，无色值，随主题不变 */
+  --m2-noise: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.05 0'/></filter><rect width='240' height='240' filter='url(%23n)'/></svg>");
+}
+
+[data-theme="sepia"] {
+  --m2-paper: #f4efe6;
+  --m2-ink: #3b3227;
+  --m2-ink-soft: #746d63;
+  --m2-line: rgba(59, 50, 39, 0.16);
+  --m2-cover-line: rgba(59, 50, 39, 0.2);
+  --m2-wash: rgba(59, 50, 39, 0.05);
+  --m2-ink-ghost: rgba(59, 50, 39, 0.35);
+  --m2-skeleton: #eceae2;
+  --m2-sheen: rgba(255, 255, 255, 0.55);
+  --m2-shadow: rgba(38, 29, 18, 0.12);
+  --m2-cover-filter: none;
+}
+
+[data-theme="green"] {
+  --m2-paper: #eef3ec;
+  --m2-ink: #223325;
+  --m2-ink-soft: #4d6052;
+  --m2-line: rgba(34, 51, 37, 0.16);
+  --m2-cover-line: rgba(34, 51, 37, 0.2);
+  --m2-wash: rgba(34, 51, 37, 0.05);
+  --m2-ink-ghost: rgba(34, 51, 37, 0.35);
+  --m2-skeleton: #eceae2;
+  --m2-sheen: rgba(255, 255, 255, 0.55);
+  --m2-shadow: rgba(34, 51, 37, 0.12);
+  --m2-cover-filter: none;
+}
+
+[data-theme="gray"] {
+  --m2-paper: #e3e3e0;
+  --m2-ink: #2b2b28;
+  --m2-ink-soft: #5b5b54;
+  --m2-line: rgba(43, 43, 40, 0.16);
+  --m2-cover-line: rgba(43, 43, 40, 0.2);
+  --m2-wash: rgba(43, 43, 40, 0.05);
+  --m2-ink-ghost: rgba(43, 43, 40, 0.35);
+  --m2-skeleton: #eceae2;
+  --m2-sheen: rgba(255, 255, 255, 0.55);
+  --m2-shadow: rgba(43, 43, 40, 0.12);
+  --m2-cover-filter: none;
+}
+
+[data-theme="dark"] {
+  --m2-paper: #0b0d10;
+  --m2-ink: #ebecec;
+  --m2-ink-soft: #a2a3a4;
+  --m2-line: rgba(235, 236, 236, 0.16);
+  --m2-cover-line: rgba(235, 236, 236, 0.2);
+  --m2-wash: rgba(235, 236, 236, 0.05);
+  --m2-ink-ghost: rgba(235, 236, 236, 0.35);
+  --m2-skeleton: #232221;
+  --m2-sheen: rgba(255, 255, 255, 0.05);
+  --m2-shadow: rgba(0, 0, 0, 0.28);
+  --m2-cover-filter: brightness(0.86) saturate(0.96);
+}
+
+[data-theme="darkcontrast"] {
+  --m2-paper: #000000;
+  --m2-ink: #f5f5f5;
+  --m2-ink-soft: #bdbdbd;
+  --m2-line: rgba(245, 245, 245, 0.16);
+  --m2-cover-line: rgba(245, 245, 245, 0.2);
+  --m2-wash: rgba(245, 245, 245, 0.05);
+  --m2-ink-ghost: rgba(245, 245, 245, 0.35);
+  --m2-skeleton: #232221;
+  --m2-sheen: rgba(255, 255, 255, 0.05);
+  --m2-shadow: rgba(0, 0, 0, 0.28);
+  --m2-cover-filter: brightness(0.86) saturate(0.96);
+}
+
+[data-theme="ink"] {
+  --m2-paper: #FAFAF7;
+  --m2-ink: #242321;
+  --m2-ink-soft: #6B6A66;
+  --m2-line: rgba(36, 35, 33, 0.16);
+  --m2-cover-line: rgba(36, 35, 33, 0.2);
+  --m2-wash: rgba(36, 35, 33, 0.05);
+  --m2-ink-ghost: rgba(36, 35, 33, 0.35);
+  --m2-skeleton: #ECEAE2;
+  --m2-sheen: rgba(255, 255, 255, 0.55);
+  --m2-shadow: rgba(36, 35, 33, 0.28);
+  --m2-cover-filter: none;
+}
+
+[data-theme="ink-dark"] {
+  --m2-paper: #191816;
+  --m2-ink: #EDECE7;
+  --m2-ink-soft: #A9A79F;
+  --m2-line: rgba(237, 236, 231, 0.18);
+  --m2-cover-line: rgba(237, 236, 231, 0.22);
+  --m2-wash: rgba(237, 236, 231, 0.07);
+  --m2-ink-ghost: rgba(237, 236, 231, 0.3);
+  --m2-skeleton: #232221;
+  --m2-sheen: rgba(255, 255, 255, 0.05);
+  --m2-shadow: rgba(0, 0, 0, 0.6);
+  --m2-cover-filter: brightness(0.86) saturate(0.96);
+}

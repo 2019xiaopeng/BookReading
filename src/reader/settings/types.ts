@@ -1,6 +1,6 @@
 import type { LayoutMode } from "./layoutMode";
 
-export type Theme = "light" | "sepia" | "green" | "gray" | "dark" | "darkcontrast";
+export type Theme = "light" | "sepia" | "green" | "gray" | "dark" | "darkcontrast" | "ink" | "ink-dark";
 export type PageAnimation = "none" | "slide" | "fade";
 export type ReadingMode = "paginated" | "scrolled";
 export type FontFamily = "default" | "songti" | "heiti" | "kaiti" | "fangsong" | "custom";

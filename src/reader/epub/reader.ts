@@ -227,7 +227,8 @@ function percentFromCfi(book: any, cfi: string): number | undefined {
 }
 
 // iframe 内容无法继承宿主 CSS 变量，此处色值与 tokens.css / weread.css [data-theme] 同步
-// （dark 纸面=--panel-solid、darkcontrast 纸面=--wr-paper；inkRgb=--wr-ink-rgb，sepia/green/gray 未覆盖沿用默认）
+// （dark 纸面=--panel-solid、darkcontrast 纸面=--wr-paper；inkRgb=--wr-ink-rgb，sepia/green/gray 未覆盖沿用默认；
+//  ink/ink-dark=M2 纸墨双主题：纸面非纯白/纯黑，注入不透明纸面防止 epub 自带浅底透出）
 const THEME_STYLES: Record<Theme, { paper: string | null; fg: string; inkRgb: string }> = {
   light: { paper: null, fg: "#16181a", inkRgb: "22, 24, 26" },
   sepia: { paper: null, fg: "rgba(38, 29, 18, 0.9)", inkRgb: "22, 24, 26" },
@@ -235,6 +236,8 @@ const THEME_STYLES: Record<Theme, { paper: string | null; fg: string; inkRgb: st
   gray: { paper: null, fg: "#2b2b28", inkRgb: "22, 24, 26" },
   dark: { paper: "#11151b", fg: "rgba(255, 255, 255, 0.92)", inkRgb: "255, 255, 255" },
   darkcontrast: { paper: "#050505", fg: "#f5f5f5", inkRgb: "255, 255, 255" },
+  ink: { paper: "#FAFAF7", fg: "#242321", inkRgb: "36, 35, 33" },
+  "ink-dark": { paper: "#191816", fg: "#EDECE7", inkRgb: "237, 236, 231" },
 };
 
 // B11 正文字体：default=悦读栈（思源宋优先、回退等线/宋体，未装字体自动落下一步），custom=文件安装的 wr-custom

@@ -14,10 +14,10 @@ import {
 } from "./normalize";
 
 describe("normalize", () => {
-  test("normalizeTheme defaults to light", () => {
-    expect(normalizeTheme(undefined)).toBe("light");
-    expect(normalizeTheme("")).toBe("light");
-    expect(normalizeTheme("weird")).toBe("light");
+  test("normalizeTheme defaults to ink (M2 new default)", () => {
+    expect(normalizeTheme(undefined)).toBe("ink");
+    expect(normalizeTheme("")).toBe("ink");
+    expect(normalizeTheme("weird")).toBe("ink");
   });
 
   test("normalizeTheme accepts valid values", () => {
@@ -27,6 +27,8 @@ describe("normalize", () => {
     expect(normalizeTheme("green")).toBe("green");
     expect(normalizeTheme("gray")).toBe("gray");
     expect(normalizeTheme("darkcontrast")).toBe("darkcontrast");
+    expect(normalizeTheme("ink")).toBe("ink");
+    expect(normalizeTheme("ink-dark")).toBe("ink-dark");
   });
 
   test("normalizeReadingMode defaults to paginated", () => {

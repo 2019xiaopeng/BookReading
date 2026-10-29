@@ -9,10 +9,19 @@ export function normalizeFontFamily(v: unknown): FontFamily {
 
 export function normalizeTheme(v: unknown): Theme {
   const s = String(v ?? "").trim().toLowerCase();
-  if (s === "light" || s === "dark" || s === "sepia" || s === "green" || s === "gray" || s === "darkcontrast") {
+  if (
+    s === "light" ||
+    s === "dark" ||
+    s === "sepia" ||
+    s === "green" ||
+    s === "gray" ||
+    s === "darkcontrast" ||
+    s === "ink" ||
+    s === "ink-dark"
+  ) {
     return s;
   }
-  return "light";
+  return "ink"; // M2 起新默认=纸墨
 }
 
 export function normalizeReadingMode(v: unknown): ReadingMode {

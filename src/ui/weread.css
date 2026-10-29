@@ -160,6 +160,63 @@
   --wr-shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
+/* M2 纸墨（日）：accent 族整体重定义为碳墨（换主题=换墨），accent-ink 取纸色反白；
+   danger/封面字色/圆角沿用 light 档；shadow-card 族继承 :root */
+[data-theme="ink"] {
+  color-scheme: light;
+  --wr-bg: #FAFAF7;
+  --wr-paper: #FFFFFF;
+  --wr-ink: rgba(36, 35, 33, 0.92);
+  --wr-muted: rgba(36, 35, 33, 0.62);
+  --wr-hairline: rgba(36, 35, 33, 0.12);
+  --wr-shadow: 0 16px 60px rgba(36, 35, 33, 0.16);
+  --wr-shadow-soft: 0 10px 36px rgba(36, 35, 33, 0.12);
+  --wr-paper-shadow: 0 18px 46px rgba(36, 35, 33, 0.12);
+  --wr-paper-shadow-soft: 0 10px 28px rgba(36, 35, 33, 0.08);
+  --wr-paper-border: rgba(36, 35, 33, 0.1);
+  --wr-accent: #242321;
+  --wr-accent-ink: #FAFAF7;
+  --wr-accent-rgb: 36, 35, 33;
+  --wr-accent-deep-rgb: 36, 35, 33;
+  --wr-accent-2-rgb: 36, 35, 33;
+  --wr-danger: #d93025;
+  --wr-danger-ink: #ffffff;
+  --wr-ink-rgb: 36, 35, 33;
+  /* U6 毛玻璃底：纸色 0.72 半透 + blur(16px)（顶/底栏两处） */
+  --wr-chrome-bg: rgba(250, 250, 247, 0.72);
+  --wr-panel-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.86));
+  --wr-reader-paper-bg: linear-gradient(180deg, rgba(250, 250, 247, 0.96), rgba(250, 250, 247, 0.84));
+}
+
+/* M2 墨夜（夜）：accent 族重定义为米白墨，accent-ink 取夜纸色；纸面族对齐 dark 的半透白模式 */
+[data-theme="ink-dark"] {
+  color-scheme: dark;
+  --wr-bg: #191816;
+  --wr-paper: rgba(237, 236, 231, 0.06);
+  --wr-ink: rgba(237, 236, 231, 0.92);
+  --wr-muted: rgba(237, 236, 231, 0.62);
+  --wr-hairline: rgba(237, 236, 231, 0.14);
+  --wr-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+  --wr-shadow-soft: 0 10px 40px rgba(0, 0, 0, 0.44);
+  --wr-paper-shadow: 0 20px 54px rgba(0, 0, 0, 0.5);
+  --wr-paper-shadow-soft: 0 12px 34px rgba(0, 0, 0, 0.42);
+  --wr-paper-border: rgba(237, 236, 231, 0.14);
+  --wr-accent: #EDECE7;
+  --wr-accent-ink: #191816;
+  --wr-accent-rgb: 237, 236, 231;
+  --wr-accent-deep-rgb: 237, 236, 231;
+  --wr-accent-2-rgb: 237, 236, 231;
+  --wr-danger: #ff6b5e;
+  --wr-danger-ink: rgba(25, 24, 22, 0.96);
+  --wr-ink-rgb: 237, 236, 231;
+  --wr-chrome-bg: rgba(25, 24, 22, 0.72);
+  --wr-panel-bg: linear-gradient(180deg, rgba(237, 236, 231, 0.08), rgba(237, 236, 231, 0.04));
+  --wr-reader-paper-bg: linear-gradient(180deg, rgba(237, 236, 231, 0.08), rgba(237, 236, 231, 0.04));
+  --wr-shadow-card: 0 16px 40px rgba(0, 0, 0, 0.42);
+  --wr-shadow-card-hover: 0 18px 48px rgba(0, 0, 0, 0.5);
+  --wr-shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
 .wr-shell {
   height: 100vh;
   font-family: var(--wr-sans);

@@ -20,9 +20,25 @@ beforeAll(async () => {
 });
 
 describe("theme store", () => {
-  test("boots light and syncs html dataset without cache", () => {
-    expect(theme.getTheme()).toBe("light");
-    expect(dataset.theme).toBe("light");
+  test("boots ink (M2 default) and syncs html dataset without cache", () => {
+    expect(theme.getTheme()).toBe("ink");
+    expect(dataset.theme).toBe("ink");
+  });
+
+  test("M2: eight swatches including 纸墨/墨夜 ink swatches", () => {
+    expect(theme.THEME_SWATCHES).toHaveLength(8);
+    expect(theme.THEME_SWATCHES.map((s) => s.value)).toEqual([
+      "light",
+      "sepia",
+      "green",
+      "gray",
+      "dark",
+      "darkcontrast",
+      "ink",
+      "ink-dark",
+    ]);
+    expect(theme.THEME_SWATCHES.find((s) => s.value === "ink")?.color).toBe("#242321");
+    expect(theme.THEME_SWATCHES.find((s) => s.value === "ink-dark")?.color).toBe("#EDECE7");
   });
 
   test("applyPersistedTheme corrects from DB and dual-writes localStorage", () => {
@@ -46,12 +62,16 @@ describe("theme store", () => {
     expect(theme.getTheme()).toBe("sepia");
   });
 
-  // 批次12b：原生弹层 color-scheme 内联同步——两枚夜间主题 dark，其余 light
+  // 批次12b：原生弹层 color-scheme 内联同步——夜间主题（dark/darkcontrast/ink-dark）dark，其余 light
   test("colorScheme inline style maps dark themes", () => {
     theme.setTheme("dark");
     expect(style.colorScheme).toBe("dark");
     theme.setTheme("darkcontrast");
     expect(style.colorScheme).toBe("dark");
+    theme.setTheme("ink-dark");
+    expect(style.colorScheme).toBe("dark");
+    theme.setTheme("ink");
+    expect(style.colorScheme).toBe("light");
     theme.setTheme("sepia");
     expect(style.colorScheme).toBe("light");
   });
