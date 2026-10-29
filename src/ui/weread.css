@@ -522,6 +522,8 @@
   grid-template-rows: auto 1fr;
   min-width: 0;
   min-height: 0;
+  /* M2 U4：给底部印刷尾注线 ::after 提供定位上下文 */
+  position: relative;
 }
 
 .wr-main-topbar {
@@ -1025,7 +1027,8 @@
 .wr-book-card {
   position: relative;
   cursor: pointer;
-  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+  /* M2 U4：hover 上浮与放大合并为单段 transform（150ms ease） */
+  transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
   border: 1px solid var(--wr-hairline);
   border-radius: var(--wr-radius-lg);
   background: var(--wr-paper);
@@ -1044,9 +1047,9 @@
 }
 
 .wr-book-card:hover {
-  transform: translateY(-2px);
+  transform: translateY(-2px) scale(1.02);
   border-color: rgba(var(--wr-accent-rgb), 0.28);
-  box-shadow: var(--wr-shadow-card-hover);
+  box-shadow: 0 16px 28px -20px var(--m2-shadow);
 }
 
 .wr-book-card:focus-visible {
@@ -1059,7 +1062,8 @@
   /* 批次11b：固定 2:3 书封比例，高由比例推导；渐变兜底兼作无封面/书架四宫格占位 */
   aspect-ratio: 2 / 3;
   border-radius: var(--wr-radius-md);
-  border: 1px solid var(--wr-hairline);
+  /* M2 U4：封面描边换 --m2-cover-line */
+  border: 1px solid var(--m2-cover-line);
   position: relative;
   overflow: hidden;
   background: radial-gradient(90px 110px at 35% 20%, rgba(var(--wr-accent-rgb), 0.42), rgba(var(--wr-accent-rgb), 0) 60%),
@@ -1080,6 +1084,8 @@
   height: 100%;
   object-fit: cover;
   image-rendering: auto;
+  /* M2 U4：夜间压暗封面（浅色主题值为 none 天然无感） */
+  filter: var(--m2-cover-filter);
 }
 
 .wr-cover-text {
@@ -1129,18 +1135,19 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  /* hover/focus 时让位右上角工具钮（28px×2+gap+边距），标题永不压字；:has 限定有工具钮的卡（书架），收藏卡不空让位 */
+  color: var(--m2-ink);
+  /* hover/focus 时让位右上角工具钮（M2 后单枚 ⋯ 28px+边距），标题永不压字；:has 限定有工具钮的卡（书架），收藏卡不空让位 */
   transition: padding-right 150ms ease;
 }
 
 .wr-book-card:has(.wr-card-tools):hover .wr-title,
 .wr-book-card:has(.wr-card-tools):focus-within .wr-title {
-  padding-right: 68px;
+  padding-right: 44px;
 }
 
 .wr-author {
   font-size: 12px;
-  color: var(--wr-muted);
+  color: var(--m2-ink-soft);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1402,6 +1409,13 @@
   padding: 16px 18px 0;
 }
 
+/* M2 U4：书架卡最小规则——1px 墨线边 + wash 底（padding 沿用 .wr-book-card 12px）；
+   放在暗色覆盖之后，(0,2,0) 同特异性按源码序生效 */
+.wr-book-card.wr-shelf-card {
+  border-color: var(--m2-line);
+  background: var(--m2-wash);
+}
+
 /* 批次11b：书架卡封面=四宫格前 4 本书封；不足 4 格露出 .wr-cover 主题渐变占位。
    批次12b：格距 3px + 每格 1px 内描边 + 底部内阴影——四图贴太紧无层次（外框/圆角由 .wr-cover 本身给出） */
 .wr-shelf-grid {
@@ -1419,6 +1433,7 @@
   object-fit: cover;
   border-radius: 2px;
   box-shadow: inset 0 0 0 1px var(--wr-hairline);
+  filter: var(--m2-cover-filter);
 }
 
 .wr-shelf-grid::after {
@@ -1621,7 +1636,8 @@ body.wr-card-dragging * {
   gap: 12px;
   align-items: center;
   padding: 10px 12px;
-  border: 1px solid var(--wr-hairline);
+  /* M2 U4：颜色层换 m2 token（结构不动） */
+  border: 1px solid var(--m2-line);
   border-radius: var(--wr-radius-lg);
   background: var(--wr-paper);
   box-shadow: var(--wr-shadow-card);
@@ -1636,7 +1652,7 @@ body.wr-card-dragging * {
   width: 40px;
   aspect-ratio: 2 / 3;
   flex: 0 0 auto;
-  border: 1px solid var(--wr-hairline);
+  border: 1px solid var(--m2-cover-line);
   border-radius: var(--wr-radius-xs);
   overflow: hidden;
   display: flex;
@@ -1649,6 +1665,7 @@ body.wr-card-dragging * {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  filter: var(--m2-cover-filter);
 }
 
 .wr-trash-info {
@@ -1661,12 +1678,13 @@ body.wr-card-dragging * {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--m2-ink);
 }
 
 .wr-trash-meta {
   margin-top: 2px;
   font-size: 12px;
-  color: var(--wr-muted);
+  color: var(--m2-ink-soft);
 }
 
 .wr-trash-actions {
@@ -2856,4 +2874,39 @@ input[type="range"]:focus-visible {
   to {
     transform: translateX(100%);
   }
+}
+
+/* ── M2 U4：书卡墨线进度 + 印刷感收尾 ── */
+
+/* §11.9：有进度的书 = 封面下缘恒长 2px 墨线（替代「读到 N%」chip） */
+.wr-progress-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--m2-ink);
+}
+
+/* 主区底部印刷尾注线：1px 墨线画到 70% 宽 */
+.wr-main::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 70%;
+  height: 1px;
+  background: var(--m2-line);
+  pointer-events: none;
+}
+
+/* 纸底噪点：全幅 fixed 层（alpha 0.05 随 data URI 自带），压在 --wr-z-overlay 之下不盖弹窗内容 */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--wr-z-overlay) - 1);
+  pointer-events: none;
+  background-image: var(--m2-noise);
+  background-size: 240px 240px;
 }

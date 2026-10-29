@@ -1000,10 +1000,6 @@ export default function LibraryPage() {
       startCardDragRef.current(e, { kind: "book", id: book.id, label: formatTitle(book), cover: coverUrl }),
     [],
   );
-  const onCardPin = useCallback(
-    (book: Book, pinned: boolean) => onChipUpdate({ book_id: book.id, pinned }),
-    [onChipUpdate],
-  );
   const onCardMenu = useCallback((book: Book, anchor: HTMLElement) => {
     const r = anchor.getBoundingClientRect();
     openMenu({ kind: "book", x: r.right, y: r.bottom + 4, book }, anchor);
@@ -1308,7 +1304,6 @@ export default function LibraryPage() {
               onCardPointerDown={onCardPointerDown}
               onCardActivate={openBook}
               onCardSelectToggle={toggleSelected}
-              onCardPin={onCardPin}
               onCardMenu={onCardMenu}
             />
           ))}
@@ -1452,6 +1447,13 @@ export default function LibraryPage() {
             </>
           ) : menu.kind === "book" ? (
             <>
+              <button
+                className="wr-menu-item"
+                role="menuitem"
+                onClick={() => { closeMenu(); onChipUpdate({ book_id: menu.book.id, pinned: !menu.book.pinned_at }); }}
+              >
+                {menu.book.pinned_at ? "取消置顶" : "置顶"}
+              </button>
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); setDetailsBook(menu.book); }}>
                 详情
               </button>

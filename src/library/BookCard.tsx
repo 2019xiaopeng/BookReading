@@ -4,7 +4,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerE
 import type { Book } from "../tauri/invoke";
 import { useCoverPriority } from "./useCoverUrls";
 import { formatAuthor, formatTitle, progressText } from "./bookFormat";
-import { IconMore, IconPin } from "../ui/icons";
+import { IconMore } from "../ui/icons";
 
 /**
  * 书卡（原 LibraryPage 内联 map 抽出 + React.memo）：
@@ -25,13 +25,12 @@ export type BookCardProps = {
   onCardPointerDown: (e: ReactPointerEvent<HTMLElement>, book: Book, coverUrl?: string) => void;
   onCardActivate: (bookId: string) => void;
   onCardSelectToggle: (bookId: string) => void;
-  onCardPin: (book: Book, pinned: boolean) => void;
   onCardMenu: (book: Book, anchor: HTMLElement) => void;
 };
 
 function BookCardImpl(props: BookCardProps) {
   const { book, coverUrl, readingTimeText, selectMode, selected, dragging, pop, loading } = props;
-  const { onCardPointerDown, onCardActivate, onCardSelectToggle, onCardPin, onCardMenu } = props;
+  const { onCardPointerDown, onCardActivate, onCardSelectToggle, onCardMenu } = props;
   const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
   // 图片就绪标记：url 变化（换封面）后自动回到未就绪态，重新走淡入
   const coverLoaded = !!coverUrl && loadedUrl === coverUrl;
@@ -99,43 +98,27 @@ function BookCardImpl(props: BookCardProps) {
           <div className="wr-cover-title">{formatTitle(book)}</div>
           <div className="wr-cover-author">{formatAuthor(book)}</div>
         </div>
+        {/* §11.9：读到 N% chip 撤掉，有进度=封面下缘恒长 2px 墨线（百分比在 .wr-author title 提示里） */}
+        {typeof book.reading_percent === "number" && book.reading_percent > 0 ? (
+          <div className="wr-progress-line" aria-hidden="true" />
+        ) : null}
       </div>
 
       <div className="wr-meta">
         <div className="wr-title" title={formatTitle(book)}>{formatTitle(book)}</div>
         <div className="wr-author" title={`${formatAuthor(book)} · ${progressText(book)}`}>{formatAuthor(book)}</div>
-        {typeof book.reading_percent === "number" || readingTimeText ? (
+        {readingTimeText ? (
           <div className="wr-chip-row">
-            {typeof book.reading_percent === "number" ? (
-              <div className="wr-chip">
-                <span className="wr-live-dot" aria-hidden="true" />
-                <span>读到 {Math.round(book.reading_percent * 100)}%</span>
-              </div>
-            ) : null}
-            {readingTimeText ? (
-              <div className="wr-chip">
-                <span>{readingTimeText}</span>
-              </div>
-            ) : null}
+            <div className="wr-chip">
+              <span>{readingTimeText}</span>
+            </div>
           </div>
         ) : null}
       </div>
 
+      {/* §11.6：置顶/详情/移出收进 ⋯ 菜单；置顶卡常显 ⋯ 保留可发现性 */}
       {!selectMode ? (
         <div className="wr-card-tools" data-show={!!book.pinned_at}>
-          <button
-            className="wr-mini-btn"
-            aria-label={book.pinned_at ? "取消置顶" : "置顶"}
-            aria-pressed={!!book.pinned_at}
-            data-pinned={!!book.pinned_at}
-            disabled={loading}
-            onClick={(e) => {
-              e.stopPropagation();
-              onCardPin(book, !book.pinned_at);
-            }}
-          >
-            <IconPin fill={book.pinned_at ? "currentColor" : "none"} />
-          </button>
           <button
             className="wr-mini-btn"
             aria-label="更多操作"
