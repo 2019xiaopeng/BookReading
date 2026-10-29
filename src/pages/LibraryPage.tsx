@@ -55,11 +55,19 @@ import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
 import AppShell, { setShelvesCache, useShellShelves } from "../ui/AppShell";
 import { showAlert, showConfirm } from "../ui/dialog";
-import { IconBook, IconFolder, IconImage, IconRefresh, IconTrash } from "../ui/icons";
+import { IconBook, IconCheckSquare, IconDensity, IconFolder, IconImage, IconRefresh, IconSort, IconTrash } from "../ui/icons";
 
 type SortKey = "recent" | "title" | "added" | "custom";
 
+const SORT_LABELS: Record<SortKey, string> = {
+  recent: "最近阅读",
+  title: "书名",
+  added: "导入时间",
+  custom: "自定义",
+};
+
 type MenuState =
+  | { kind: "sort"; x: number; y: number }
   | { kind: "grid"; x: number; y: number }
   | { kind: "book"; x: number; y: number; book: Book }
   | { kind: "shelf"; x: number; y: number; shelf: Shelf };
@@ -1062,54 +1070,46 @@ export default function LibraryPage() {
         </div>
       ) : (
         <div className="wr-toolbar-row">
-          <div className="wr-seg" role="group" aria-label="排序">
-            <button className="wr-seg-btn" data-active={sortKey === "recent"} onClick={() => setSortKey("recent")}>
-              最近阅读
-            </button>
-            <button className="wr-seg-btn" data-active={sortKey === "title"} onClick={() => setSortKey("title")}>
-              书名
-            </button>
-            <button className="wr-seg-btn" data-active={sortKey === "added"} onClick={() => setSortKey("added")}>
-              导入时间
-            </button>
-            <button
-              className="wr-seg-btn"
-              data-active={sortKey === "custom"}
-              title="拖动卡片调整顺序"
-              onClick={() => setSortKey("custom")}
-            >
-              自定义
-            </button>
-            <button
-              className="wr-seg-btn"
-              aria-pressed={sortAsc}
-              aria-label={`排序方向：${sortAsc ? "升序" : "降序"}`}
-              title={`排序方向：${sortAsc ? "升序" : "降序"}`}
-              onClick={() => setSortAsc((v) => !v)}
-            >
-              {sortAsc ? "↑ 升序" : "↓ 降序"}
-            </button>
-          </div>
+          <button
+            type="button"
+            className="wr-btn wr-icon-btn"
+            aria-haspopup="menu"
+            aria-expanded={menu?.kind === "sort"}
+            aria-label={`排序：${SORT_LABELS[sortKey]} · ${sortAsc ? "升序" : "降序"}`}
+            title={`排序：${SORT_LABELS[sortKey]} · ${sortAsc ? "升序" : "降序"}`}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              openMenu({ kind: "sort", x: r.left, y: r.bottom + 4 }, e.currentTarget);
+            }}
+          >
+            <IconSort />
+          </button>
           <div className="wr-seg" role="group" aria-label="批量选择">
             <button
-              className="wr-seg-btn"
+              type="button"
+              className="wr-seg-btn wr-seg-btn--icon wr-seg-btn--solid"
               aria-pressed={selectMode}
               data-active={selectMode}
+              aria-label={selectMode ? "退出选择" : "选择"}
+              title={selectMode ? "退出选择" : "选择"}
               onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
             >
-              选择
+              <IconCheckSquare />
             </button>
           </div>
           <div className="wr-seg" role="group" aria-label="书架密度" style={{ marginLeft: "auto" }}>
             {(Object.keys(DENSITY_PRESETS) as LibraryDensity[]).map((d) => (
               <button
                 key={d}
-                className="wr-seg-btn"
+                type="button"
+                className="wr-seg-btn wr-seg-btn--icon"
                 data-active={density === d}
                 aria-pressed={density === d}
+                aria-label={DENSITY_PRESETS[d].label}
+                title={DENSITY_PRESETS[d].label}
                 onClick={() => changeDensity(d)}
               >
-                {DENSITY_PRESETS[d].label}
+                <IconDensity bars={d === "standard" ? 2 : d === "large" ? 3 : 4} />
               </button>
             ))}
           </div>
@@ -1370,7 +1370,50 @@ export default function LibraryPage() {
 
       {menu ? (
         <div ref={menuRef} className="wr-menu" role="menu" style={{ left: menu.x, top: menu.y }} onKeyDown={onMenuKeyDown}>
-          {menu.kind === "grid" ? (
+          {menu.kind === "sort" ? (
+            <>
+              {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+                <button
+                  key={k}
+                  className="wr-menu-item"
+                  role="menuitemradio"
+                  aria-checked={sortKey === k}
+                  data-checked={sortKey === k}
+                  title={k === "custom" ? "拖动卡片调整顺序" : undefined}
+                  onClick={() => {
+                    closeMenu();
+                    setSortKey(k);
+                  }}
+                >
+                  {SORT_LABELS[k]}
+                </button>
+              ))}
+              <button
+                className="wr-menu-item"
+                role="menuitemradio"
+                aria-checked={sortAsc}
+                data-checked={sortAsc}
+                onClick={() => {
+                  closeMenu();
+                  setSortAsc(true);
+                }}
+              >
+                升序
+              </button>
+              <button
+                className="wr-menu-item"
+                role="menuitemradio"
+                aria-checked={!sortAsc}
+                data-checked={!sortAsc}
+                onClick={() => {
+                  closeMenu();
+                  setSortAsc(false);
+                }}
+              >
+                降序
+              </button>
+            </>
+          ) : menu.kind === "grid" ? (
             <>
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onNewShelf(); }}>
                 新建书架

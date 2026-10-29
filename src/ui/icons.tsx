@@ -291,3 +291,147 @@ export function IconTrash(props: P) {
   );
 }
 
+/* ── M2 碳墨刊头图标集（规范 §7 清单，strokeWidth 1.75 / 默认 20px）──
+   与上方旧图标（1.6 / 18px）并存：旧图标被 ReaderPage 等引用，样式不回改 */
+
+export function IconSort(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path d="M7 5v14" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <path d="M4 8l3-3 3 3" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M17 19V5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <path d="M14 16l3 3 3-3" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 密度三格示意：2/3/4 条竖排矩形（标准/宽松/特大） */
+export function IconDensity(props: P & { bars?: 2 | 3 | 4 }) {
+  const { bars = 3, ...rest } = props;
+  const w = bars === 2 ? 5.5 : bars === 3 ? 4 : 2.9;
+  const step = w + (16 - bars * w) / (bars - 1);
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...rest}>
+      {Array.from({ length: bars }, (_, i) => (
+        <rect
+          key={i}
+          x={4 + i * step}
+          y={5}
+          width={w}
+          height={14}
+          rx="1.2"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinejoin="round"
+        />
+      ))}
+    </svg>
+  );
+}
+
+export function IconCheckSquare(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <rect x="4" y="4" width="16" height="16" rx="3.5" stroke="currentColor" strokeWidth="1.75" />
+      <path d="M8.4 12.3l2.6 2.6 4.7-5.4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 书架线稿（空态/快捷项） */
+export function IconShelf(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path d="M3.5 15h17" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <path d="M5.5 15v5M18.5 15v5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <path d="M7 5.5v9.5M10.5 8v7M14 4.5v10" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function IconClose(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function IconBack(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path d="M19 12H5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <path d="M11 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function IconTag(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M4 5.5A1.5 1.5 0 0 1 5.5 4h5.4c.4 0 .78.16 1.06.44l7.6 7.6a1.5 1.5 0 0 1 0 2.12l-4.6 4.6a1.5 1.5 0 0 1-2.12 0l-7.6-7.6A1.5 1.5 0 0 1 4 10.1V5.5Z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <circle cx="8.5" cy="8.5" r="1.3" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** 还原（回收站恢复） */
+export function IconRestore(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path d="M9 14 4 9l5-5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function IconPlus(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** 全部藏书（叠放书堆） */
+export function IconLibraryAll(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <rect x="5" y="4.5" width="14" height="4" rx="1.2" stroke="currentColor" strokeWidth="1.75" />
+      <rect x="5" y="10" width="14" height="4" rx="1.2" stroke="currentColor" strokeWidth="1.75" />
+      <rect x="5" y="15.5" width="14" height="4" rx="1.2" stroke="currentColor" strokeWidth="1.75" />
+    </svg>
+  );
+}
+
+/** 在读（翻开的书） */
+export function IconBookOpen(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M12 6.5C10.4 5.2 8.3 4.5 5.5 4.5c-.8 0-1.5.6-1.5 1.4v10.6c0 .8.7 1.4 1.5 1.4 2.8 0 4.9.7 6.5 2 1.6-1.3 3.7-2 6.5-2 .8 0 1.5-.6 1.5-1.4V5.9c0-.8-.7-1.4-1.5-1.4-2.8 0-4.9.7-6.5 2Z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <path d="M12 6.5v13.4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** 警示（空态） */
+export function IconAlert(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path d="M12 4 3.2 18.5h17.6L12 4Z" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" />
+      <path d="M12 10v4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <circle cx="12" cy="16.9" r="1.05" fill="currentColor" />
+    </svg>
+  );
+}
+
