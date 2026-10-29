@@ -4,6 +4,7 @@ import type { FontFamily, ReadingMode, Theme } from "../settings/types";
 import { readAppDataFile } from "../../tauri/appDataPaths";
 import type { SpreadMode } from "../settings/layoutMode";
 import { logFrontend } from "../../tauri/frontendLog";
+import { loadBookLocations, saveBookLocations } from "../../tauri/invoke";
 
 const loggedKeys = new Set<string>();
 
@@ -77,6 +78,30 @@ export type RelocatedPayload = {
 function pageEdge(edge: any): PageEdge | null {
   const d = edge?.displayed;
   return typeof d?.page === "number" && typeof d?.total === "number" && d.total > 0 ? { page: d.page, total: d.total } : null;
+}
+
+/** locations 持久化键：字体字号档变了 locations 才重算（ReadPage 用它调 save/loadBookLocations） */
+export function locationsCacheKey(fontFamily: FontFamily, fontSizePercent: number): string {
+  return `${fontFamily}|${fontSizePercent}`;
+}
+
+/** relocated 载荷值等价（页码/locPage 两层 nullable 字段逐值比）：滚动/resize 高频触发时值未变不下发新引用 */
+export function sameRelocatedPayload(a: RelocatedPayload | null, b: RelocatedPayload | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.cfi === b.cfi &&
+    a.percent === b.percent &&
+    a.href === b.href &&
+    a.sectionIndex === b.sectionIndex &&
+    a.endSectionIndex === b.endSectionIndex &&
+    a.pageStart?.page === b.pageStart?.page &&
+    a.pageStart?.total === b.pageStart?.total &&
+    a.pageEnd?.page === b.pageEnd?.page &&
+    a.pageEnd?.total === b.pageEnd?.total &&
+    a.locPage?.index === b.locPage?.index &&
+    a.locPage?.total === b.locPage?.total
+  );
 }
 
 /** range CFI 边缘的位置键：[spinePos, ...path.steps.index, ...edge.steps.index, terminal.offset]，字典序可比 */
@@ -229,6 +254,14 @@ export async function createReader(opts: {
   readingMode?: ReadingMode;
   lineHeight?: number;
   fontFamily?: FontFamily;
+  /** 首显直达目标（CFI）；缺省第 1 章。恢复点在首渲前注入，消除"先渲第 1 章再 display 恢复 CFI"的双渲染 */
+  initialTarget?: string;
+  /** locations 持久化的书 id（缺省不持久化，仅会话内生成） */
+  bookId?: string;
+  /** locations 持久化键（字体|字号，惰性取值——生成时机晚于设置回填） */
+  locationsKey?: () => string;
+  /** 自定义正文 @font-face css（注入 iframe；宿主注入对 iframe 无效）。null=无自定义字体 */
+  fontFaceCss?: () => string | null;
   onRelocated?: (payload: RelocatedPayload) => void;
   onTocLoaded?: (toc: TocItem[]) => void;
   onSelected?: (payload: { cfiRange: string; text: string; rect: SelectionRect | null }) => void;
@@ -276,6 +309,7 @@ export async function createReader(opts: {
 
   let currentTheme: Theme = "light";
   let currentLineHeight = opts.lineHeight ?? 1.9;
+  let currentFontSizePercent = 120;
   let currentFontFamily: FontFamily = opts.fontFamily ?? "default";
   const registerThemes = (lineHeight: number, fontFamily: FontFamily) => {
     const common: Record<string, any> = {
@@ -337,6 +371,36 @@ export async function createReader(opts: {
     ".epubjs-hl": { fill: "rgba(255, 230, 0, 0.35)", "fill-opacity": "0.35", "mix-blend-mode": "multiply" },
   });
 
+  // 自定义正文 @font-face 注入 iframe（正文在 epubjs iframe 里，宿主 document 的 @font-face 完全无效）。
+  // spine content hook 在每个 section 内容创建时触发（含 clear 后重 display），addStylesheetCss 按 key 幂等覆盖。
+  // 字体就绪前排版度量错误：epubjs 自带的 fontLoadListeners 已被上游注释停用，这里补 fonts.ready → resizeCheck 重排。
+  if (opts.fontFaceCss) {
+    book.spine.hooks.content.register((contents: any) => {
+      const css = opts.fontFaceCss?.();
+      const doc = contents?.document;
+      if (!css || !doc) return;
+      try {
+        contents.addStylesheetCss(css, "wr-custom-font");
+      } catch (e) {
+        logOnce("reader.fontFace.inject", `reader: @font-face inject failed ${String(e)}`);
+      }
+      try {
+        doc.fonts?.ready?.then(() => {
+          try {
+            contents.resizeCheck?.();
+          } catch {
+            // 字体就绪重排失败：保持现有分页，下次翻章自然按新度量排版
+          }
+        });
+      } catch {
+        // iframe 无 FontFaceSet（老 WebView）：不等待，直接用回退字体排版
+      }
+    });
+  }
+
+  let lastEmitted: RelocatedPayload | null = null;
+  let prefetchedSection: number | null = null;
+
   const onRelocated = (location: any) => {
     const cfi: string | undefined = location?.start?.cfi;
     if (!cfi) return;
@@ -355,7 +419,7 @@ export async function createReader(opts: {
     const href = String(location?.start?.href ?? "").split("#")[0];
     const sectionIndex = typeof location?.start?.index === "number" ? location.start.index : -1;
     const endSectionIndex = typeof location?.end?.index === "number" ? location.end.index : sectionIndex;
-    opts.onRelocated?.({
+    const payload: RelocatedPayload = {
       cfi,
       percent,
       href,
@@ -364,38 +428,110 @@ export async function createReader(opts: {
       pageStart: pageEdge(location?.start),
       pageEnd: pageEdge(location?.end),
       locPage,
-    });
+    };
+    // 引用去重：relocated 在滚动/resize/flow 切换下高频触发，值未变不下发新对象（宿主 setState 级联全树重渲）
+    if (sameRelocatedPayload(lastEmitted, payload)) return;
+    lastEmitted = payload;
+    opts.onRelocated?.(payload);
+    // 章节预取：进章即预载下一章（section.load 缓存于 section，display 时免一次解析）。
+    // 比章尾预取更早且无"距章尾 N 页"探测成本；任意时刻至多多驻留一章 DOM。
+    // !== 去重（同章内 relocated 每页都触发；向前/向后跳章都能补拉新邻章，重复 load 命中 section 缓存为零成本）
+    const nextIndex = sectionIndex + 1;
+    if (nextIndex !== prefetchedSection) {
+      const item = book.spine?.spineItems?.[nextIndex];
+      if (item?.linear) {
+        prefetchedSection = nextIndex;
+        item.load(book.load.bind(book)).catch(() => undefined);
+      } else {
+        prefetchedSection = nextIndex;
+      }
+    }
   };
   rendition.on("relocated", onRelocated);
 
-  // 超时不置终态：1024 超时后换新 Locations 实例降级 4096 后台重试一次。
-  // 同实例二次 generate 不重置 _locations（process 里 concat 追加，1024/4096 混合粒度会毁掉二分查找），
-  // 必须新实例；book.destroy() 置空 locations（用户已离开）时直接放弃重试
-  void (async () => {
-    for (const [attempt, interval] of [1024, 4096].entries()) {
-      try {
-        if (attempt > 0) {
-          const Ctor = (book.locations as any)?.constructor;
-          if (typeof Ctor !== "function") return;
-          const old = book.locations as any;
-          book.locations = new Ctor(book.spine, book.load.bind(book));
-          // destroy() 会 q.stop() 终止旧 1024 间隔的 generate 队列，否则两轮全文解析并发白耗主线程
-          try {
-            old?.destroy?.();
-          } catch {
-            // best effort：停不掉也只是旧队列继续跑完
-          }
+  // locations 根治：不再与首显并发、不再 30s 超时降 4096（>300 章的书永远跑不完还卡主线程）。
+  // 首显完成后 idle 启动：先试持久化灌注（book.locations.load，命中即就绪零成本），未命中才 generate(1024)；
+  // epubjs 每章 100ms 停顿保留（库内部节流）。生成结果 5s 防抖落库；换字体字号（key 变）重算。
+  let locationsKeyCurrent: string | null = null;
+  let locationsGen = 0;
+  let locationsSaveTimer: number | null = null;
+
+  const locationsReady = () => {
+    opts.onLocationsReady?.();
+    if (lastLocation?.start?.cfi) onRelocated(lastLocation);
+  };
+
+  const scheduleLocationsSave = () => {
+    if (locationsSaveTimer !== null) window.clearTimeout(locationsSaveTimer);
+    locationsSaveTimer = window.setTimeout(() => {
+      locationsSaveTimer = null;
+      const payload = (() => {
+        try {
+          return book.locations?.save?.() ?? null;
+        } catch {
+          return null;
         }
-        await withTimeout(book.locations.generate(interval), 30_000);
-      } catch (e) {
-        logOnce(`reader.locations.${interval}`, `reader: locations.generate(${interval}) failed ${String(e)}`);
-        continue;
-      }
-      opts.onLocationsReady?.();
-      if (lastLocation?.start?.cfi) onRelocated(lastLocation);
+      })();
+      if (payload && opts.bookId) void saveBookLocations(opts.bookId, locationsKeyCurrent ?? "", payload);
+    }, 5_000);
+  };
+
+  const idleRun = (fn: () => void) => {
+    const ric = (window as any).requestIdleCallback;
+    if (typeof ric === "function") ric(() => fn(), { timeout: 3_000 });
+    else window.setTimeout(fn, 300);
+  };
+
+  const startLocationsGenerate = (gen: number) => {
+    idleRun(() => {
+      if (gen !== locationsGen) return;
+      book.locations
+        .generate(1024)
+        .then(() => {
+          if (gen !== locationsGen) return;
+          locationsReady();
+          if (opts.bookId) scheduleLocationsSave();
+        })
+        .catch((e: unknown) => {
+          logOnce("reader.locations.generate", `reader: locations.generate(1024) failed ${String(e)}`);
+        });
+    });
+  };
+
+  const ensureLocations = () => {
+    const key = opts.locationsKey?.() ?? locationsCacheKey(currentFontFamily, currentFontSizePercent);
+    if (locationsKeyCurrent === key) return;
+    locationsKeyCurrent = key;
+    const gen = ++locationsGen;
+    // 换 key 先停旧生成队列；同实例二次 generate 会 concat 追加（混合粒度毁掉二分查找），必须新实例
+    const Ctor = (book.locations as any)?.constructor;
+    try {
+      book.locations?.destroy?.();
+    } catch {
+      // best effort
+    }
+    if (typeof Ctor !== "function") return;
+    book.locations = new Ctor(book.spine, book.load.bind(book));
+    if (!opts.bookId) {
+      startLocationsGenerate(gen);
       return;
     }
-  })();
+    loadBookLocations(opts.bookId, key)
+      .then((cached) => {
+        if (gen !== locationsGen) return;
+        if (typeof cached === "string" && cached) {
+          try {
+            book.locations.load(cached);
+            locationsReady();
+            return;
+          } catch (e) {
+            logOnce("reader.locations.load", `reader: locations.load failed ${String(e)}`);
+          }
+        }
+        startLocationsGenerate(gen);
+      })
+      .catch(() => startLocationsGenerate(gen));
+  };
 
   const onSelected = (cfiRange: string, contents: any) => {
     const rect = selectionHostRect(contents);
@@ -513,6 +649,8 @@ export async function createReader(opts: {
     },
     setFontSizePercent: (percent: number) => {
       rendition.themes.fontSize(`${percent}%`);
+      currentFontSizePercent = percent;
+      ensureLocations(); // locations 按 字体|字号 档缓存：换档重算（命中持久化则零成本灌注）
     },
     setLineHeight: (lineHeight: number) => {
       if (lineHeight === currentLineHeight) return;
@@ -523,6 +661,7 @@ export async function createReader(opts: {
       if (fontFamily === currentFontFamily) return;
       currentFontFamily = fontFamily;
       registerThemes(currentLineHeight, fontFamily);
+      ensureLocations();
     },
     setSpreadMode: (mode: SpreadMode) => {
       if (mode === lastSpreadMode) return;
@@ -619,6 +758,20 @@ export async function createReader(opts: {
       return matches;
     },
     destroy: () => {
+      // 关书兜底：locations 生成的防抖落库若还在排队，立即一次写完（book.destroy 会作废 locations）
+      locationsGen += 1;
+      if (locationsSaveTimer !== null) {
+        window.clearTimeout(locationsSaveTimer);
+        locationsSaveTimer = null;
+        const payload = (() => {
+          try {
+            return book.locations?.save?.() ?? null;
+          } catch {
+            return null;
+          }
+        })();
+        if (payload && opts.bookId) void saveBookLocations(opts.bookId, locationsKeyCurrent ?? "", payload);
+      }
       try {
         rendition.off?.("displayerror", onDisplayError);
         rendition.off?.("relocated", onRelocated);

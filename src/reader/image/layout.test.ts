@@ -8,6 +8,7 @@ import {
   defaultImageReaderSettings,
   displayOrder,
   imageCfi,
+  maxWidthForStage,
   normalizeImageReaderSettings,
   pagePercent,
   panClamp,
@@ -15,6 +16,7 @@ import {
   slideDirection,
   spreadIndexForPage,
   turnKeyDirection,
+  widePagesFromMeta,
 } from "./layout";
 
 describe("buildSpreads", () => {
@@ -207,5 +209,44 @@ describe("batch12 autoScrollStep", () => {
     const fast = autoScrollStep(slow.accum, 240, 1 / 60);
     expect(fast.px).toBe(4); // 0.333+4=4.33 → 4px 写入、余数留存
     expect(fast.accum).toBeGreaterThan(0);
+  });
+});
+
+describe("v2.5 widePagesFromMeta（宽页预判 from 页元数据）", () => {
+  const meta = [
+    { width: 3000, height: 2000 }, // 1.5 > 1.2 → wide
+    { width: 1000, height: 1500 }, // 0.67 → 窄页
+    { width: 2400, height: 2000 }, // 1.2 = 阈值，不大于 → 窄页
+  ];
+
+  test("宽/高 > 1.2 判 wide，其余窄页", () => {
+    expect(widePagesFromMeta(meta, 3)).toEqual([true, false, false]);
+  });
+
+  test("元数据缺失/长度不足的页回 false（解码后探测兜底）", () => {
+    expect(widePagesFromMeta(null, 2)).toEqual([false, false]);
+    expect(widePagesFromMeta([meta[0]], 3)).toEqual([true, false, false]);
+    expect(widePagesFromMeta([{ width: 0, height: 0 }, { width: 100, height: 0 }, { width: 800, height: 600 }], 3)).toEqual([
+      false,
+      false,
+      true,
+    ]);
+  });
+
+  test("spreads 构建直接消费元数据判定（宽页占整组，不靠解码后重建）", () => {
+    expect(buildSpreads(3, widePagesFromMeta(meta, 3), "double")).toEqual([[0], [1, 2]]);
+    expect(buildSpreads(3, widePagesFromMeta(null, 3), "double")).toEqual([[0, 1], [2]]);
+  });
+});
+
+describe("v2.5 maxWidthForStage（大页降采样上限）", () => {
+  test("显示宽*1.5*DPR 后按 256 分桶；非法宽返回 null", () => {
+    expect(maxWidthForStage(0, 2)).toBeNull();
+    expect(maxWidthForStage(800, 1)).toBe(Math.round((800 * 1.5) / 256) * 256); // 1200 → 1280
+    expect(maxWidthForStage(800, 2)).toBe(Math.round((800 * 3) / 256) * 256); // 2400 → 2304
+    // 同桶内的小幅宽度变化不换档（窗口拖拽/锁定切栏不触发整窗重取）
+    const a = maxWidthForStage(800, 1);
+    const b = maxWidthForStage(830, 1);
+    expect(a).toBe(b);
   });
 });

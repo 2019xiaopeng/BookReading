@@ -1,5 +1,7 @@
 import {
+  memo,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -11,7 +13,6 @@ import type { Book } from "../../tauri/invoke";
 import { getReadingState } from "../../tauri/invoke";
 import type { Theme } from "../settings/types";
 import { IconPause, IconPlay, IconRefresh } from "../../ui/icons";
-import { useElementSize } from "../../ui/useElementSize";
 import { loadPdf, pdfLoadErrorMessage, renderPdfPage } from "./api";
 import { autoScrollStep, type ImageReaderSettings } from "../image/layout";
 import {
@@ -55,7 +56,24 @@ function drawBitmap(target: HTMLCanvasElement, src: HTMLCanvasElement) {
   if (ctx) ctx.drawImage(src, 0, 0);
 }
 
-export default function PdfReader({ book, theme, settings, onRelocated, onApi }: Props) {
+// 连续滚动位图 canvas 样式：模块级常量保 memo 生效（每次渲染新建对象会让 PageCanvas 全部重渲）
+const WEBTOON_CANVAS_STYLE: CSSProperties = { display: "block", width: "100%", height: "auto" };
+
+/** v2.5：canvas 绘制走 useEffect([bitmap])（原先 inline ref 回调每次重渲全量重绘 7 张 HiDPI canvas） */
+const PageCanvas = memo(function PageCanvas(props: {
+  bitmap: HTMLCanvasElement;
+  style?: CSSProperties;
+  label: string;
+}) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (el) drawBitmap(el, props.bitmap);
+  }, [props.bitmap]);
+  return <canvas ref={ref} style={props.style} aria-label={props.label} />;
+});
+
+function PdfReaderImpl({ book, theme, settings, onRelocated, onApi }: Props) {
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null); // 身份标记：就绪/换书重画；实际渲染走 docRef
   const [pageCount, setPageCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -91,7 +109,6 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
   const onRelocatedRef = useRef(onRelocated);
   const autoSpeedRef = useRef(settings.autoScrollSpeed);
   const autoScrollRef = useRef(false);
-  const stageSize = useElementSize(stageRef);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -199,8 +216,10 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
     };
   }, [book.id]);
 
-  // ---- 渲染治理：renderScale 随容器/模式/适配变化 ⇒ 作废整缓存（位图尺寸失效） ----
-  const cacheKey = `${settings.mode}/${settings.fit}/${stageSize.width}x${stageSize.height}`;
+  // ---- 渲染治理：renderScale 随模式/适配变化 ⇒ 作废整缓存（位图尺寸失效）。
+  // v2.5 去掉 stageSize：逐像素的窗口 resize 曾令缓存整批失效+7 页重渲（拖拽窗口=连续重渲卡顿）；
+  // resize 后位图沿用旧 scale 由 CSS 缩放（轻微模糊），翻页离开预载窗后自然重渲 ----
+  const cacheKey = `${settings.mode}/${settings.fit}`;
   useEffect(() => {
     if (cacheKey === cacheKeyRef.current) return;
     cacheKeyRef.current = cacheKey;
@@ -593,13 +612,17 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
     </button>
   ) : null;
 
-  // 分页模式 canvas 尺寸语义 = 漫画 img 的 fit 三档（复用 .wr-image-fit 容器规则）
-  const pagedCanvasStyle: CSSProperties =
-    settings.fit === "height"
-      ? { maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto" }
-      : settings.fit === "width"
-        ? { width: "100%", height: "auto" }
-        : { maxWidth: "none", maxHeight: "none", margin: "auto" };
+  // 分页模式 canvas 尺寸语义 = 漫画 img 的 fit 三档（复用 .wr-image-fit 容器规则）；
+  // useMemo 稳定引用（PageCanvas memo 依赖）
+  const pagedCanvasStyle = useMemo<CSSProperties>(
+    () =>
+      settings.fit === "height"
+        ? { maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto" }
+        : settings.fit === "width"
+          ? { width: "100%", height: "auto" }
+          : { maxWidth: "none", maxHeight: "none", margin: "auto" },
+    [settings.fit],
+  );
 
   // 单一根节点跨加载/错误/内容态常驻：stageRef 稳定，useElementSize 的 ResizeObserver 才能贯穿状态切换
   const pagedBitmap = bitmapsRef.current.get(page);
@@ -657,13 +680,7 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
                     }}
                   >
                     {bitmap ? (
-                      <canvas
-                        ref={(el) => {
-                          if (el) drawBitmap(el, bitmap);
-                        }}
-                        style={{ display: "block", width: "100%", height: "auto" }}
-                        aria-label={`第 ${i + 1} 页`}
-                      />
+                      <PageCanvas bitmap={bitmap} style={WEBTOON_CANVAS_STYLE} label={`第 ${i + 1} 页`} />
                     ) : failed.has(i) ? (
                       <button type="button" className="wr-image-loading wr-image-failed" onClick={() => retry(i)}>
                         本页渲染失败，点击重试
@@ -717,13 +734,7 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
             }
           >
             {pagedBitmap ? (
-              <canvas
-                ref={(el) => {
-                  if (el) drawBitmap(el, pagedBitmap);
-                }}
-                style={pagedCanvasStyle}
-                aria-label={`第 ${page + 1} 页`}
-              />
+              <PageCanvas bitmap={pagedBitmap} style={pagedCanvasStyle} label={`第 ${page + 1} 页`} />
             ) : failed.has(page) ? (
               <button type="button" className="wr-image-loading wr-image-failed" onClick={() => retry(page)}>
                 本页渲染失败，点击重试
@@ -741,3 +752,6 @@ export default function PdfReader({ book, theme, settings, onRelocated, onApi }:
     </div>
   );
 }
+
+// memo：onRelocated/onApi 由 ReaderPage useCallback 稳定后，沉浸栏显隐不再重渲整棵 PDF 阅读器
+export default memo(PdfReaderImpl);

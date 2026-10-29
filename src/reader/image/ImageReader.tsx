@@ -1,4 +1,5 @@
 import {
+  memo,
   useEffect,
   useMemo,
   useRef,
@@ -14,7 +15,7 @@ import type { Theme } from "../settings/types";
 import { IconPause, IconPlay, IconRefresh } from "../../ui/icons";
 import { showAlert } from "../../ui/dialog";
 import { BOOKS_CHANGED_EVENT } from "../../library/importRunner";
-import { listImagePages, readImagePage, relinkImageBook } from "./api";
+import { listImagePageMeta, listImagePages, readImagePage, relinkImageBook, type ImagePageMeta } from "./api";
 import {
   WIDE_PAGE_RATIO,
   autoScrollStep,
@@ -23,9 +24,11 @@ import {
   clampZoomScale,
   displayOrder,
     slideDirection,
+  maxWidthForStage,
   panClamp,
   parseImageCfi,
   spreadIndexForPage,
+  widePagesFromMeta,
   type ImageReaderSettings,
   type TurnDirection,
 } from "./layout";
@@ -66,7 +69,10 @@ function mimeFor(name: string): string {
   return "application/octet-stream";
 }
 
-export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, onRelocated, onApi }: Props) {
+type ZoomState = { scale: number; tx: number; ty: number };
+type PageEntry = { url: string; maxWidth: number | null };
+
+function ImageReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated, onApi }: Props) {
   const [pages, setPages] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // 批次18：重链接成功后 +1 触发装载 effect 重跑（book.id 不变，必须靠它重载）
@@ -80,20 +86,24 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
   // 批次17：本次换页是否走“占位→成像”路径（初始载入/跳页）——只有它淡入；相邻翻页由 slide 转场，不叠加淡入
   const [reveal, setReveal] = useState(true);
   const [snap, setSnap] = useState<{ pages: number[]; urls: Record<number, string>; dir: 1 | -1 } | null>(null);
-  const [zoom, setZoom] = useState({ scale: 1, tx: 0, ty: 0 });
+  const [zoom, setZoom] = useState<ZoomState>({ scale: 1, tx: 0, ty: 0 });
   const zoomed = zoom.scale !== 1;
   // B11 条漫自动滚动（webtoon 专属）：rAF 按帧距累积 scrollTop，速度存 image_reader_settings
   const [autoScroll, setAutoScroll] = useState(false);
   const [autoEndToast, setAutoEndToast] = useState(false);
+  // 页宽高元数据（可失败）：占位按宽高比预留 + spreads 宽页预判；null=无元数据走旧探测路径
+  const [pageMeta, setPageMeta] = useState<ImagePageMeta[] | null>(null);
   const autoSpeedRef = useRef(settings.autoScrollSpeed);
   const autoScrollRef = useRef(false);
   const zoomRef = useRef(zoom);
+  const zoomFrameRef = useRef(0);
+  const zoomCommitTimerRef = useRef<number | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const fitRef = useRef<HTMLDivElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pageElsRef = useRef<Map<number, HTMLElement>>(new Map());
-  const cacheRef = useRef<Map<number, string>>(new Map());
+  const cacheRef = useRef<Map<number, PageEntry>>(new Map());
   const loadingRef = useRef<Set<number>>(new Set());
   const wantedRef = useRef<Set<number>>(new Set());
   const epochRef = useRef(0);
@@ -120,14 +130,12 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
     autoScrollRef.current = autoScroll;
   }, [autoScroll]);
 
-  useEffect(() => {
-    zoomRef.current = zoom;
-  }, [zoom]);
-
-  // zoom geometry is per-mode (stage fit layer vs webtoon strip): start each mode fresh
+  // zoom geometry is per-mode (stage fit layer vs webtoon strip): start each mode fresh.
+  // paged 下 anchor 从不更新：切模式前先把锚拉回当前页，否则用陈旧 anchor 错误回收当前页邻域再重载（模式切换闪烁根因）
   useEffect(() => {
     setAutoScroll(false); // 模式切换停自动滚动（分页模式无此功能）
-    if (zoomRef.current.scale !== 1) setZoom({ scale: 1, tx: 0, ty: 0 });
+    setAnchor(currentPageRef.current);
+    if (zoomRef.current.scale !== 1) applyZoomNow({ scale: 1, tx: 0, ty: 0 });
   }, [settings.mode]);
 
   const spreads = useMemo(() => {
@@ -148,6 +156,7 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
     setUrls({});
     setFailed(new Set());
     setAutoScroll(false);
+    setPageMeta(null);
     reportedRef.current = null;
     shownSpreadRef.current = null;
     setShownSpread(null);
@@ -161,14 +170,28 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
           setError("这本书没有可读的页面");
           return;
         }
+        // 页宽高元数据（与页名同序）：失败/长度不符时静默回退（解码后探测 wide + 50vh 占位）
+        let meta: ImagePageMeta[] | null = null;
+        try {
+          const m = await listImagePageMeta(book.id);
+          if (Array.isArray(m) && m.length === names.length) meta = m;
+        } catch {
+          // 旧后端无此命令：无元数据照常可读
+        }
+        if (cancelled) return;
         const state = await getReadingState(book.id);
         if (cancelled) return;
         const start = clampPage(parseImageCfi(state?.cfi) ?? 0, names.length);
         currentPageRef.current = start;
         setAnchor(start);
         setPages(names);
-        const plain = buildSpreads(names.length, names.map(() => false), settingsRef.current.layout);
-        setSpreadIndex(spreadIndexForPage(plain, start));
+        setPageMeta(meta);
+        // 有元数据时按已知宽高建 spreads（宽页解码前就占整组，不再换组闪变）
+        const wideArr = widePagesFromMeta(meta, names.length);
+        const initialWide: Record<number, boolean> = {};
+        for (let i = 0; i < wideArr.length; i++) if (wideArr[i]) initialWide[i] = true;
+        setWide(initialWide);
+        setSpreadIndex(spreadIndexForPage(buildSpreads(names.length, wideArr, settingsRef.current.layout), start));
       } catch (e) {
         if (!cancelled) setError(String(e));
       }
@@ -177,7 +200,7 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
       cancelled = true;
       epochRef.current += 1;
       wantedRef.current = new Set();
-      for (const url of cacheRef.current.values()) URL.revokeObjectURL(url);
+      for (const entry of cacheRef.current.values()) URL.revokeObjectURL(entry.url);
       cacheRef.current.clear();
     };
   }, [book.id, reloadKey]);
@@ -245,14 +268,22 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
     void ensureLoaded(index);
   }
 
+  // 大页降采样上限：显示宽*1.5*DPR（256px 分桶）；fit=original 取原图不缩
+  function currentPageMaxWidth(): number | null {
+    const s = settingsRef.current;
+    if (s.mode === "paged" && s.fit === "original") return null;
+    return maxWidthForStage(stageRef.current?.clientWidth ?? 0, window.devicePixelRatio || 1);
+  }
+
   async function ensureLoaded(index: number) {
     const count = pages?.length ?? 0;
     if (index < 0 || index >= count) return;
     if (cacheRef.current.has(index) || loadingRef.current.has(index)) return;
     loadingRef.current.add(index);
     const epoch = epochRef.current;
+    const maxWidth = currentPageMaxWidth();
     try {
-      const bytes = await readImagePage(book.id, index);
+      const bytes = await readImagePage(book.id, index, maxWidth ?? undefined);
       const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mimeFor(pages?.[index] ?? "") }));
       // 批次16：解码完成才算就绪——未解码完不入缓存不换页，消除半载入闪白
       const probe = new Image();
@@ -263,7 +294,7 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
         URL.revokeObjectURL(url);
         return;
       }
-      cacheRef.current.set(index, url);
+      cacheRef.current.set(index, { url, maxWidth });
       setUrls((prev) => ({ ...prev, [index]: url }));
       // probe the aspect so wide pages can claim a full spread in double mode
       if (probe.naturalHeight > 0 && probe.naturalWidth / probe.naturalHeight > WIDE_PAGE_RATIO) {
@@ -300,6 +331,14 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
     }
     for (const p of spreads[shownSpreadRef.current ?? -1] ?? []) want.add(p);
     wantedRef.current = want;
+    // 先按 want 与降采样档清理缓存（档位变了重取），再错峰载入——ensureLoaded 见缓存缺失才会补拉
+    const desiredMaxWidth = currentPageMaxWidth();
+    for (const [i, entry] of cacheRef.current) {
+      if (!want.has(i) || entry.maxWidth !== desiredMaxWidth) {
+        URL.revokeObjectURL(entry.url);
+        cacheRef.current.delete(i);
+      }
+    }
     // 批次17 预载错峰：当前 spread 立即载入（ensureLoaded 内仍 await decode，保证切换即显），
     // 其余邻页按距离逐张隔帧（16ms≈一帧）启动——同帧解码量≤1，不再 ±N 全量并发挤占翻页。
     // 每次翻页重建队列（清旧定时器）：新当前页恒为立即档，未被启动的旧邻页按新距离重排。
@@ -312,24 +351,25 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
       else timers.push(window.setTimeout(() => void ensureLoaded(p), order * 16));
       order++;
     }
-    for (const [i, url] of cacheRef.current) {
-      if (!want.has(i)) {
-        URL.revokeObjectURL(url);
-        cacheRef.current.delete(i);
-      }
-    }
     setUrls((prev) => {
-      if (Object.keys(prev).every((k) => want.has(Number(k)))) return prev;
+      let changed = false;
       const next: Record<number, string> = {};
-      for (const [k, v] of Object.entries(prev)) {
-        if (want.has(Number(k))) next[Number(k)] = v;
+      for (const k of Object.keys(prev)) {
+        const i = Number(k);
+        const entry = cacheRef.current.get(i);
+        if (want.has(i) && entry) {
+          next[i] = entry.url;
+          if (entry.url !== prev[i]) changed = true;
+        } else {
+          changed = true;
+        }
       }
-      return next;
+      return changed ? next : prev;
     });
     return () => {
       for (const t of timers) window.clearTimeout(t);
     };
-  }, [pages, spreadIndex, spreads, anchor, settings.mode]);
+  }, [pages, spreadIndex, spreads, anchor, settings.mode, settings.fit]);
 
   useEffect(() => {
     onApi({
@@ -373,7 +413,7 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
         }
         setSpreadIndex(spreadIndexForPage(spreads, page));
       },
-      getPageUrl: (page: number) => cacheRef.current.get(page),
+      getPageUrl: (page: number) => cacheRef.current.get(page)?.url,
       zoomed: () => zoomRef.current.scale !== 1,
       toggleAutoScroll: () => {
         if (settings.mode !== "webtoon") return;
@@ -473,6 +513,56 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
     return { vw, vh, cw: content?.scrollWidth || vw, ch: content?.scrollHeight || vh };
   }
 
+  // 缩放/平移 rAF 化：手势期变换直写容器 style（rAF 合帧），不落 React state——webtoon 数百页 DOM
+  // 每帧重渲 diff 是缩放卡顿根因。跨 1x 边界/手势结束才提交 state（zoomed 驱动 cursor/overflow/HUD），
+  // 另有 200ms 尾随提交兜底：未提交前任何无关重渲会用陈旧 state 样式覆盖直写值。
+  function zoomOriginFor(): string {
+    const stage = stageRef.current;
+    const vh2 = (stage?.clientHeight ?? 0) / 2;
+    return settingsRef.current.mode === "webtoon"
+      ? `center ${(scrollRef.current?.scrollTop ?? 0) + vh2}px`
+      : `${(fitRef.current?.scrollLeft ?? 0) + (stage?.clientWidth ?? 0) / 2}px ${(fitRef.current?.scrollTop ?? 0) + vh2}px`;
+  }
+  function writeZoomTransform(z: ZoomState) {
+    const el = settingsRef.current.mode === "webtoon" ? wrapRef.current : fitRef.current;
+    if (!el) return;
+    if (z.scale === 1) {
+      el.style.transform = "";
+      el.style.transformOrigin = "";
+    } else {
+      el.style.transform = `translate(${z.tx}px, ${z.ty}px) scale(${z.scale})`;
+      el.style.transformOrigin = zoomOriginFor();
+    }
+  }
+  function commitZoomNow() {
+    if (zoomFrameRef.current) {
+      cancelAnimationFrame(zoomFrameRef.current);
+      zoomFrameRef.current = 0;
+    }
+    if (zoomCommitTimerRef.current !== null) {
+      window.clearTimeout(zoomCommitTimerRef.current);
+      zoomCommitTimerRef.current = null;
+    }
+    const z = zoomRef.current;
+    writeZoomTransform(z);
+    setZoom((prev) => (prev.scale === z.scale && prev.tx === z.tx && prev.ty === z.ty ? prev : z));
+  }
+  function zoomGestureWrite(next: ZoomState) {
+    zoomRef.current = next;
+    if (zoomCommitTimerRef.current !== null) window.clearTimeout(zoomCommitTimerRef.current);
+    zoomCommitTimerRef.current = window.setTimeout(commitZoomNow, 200);
+    if (!zoomFrameRef.current) {
+      zoomFrameRef.current = requestAnimationFrame(() => {
+        zoomFrameRef.current = 0;
+        writeZoomTransform(zoomRef.current);
+      });
+    }
+  }
+  function applyZoomNow(next: ZoomState) {
+    zoomRef.current = next;
+    commitZoomNow();
+  }
+
   // B11 复原语义：仅重置 scale/pan 到 1x/0，保持当前阅读位置——条漫先把当前视口中心页记下
   // （把 transform 逆映射回内容坐标），复位后 rAF 滚回该页；绝不回跳缩放开始前的旧页。分页模式本就只复位。
   function resetZoom() {
@@ -492,16 +582,16 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
           best = el;
         }
       }
-      setZoom({ scale: 1, tx: 0, ty: 0 });
+      applyZoomNow({ scale: 1, tx: 0, ty: 0 });
       if (best) requestAnimationFrame(() => best!.scrollIntoView({ block: "center" }));
       return;
     }
-    setZoom({ scale: 1, tx: 0, ty: 0 });
+    applyZoomNow({ scale: 1, tx: 0, ty: 0 });
   }
 
   function startPan(e: ReactPointerEvent<HTMLDivElement>) {
     const el = stageRef.current;
-    if (!el || zoomRef.current.scale === 1) return;
+    if (!el || zoomRef.current.scale !== 1) return;
     // pointer capture retargets clicks to the stage: never swallow the reset/retry buttons
     if (e.target !== e.currentTarget && (e.target as HTMLElement).closest("button")) return;
     e.preventDefault();
@@ -511,12 +601,13 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
     const start = zoomRef.current;
     const onMove = (ev: PointerEvent) => {
       const d = panDims();
-      setZoom({ ...start, ...panClamp(start.tx + ev.clientX - sx, start.ty + ev.clientY - sy, d.vw, d.vh, d.cw, d.ch, start.scale) });
+      zoomGestureWrite({ ...start, ...panClamp(start.tx + ev.clientX - sx, start.ty + ev.clientY - sy, d.vw, d.vh, d.cw, d.ch, start.scale) });
     };
     const onUp = () => {
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
       el.removeEventListener("pointercancel", onUp);
+      commitZoomNow(); // 手势结束才把变换落 state
     };
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp);
@@ -537,27 +628,38 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
         const px = e.clientX - rect.left - rect.width / 2;
         const py = e.clientY - rect.top - rect.height / 2;
         const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-        setZoom((z) => {
-          const scale = clampZoomScale(z.scale * factor);
-          if (scale === z.scale) return z;
-          const k = scale / z.scale;
-          const d = panDims();
-          return { scale, ...panClamp(px - (px - z.tx) * k, py - (py - z.ty) * k, d.vw, d.vh, d.cw, d.ch, scale) };
-        });
+        const z = zoomRef.current;
+        const scale = clampZoomScale(z.scale * factor);
+        if (scale === z.scale) return;
+        const k = scale / z.scale;
+        const d = panDims();
+        const next = { scale, ...panClamp(px - (px - z.tx) * k, py - (py - z.ty) * k, d.vw, d.vh, d.cw, d.ch, scale) };
+        // 跨 1x 边界（zoomed 标志位驱动溢出锁滚/HUD）即时提交；纯变换值走 rAF 直写
+        if ((z.scale === 1) !== (scale === 1)) applyZoomNow(next);
+        else zoomGestureWrite(next);
         return;
       }
       if (zoomRef.current.scale !== 1) {
         e.preventDefault();
         e.stopPropagation();
-        setZoom((z) => {
-          const d = panDims();
-          const p = panClamp(z.tx - e.deltaX, z.ty - e.deltaY, d.vw, d.vh, d.cw, d.ch, z.scale);
-          return p.tx === z.tx && p.ty === z.ty ? z : { ...z, ...p };
-        });
+        const z = zoomRef.current;
+        const d = panDims();
+        const p = panClamp(z.tx - e.deltaX, z.ty - e.deltaY, d.vw, d.vh, d.cw, d.ch, z.scale);
+        if (p.tx !== z.tx || p.ty !== z.ty) zoomGestureWrite({ ...z, ...p });
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      if (zoomFrameRef.current) {
+        cancelAnimationFrame(zoomFrameRef.current);
+        zoomFrameRef.current = 0;
+      }
+      if (zoomCommitTimerRef.current !== null) {
+        window.clearTimeout(zoomCommitTimerRef.current);
+        zoomCommitTimerRef.current = null;
+      }
+    };
   }, [settings.mode, pages, error]);
 
   const zoomTransform = zoomed ? `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.scale})` : undefined;
@@ -712,7 +814,11 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
                       本页加载失败，点击重试
                     </button>
                   ) : (
-                    <div className="wr-image-loading" />
+                    <div
+                      className="wr-image-loading"
+                      // 有元数据按宽高比精确预留（替代 min-height:50vh，向上滚动不再被推动）；无元数据回退 CSS 默认
+                      style={pageMeta?.[i] ? { aspectRatio: `${pageMeta[i].width} / ${pageMeta[i].height}` } : undefined}
+                    />
                   )
                 )}
               </div>
@@ -800,7 +906,11 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
             本页加载失败，点击重试
           </button>
         ) : (
-          <div key={p} className="wr-image-loading" />
+          <div
+            key={p}
+            className="wr-image-loading"
+            style={pageMeta?.[p] ? { aspectRatio: `${pageMeta[p].width} / ${pageMeta[p].height}` } : undefined}
+          />
         ),
       )}
     </div>
@@ -808,3 +918,6 @@ export default function ImageReader({ book, theme, settings, turnSpeedMs = 260, 
   </div>
 );
 }
+
+// memo：onRelocated/onApi 由 ReaderPage useCallback 稳定后，沉浸栏显隐（chrome bump）不再重渲整棵阅读器
+export default memo(ImageReaderImpl);

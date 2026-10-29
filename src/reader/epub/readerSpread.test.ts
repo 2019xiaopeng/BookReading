@@ -1,6 +1,14 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { applySpreadMode, cfiRangesOverlap, scrollEdgeDirection, spineIndexFromCfi } from "./reader";
+import {
+  applySpreadMode,
+  cfiRangesOverlap,
+  locationsCacheKey,
+  sameRelocatedPayload,
+  scrollEdgeDirection,
+  spineIndexFromCfi,
+  type RelocatedPayload,
+} from "./reader";
 
 describe("applySpreadMode", () => {
   test("uses rendition.spread when available", () => {
@@ -102,5 +110,46 @@ describe("scrollEdgeDirection（B13 滚动模式章续读）", () => {
   test("短章（整章可见）按滚动方向续读", () => {
     expect(scrollEdgeDirection(0, 600, 500, 1)).toBe(1);
     expect(scrollEdgeDirection(0, 600, 500, -1)).toBe(-1);
+  });
+});
+
+describe("locationsCacheKey（v2.5 locations 持久化键）", () => {
+  test("字体|字号 拼 key；字体或字号任一变化即换 key", () => {
+    expect(locationsCacheKey("default", 120)).toBe("default|120");
+    expect(locationsCacheKey("custom", 120)).not.toBe(locationsCacheKey("default", 120));
+    expect(locationsCacheKey("default", 125)).not.toBe(locationsCacheKey("default", 120));
+  });
+});
+
+describe("sameRelocatedPayload（relocated 引用去重）", () => {
+  const base: RelocatedPayload = {
+    cfi: "epubcfi(/6/4!/4/2/1:0)",
+    percent: 0.25,
+    href: "chap1.xhtml",
+    sectionIndex: 0,
+    endSectionIndex: 0,
+    pageStart: { page: 1, total: 10 },
+    pageEnd: null,
+    locPage: { index: 3, total: 100 },
+  };
+
+  test("逐字段相同（含新建对象）判定等价", () => {
+    expect(sameRelocatedPayload(base, { ...base })).toBe(true);
+    expect(sameRelocatedPayload(base, { ...base, pageStart: { page: 1, total: 10 }, locPage: { index: 3, total: 100 } })).toBe(true);
+  });
+
+  test("任一字段值变化即不等价（cfi/percent/页码/locPage 的 nullable 边界）", () => {
+    expect(sameRelocatedPayload(base, { ...base, cfi: "epubcfi(/6/6!/4/2/1:0)" })).toBe(false);
+    expect(sameRelocatedPayload(base, { ...base, percent: null })).toBe(false);
+    expect(sameRelocatedPayload(base, { ...base, pageStart: { page: 2, total: 10 } })).toBe(false);
+    expect(sameRelocatedPayload(base, { ...base, locPage: null })).toBe(false);
+    // null ↔ undefined 视为同值（两份载荷页码缺失场景）
+    expect(sameRelocatedPayload({ ...base, locPage: null }, { ...base, locPage: undefined as unknown as null })).toBe(true);
+  });
+
+  test("null 参与比较：同为 null 等价，单边 null 不等价", () => {
+    expect(sameRelocatedPayload(null, null)).toBe(true);
+    expect(sameRelocatedPayload(base, null)).toBe(false);
+    expect(sameRelocatedPayload(null, base)).toBe(false);
   });
 });

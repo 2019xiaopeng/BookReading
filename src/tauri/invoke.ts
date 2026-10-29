@@ -66,6 +66,11 @@ export async function listBooks(): Promise<Book[]> {
   return invoke<Book[]>("list_books");
 }
 
+/** 按 id 取单本书（阅读页等无需全库拉取） */
+export async function getBook(bookId: string): Promise<Book | null> {
+  return invoke<Book | null>("get_book", { bookId });
+}
+
 export async function listShelves(): Promise<Shelf[]> {
   return invoke<Shelf[]>("list_shelves");
 }
@@ -180,6 +185,21 @@ export async function getSettings(): Promise<Record<string, string>> {
 
 export async function setSetting(key: string, value: string): Promise<void> {
   return invoke<void>("set_setting", { key, value });
+}
+
+/** 批量写设置（一次 IPC；逐键 setSetting 在拖杆/多键保存时是 N 次串 IPC） */
+export async function setSettings(values: Record<string, string>): Promise<void> {
+  return invoke<void>("set_settings", { values });
+}
+
+// ---- epubjs locations 持久化（厚书 locations 生成 30s+，按 bookId+cacheKey 缓存免重算）----
+
+export async function saveBookLocations(bookId: string, cacheKey: string, payload: string): Promise<void> {
+  return invoke<void>("save_book_locations", { bookId, cacheKey, payload });
+}
+
+export async function loadBookLocations(bookId: string, cacheKey: string): Promise<string | null> {
+  return invoke<string | null>("load_book_locations", { bookId, cacheKey });
 }
 
 export async function saveReaderBackground(sourcePath: string): Promise<string> {

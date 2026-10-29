@@ -50,6 +50,23 @@ export function normalizeImageReaderSettings(raw: unknown): ImageReaderSettings 
   };
 }
 
+/** 宽页预判：有页元数据时按宽/高 > WIDE_PAGE_RATIO 直接判 wide（spreads 构建不再等解码后探测换组）；元数据缺失/非法的页回 false（解码探测兜底）。 */
+export function widePagesFromMeta(meta: { width: number; height: number }[] | null, pageCount: number): boolean[] {
+  const out: boolean[] = [];
+  for (let i = 0; i < pageCount; i++) {
+    const m = meta?.[i];
+    out.push(!!m && typeof m.width === "number" && typeof m.height === "number" && m.height > 0 && m.width / m.height > WIDE_PAGE_RATIO);
+  }
+  return out;
+}
+
+/** 大页降采样上限：显示宽 * 1.5 * DPR，按 256px 分桶（窗口拖拽/锁定切栏不逐像素重取）。 */
+export function maxWidthForStage(stageWidth: number, devicePixelRatio: number): number | null {
+  if (!(stageWidth > 0)) return null;
+  const raw = Math.round(stageWidth * 1.5 * (devicePixelRatio > 0 ? devicePixelRatio : 1));
+  return Math.max(256, Math.round(raw / 256) * 256);
+}
+
 /** Pages grouped per screen; in double mode a wide page (ratio > WIDE_PAGE_RATIO) claims the full spread. */
 export function buildSpreads(pageCount: number, widePages: boolean[], layout: ImagePageLayout): number[][] {
   const count = Math.max(0, Math.floor(pageCount));

@@ -77,3 +77,8 @@ export function normalizeTurnSpeedMs(v: unknown): number {
   if (!Number.isFinite(n)) return 260;
   return Math.min(600, Math.max(150, Math.round(n)));
 }
+
+/** 滑杆 commit：拖动草稿值落定时与已提交值相同（或未拖动）返回 null=不触发提交 */
+export function sliderCommitValue(draft: number | null, committed: number): number | null {
+  return draft !== null && draft !== committed ? draft : null;
+}

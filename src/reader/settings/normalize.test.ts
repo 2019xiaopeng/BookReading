@@ -10,6 +10,7 @@ import {
   normalizeReadingMode,
   normalizeTheme,
   normalizeTurnSpeedMs,
+  sliderCommitValue,
 } from "./normalize";
 
 describe("normalize", () => {
@@ -126,5 +127,17 @@ describe("normalize", () => {
     expect(defaultSettings.reader_font).toEqual({ type: "preset" });
     expect(defaultSettings.fontFamily).toBe("default");
     expect(defaultSettings.turnSpeedMs).toBe(260);
+  });
+});
+
+describe("v2.5 sliderCommitValue（滑杆 commit 节流）", () => {
+  test("未拖动（null 草稿）或草稿等于已提交值 → 不提交", () => {
+    expect(sliderCommitValue(null, 120)).toBeNull();
+    expect(sliderCommitValue(120, 120)).toBeNull();
+  });
+
+  test("拖动落定值与已提交值不同 → 提交该值", () => {
+    expect(sliderCommitValue(150, 120)).toBe(150);
+    expect(sliderCommitValue(1.9, 2.0)).toBe(1.9);
   });
 });

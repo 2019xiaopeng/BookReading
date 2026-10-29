@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -10,14 +10,15 @@ import {
   deleteBookmark,
   deleteFavoriteQuote,
   deleteHighlight,
+  getBook,
   getReadingState,
   getSettings,
-  listBooks,
   listBookmarks,
   listFavoriteQuotes,
   listHighlights,
   setBookFavorite,
   setSetting,
+  setSettings as setSettingsBatch,
   upsertReadingState,
   type Bookmark,
   type FavoriteQuote,
@@ -26,6 +27,7 @@ import {
 import {
   cfiRangesOverlap,
   createReader,
+  locationsCacheKey,
   scrollEdgeDirection,
   type ReaderController,
   type RelocatedPayload,
@@ -33,6 +35,7 @@ import {
   type SelectionRect,
   type TocItem,
 } from "../reader/epub/reader";
+import { readerFontFaceCss } from "../reader/epub/iframeFont";
 import { tocLabelFor } from "../reader/epub/tocLabel";
 import BookmarksPanel from "../reader/components/BookmarksPanel";
 import HighlightsPanel from "../reader/components/HighlightsPanel";
@@ -51,7 +54,7 @@ import {
   turnKeyDirection,
   type ImageReaderSettings,
 } from "../reader/image/layout";
-import PdfReader from "../reader/pdf/PdfReader";
+import PdfReader, { type PdfReaderApi } from "../reader/pdf/PdfReader";
 import { parsePdfCfi, pdfCfi } from "../reader/pdf/layout";
 import { defaultSettings, HIGHLIGHT_COLOR } from "../reader/settings/defaults";
 import type { ReaderSettings } from "../reader/settings/types";
@@ -72,7 +75,6 @@ import { showConfirm } from "../ui/dialog";
 import { useElementSize } from "../ui/useElementSize";
 import { useImmersiveChrome } from "../ui/useImmersiveChrome";
 import { getBackgroundUrl } from "../ui/appBackground";
-import { applyReaderFont } from "../ui/readerFont";
 import { applyPersistedTheme, getTheme, useTheme } from "../ui/theme";
 import {
   IconBookmark,
@@ -93,6 +95,189 @@ import {
 // 漫画/PDF 共用一套翻页 api 消费面（PDF 增量提供 renderThumb 供页面面板缩略图）
 type PageReaderApi = ImageReaderApi & { renderThumb?: (page: number) => Promise<string | undefined> };
 
+type SideTab = "toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings" | "pages";
+
+// §8 轻拆（零行为变化）：设置面板 memo——搜索输入/选区/进度拖动等无关重渲不再触面板
+const MemoSettingsPanel = memo(SettingsPanel);
+const MemoImageSettingsPanel = memo(ImageSettingsPanel);
+
+// 栏淡出/淡入：仅 opacity+transform（栏已是 absolute overlay，不占布局，纸面恒定不 resize）
+function chromeBarStyle(visible: boolean, dy: number): React.CSSProperties {
+  return {
+    transition: "opacity 200ms ease, transform 200ms ease",
+    ...(visible ? null : { opacity: 0, transform: `translateY(${dy}px)`, pointerEvents: "none" as const }),
+  };
+}
+
+/** §8 轻拆：顶栏 memo——热区 bump/ relocated/进度拖动只在涉及自身 props 变化时重渲 */
+const ReaderTopBar = memo(function ReaderTopBar(props: {
+  visible: boolean;
+  title: string;
+  percentText: string;
+  showEpubTools: boolean;
+  showVisualTools: boolean;
+  isFavorite: boolean;
+  onBack: () => void;
+  onOpenDrawer: (tab: SideTab) => void;
+  onToggleFavorite: () => void;
+  onLock: () => void;
+  onEnter: () => void;
+  onLeave: () => void;
+}) {
+  return (
+    <div
+      className="wr-topbar wr-reader-topbar"
+      style={chromeBarStyle(props.visible, -8)}
+      onMouseEnter={props.onEnter}
+      onMouseLeave={props.onLeave}
+    >
+      <button className="wr-btn" onClick={props.onBack}>
+        返回书库
+      </button>
+      <div style={{ fontSize: 16, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {props.title}
+      </div>
+      <div style={{ flex: 1 }} />
+      {props.showEpubTools ? (
+        <>
+          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("toc")}>
+            <IconList />
+            目录
+          </button>
+          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("bookmarks")}>
+            <IconBookmark />
+            书签
+          </button>
+          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("highlights")}>
+            <IconHighlight />
+            标注
+          </button>
+          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("favorites")}>
+            <IconQuote />
+            收藏
+          </button>
+          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("search")}>
+            <IconSearch />
+            搜索
+          </button>
+        </>
+      ) : null}
+      {props.showVisualTools ? (
+        <>
+          <button className="wr-btn wr-icon-btn" aria-pressed={props.isFavorite} onClick={props.onToggleFavorite}>
+            <IconHeart fill={props.isFavorite ? "currentColor" : "none"} aria-hidden />
+            收藏
+          </button>
+          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("bookmarks")}>
+            <IconBookmark />
+            书签
+          </button>
+          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("pages")}>
+            <IconImage />
+            页面
+          </button>
+        </>
+      ) : null}
+      <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("settings")}>
+        <IconSettings />
+        设置
+      </button>
+      <button
+        className="wr-btn wr-icon-btn"
+        title="锁定沉浸：栏与热区全禁用，角落控件或 Esc 解锁"
+        onClick={props.onLock}
+      >
+        <IconLock />
+        锁定
+      </button>
+      <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
+        {props.percentText}
+      </div>
+    </div>
+  );
+});
+
+/** §8 轻拆：页脚 memo（含进度条；refs/handlers 由 ReaderPage 稳定传入） */
+const ReaderFooter = memo(function ReaderFooter(props: {
+  visible: boolean;
+  isVisualBook: boolean;
+  sliderReady: boolean;
+  fill: number;
+  dragging: boolean;
+  pageText: string;
+  onTurn: (direction: "prev" | "next") => void;
+  progressRef: React.RefObject<HTMLDivElement | null>;
+  onProgressKeyDown: (e: React.KeyboardEvent) => void;
+  onProgressPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onProgressPointerMove: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onProgressPointerEnd: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onEnter: () => void;
+  onLeave: () => void;
+}) {
+  return (
+    <div
+      className="wr-reader-footer"
+      style={{
+        ...chromeBarStyle(props.visible, 8),
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: 10,
+      }}
+      onMouseEnter={props.onEnter}
+      onMouseLeave={props.onLeave}
+    >
+      <button className="wr-btn wr-icon-btn" onClick={() => props.onTurn("prev")}>
+        <IconChevronLeft />
+        {props.isVisualBook ? "上一页" : "上一章"}
+      </button>
+      <button className="wr-btn wr-icon-btn" onClick={() => props.onTurn("next")}>
+        <IconChevronRight />
+        {props.isVisualBook ? "下一页" : "下一章"}
+      </button>
+      <div
+        ref={props.progressRef}
+        className="wr-progress"
+        role={props.sliderReady ? "slider" : undefined}
+        aria-hidden={props.sliderReady ? undefined : "true"}
+        aria-label={props.sliderReady ? "阅读进度" : undefined}
+        aria-valuemin={props.sliderReady ? 0 : undefined}
+        aria-valuemax={props.sliderReady ? 100 : undefined}
+        aria-valuenow={props.sliderReady ? Math.round(props.fill * 100) : undefined}
+        tabIndex={props.sliderReady ? 0 : undefined}
+        data-dragging={props.dragging ? "" : undefined}
+        onKeyDown={props.onProgressKeyDown}
+        onPointerDown={props.onProgressPointerDown}
+        onPointerMove={props.onProgressPointerMove}
+        onPointerUp={props.onProgressPointerEnd}
+        onPointerCancel={props.onProgressPointerEnd}
+        style={props.sliderReady ? { cursor: "pointer", touchAction: "none", position: "relative" } : undefined}
+      >
+        <div style={{ "--wr-fill": String(props.fill) } as React.CSSProperties} />
+        {props.sliderReady ? (
+          <span
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              top: "50%",
+              // 收进 [5px, 100%-5px]，避免轨道 overflow:hidden 在两端裁掉把手半圆
+              left: `calc(5px + (100% - 10px) * ${props.fill})`,
+              transform: "translate(-50%, -50%)",
+              width: 10,
+              height: 10,
+              borderRadius: 999,
+              background: "var(--wr-accent)",
+            }}
+          />
+        ) : null}
+      </div>
+      <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
+        {props.pageText}
+      </div>
+    </div>
+  );
+});
+
 export default function ReaderPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -112,7 +297,7 @@ export default function ReaderPage() {
   const [pdfSettings, setPdfSettings] = useState<ImageReaderSettings>(defaultImageReaderSettings);
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const [imagePage, setImagePage] = useState<{ page: number; pageCount: number } | null>(null);
-  const [sideTab, setSideTab] = useState<"toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings" | "pages">("toc");
+  const [sideTab, setSideTab] = useState<SideTab>("toc");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [favoriteQuotes, setFavoriteQuotes] = useState<FavoriteQuote[]>([]);
@@ -161,6 +346,8 @@ export default function ReaderPage() {
   const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false, autoscroll: false });
   const progressRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
+  // 自定义字体 @font-face css（iframe 注入源）：首显前备好，content hook 同步取用
+  const fontFaceCssRef = useRef<string | null>(null);
   // 沉浸 chrome（B12 精简版）：显示=指针进顶/底热区（无延迟）；隐藏=离开热区与栏 1.2s / 翻页动作即收 /
   // 开始选字或打开抽屉、错误浮层（disabled=栏隐藏）；锁定=全藏+热区禁用。单击正文不承担收栏职责。
   const chrome = useImmersiveChrome({ disabled: drawerOpen || !!readerError || !!selection || !!noteDraft });
@@ -168,9 +355,9 @@ export default function ReaderPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const books = await listBooks();
+      // 单本直取（不再全库拉书后 find）
+      const found = await getBook(bookId ?? "").catch(() => null);
       if (cancelled) return;
-      const found = books.find((b) => b.id === bookId) ?? null;
       setBook(found);
     })();
     return () => {
@@ -365,6 +552,26 @@ export default function ReaderPage() {
 
       let ctrl: ReaderController | null = null;
       try {
+        // 恢复目标先取（URL cfi > 阅读状态），首显直达恢复点——旧路径先渲第 1 章再 display 恢复 CFI，开书双渲染闪跳
+        const cfiFromUrl = new URLSearchParams(locationSearchRef.current).get("cfi");
+        let initialTarget: string | undefined = cfiFromUrl ?? undefined;
+        if (!initialTarget) {
+          const state = await getReadingState(book.id).catch(() => null);
+          if (cancelled) return;
+          if (state?.cfi) {
+            initialTarget = state.cfi;
+            if (typeof state.percent === "number") setPercent(state.percent);
+          }
+        }
+        // 自定义字体 css 首显前备好（content hook 同步注入 iframe；就绪前渲染会用回退字体分页）
+        try {
+          fontFaceCssRef.current = await readerFontFaceCss(settingsRef.current.reader_font);
+        } catch (e) {
+          fontFaceCssRef.current = null;
+          logFrontend(`reader: font load failed ${String(e)}`);
+        }
+        if (cancelled) return;
+        restoredRef.current = true;
         logFrontend(`reader: create ${book.id} ${book.library_path}`);
         ctrl = await createReader({
           container,
@@ -372,6 +579,10 @@ export default function ReaderPage() {
           spreadMode: spreadModeRef.current,
           readingMode: settingsRef.current.readingMode,
           fontFamily: settingsRef.current.fontFamily,
+          initialTarget,
+          bookId: book.id,
+          locationsKey: () => locationsCacheKey(settingsRef.current.fontFamily, settingsRef.current.fontSizePercent),
+          fontFaceCss: () => fontFaceCssRef.current,
           onRelocated,
           onTocLoaded,
           onSelected,
@@ -420,20 +631,6 @@ export default function ReaderPage() {
         logFrontend(`reader: annotations load failed ${book.id} ${String(e)}`);
       }
       setAnnotationsLoaded(true);
-
-      const cfiFromUrl = new URLSearchParams(locationSearchRef.current).get("cfi");
-      if (cfiFromUrl) {
-        await ctrl.display(cfiFromUrl);
-        restoredRef.current = true;
-        return;
-      }
-      const state = await getReadingState(book.id);
-      if (cancelled) return;
-      if (state?.cfi) {
-        await ctrl.display(state.cfi);
-        if (typeof state.percent === "number") setPercent(state.percent);
-      }
-      restoredRef.current = true;
     })();
 
     return () => {
@@ -471,10 +668,11 @@ export default function ReaderPage() {
     if (settings.readingMode !== "scrolled") controllerRef.current.setSpreadMode(spreadMode);
   }, [theme, settings.fontSizePercent, settings.lineHeight, settings.fontFamily, settings.layoutMode, spreadMode, settings.readingMode]);
 
-  // 字号/行距变化后重排：章内页码（displayed.total）随新分页更新
+  // 字号/行距/字体变化后重排：章内页码（displayed.total）随新分页更新
+  // （v2.5 补 fontFamily：换字体不重排会用旧字体的分页度量，页码/翻页错位）
   useEffect(() => {
     controllerRef.current?.resize();
-  }, [settings.fontSizePercent, settings.lineHeight]);
+  }, [settings.fontSizePercent, settings.lineHeight, settings.fontFamily]);
 
   useEffect(() => {
     controllerRef.current?.setReadingMode(settings.readingMode);
@@ -499,9 +697,21 @@ export default function ReaderPage() {
     };
   }, [settings.reader_bg, isVisualBook]);
 
-  // B11：自定义正文字体——@font-face("wr-custom") 单槽注入，preset 时回收 objectURL 与 <style>
+  // B11→v2.5：自定义正文字体注入 epubjs iframe（宿主 @font-face 对 iframe 无效）；
+  // css 晚于当前渲染就绪时（换字体/装字体）补一次重排，正文按新字体重新分页
   useEffect(() => {
-    applyReaderFont(settings.reader_font).catch((e) => logFrontend(`reader: font load failed ${String(e)}`));
+    let cancelled = false;
+    readerFontFaceCss(settings.reader_font)
+      .then((css) => {
+        if (cancelled) return;
+        const prev = fontFaceCssRef.current;
+        fontFaceCssRef.current = css;
+        if (prev !== css && controllerRef.current) controllerRef.current.resize();
+      })
+      .catch((e) => logFrontend(`reader: font load failed ${String(e)}`));
+    return () => {
+      cancelled = true;
+    };
   }, [settings.reader_font]);
 
   // B12 固定预留：栏显隐只做淡入淡出、布局零变化（不再需要 visible-keyed resize）；
@@ -717,18 +927,21 @@ export default function ReaderPage() {
     };
   }, [chapterTitle]);
 
-  async function persistSettings(next: ReaderSettings) {
+  const persistSettings = useCallback(async (next: ReaderSettings) => {
     settingsTouchedRef.current = true;
-    await setSetting("fontSizePercent", String(next.fontSizePercent));
-    await setSetting("pageAnimation", next.pageAnimation);
-    await setSetting("turnSpeedMs", String(next.turnSpeedMs));
-    await setSetting("layoutMode", next.layoutMode);
-    await setSetting("lineHeight", String(next.lineHeight));
-    await setSetting("fontFamily", next.fontFamily);
-    await setSetting("readingMode", next.readingMode);
-    await setSetting("reader_bg", JSON.stringify(next.reader_bg));
-    await setSetting("reader_font", JSON.stringify(next.reader_font));
-  }
+    // 批量一次 IPC：逐键 setSetting 是 9 次串行调用（拖杆/多键保存时放大）
+    await setSettingsBatch({
+      fontSizePercent: String(next.fontSizePercent),
+      pageAnimation: next.pageAnimation,
+      turnSpeedMs: String(next.turnSpeedMs),
+      layoutMode: next.layoutMode,
+      lineHeight: String(next.lineHeight),
+      fontFamily: next.fontFamily,
+      readingMode: next.readingMode,
+      reader_bg: JSON.stringify(next.reader_bg),
+      reader_font: JSON.stringify(next.reader_font),
+    });
+  }, []);
 
   // B12 条漫播放中 ↑/↓ 调速：±10 并钳 20-240，实时写入设置（ImageReader autoSpeedRef 即时生效）+ 轻提示
   function nudgeAutoScrollSpeed(delta: number) {
@@ -743,119 +956,126 @@ export default function ReaderPage() {
     speedToastTimerRef.current = window.setTimeout(() => setSpeedToast(null), 1200);
   }
 
-  function handleImageRelocated(page: number, pageCount: number) {
-    if (!book) return;
-    const cfi = book.format === "pdf" ? pdfCfi(page) : imageCfi(page);
-    const pct = pagePercent(page, pageCount);
-    lastCfiRef.current = cfi;
-    setPercent(pct);
-    setImagePage({ page, pageCount });
-    if (persistTimerRef.current) {
-      window.clearTimeout(persistTimerRef.current);
-    }
-    persistTimerRef.current = window.setTimeout(() => {
-      void upsertReadingState(book.id, cfi, pct);
-    }, 1500);
-  }
-
-  async function animateTurn(direction: "next" | "prev") {
-    setSelection(null);
-    setNoteDraft(null);
-    if (imageCtxRef.current.active) {
-      // B6：翻页不再被缩放阻塞——ImageReader.turn 内部先复位缩放再翻
-      imageApiRef.current?.turn(direction);
-      return;
-    }
-    // epub 滚动模式无分页语义：键盘/滚轮/热区统一改为上一章/下一章（wheel 仍留给 iframe 原生滚动）
-    if (settingsRef.current.readingMode !== "paginated") {
-      controllerRef.current?.chapterNav(direction === "next" ? 1 : -1);
-      return;
-    }
-    const ctrl = controllerRef.current;
-    const el = viewerRef.current;
-    if (!ctrl) return;
-    const run = async () => {
-      try {
-        await (direction === "next" ? ctrl.next() : ctrl.prev());
-      } catch (e) {
-        logFrontend(`reader: turn failed ${direction} ${String(e)}`);
+  // §8：高频回调 useCallback 稳定化——memo 子组件（ImageReader/顶栏/页脚）在 relocated/热区 bump 下不重渲
+  const handleImageRelocated = useCallback(
+    (page: number, pageCount: number) => {
+      if (!book) return;
+      const cfi = book.format === "pdf" ? pdfCfi(page) : imageCfi(page);
+      const pct = pagePercent(page, pageCount);
+      lastCfiRef.current = cfi;
+      setPercent(pct);
+      setImagePage({ page, pageCount });
+      if (persistTimerRef.current) {
+        window.clearTimeout(persistTimerRef.current);
       }
-    };
+      persistTimerRef.current = window.setTimeout(() => {
+        void upsertReadingState(book.id, cfi, pct);
+      }, 1500);
+    },
+    [book],
+  );
 
-    if (
-      !el ||
-      settings.pageAnimation === "none" ||
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ) {
-      await run();
-      return;
-    }
+  const animateTurn = useCallback(
+    async (direction: "next" | "prev") => {
+      setSelection(null);
+      setNoteDraft(null);
+      if (imageCtxRef.current.active) {
+        // B6：翻页不再被缩放阻塞——ImageReader.turn 内部先复位缩放再翻
+        imageApiRef.current?.turn(direction);
+        return;
+      }
+      // epub 滚动模式无分页语义：键盘/滚轮/热区统一改为上一章/下一章（wheel 仍留给 iframe 原生滚动）
+      if (settingsRef.current.readingMode !== "paginated") {
+        controllerRef.current?.chapterNav(direction === "next" ? 1 : -1);
+        return;
+      }
+      const ctrl = controllerRef.current;
+      const el = viewerRef.current;
+      if (!ctrl) return;
+      const run = async () => {
+        try {
+          await (direction === "next" ? ctrl.next() : ctrl.prev());
+        } catch (e) {
+          logFrontend(`reader: turn failed ${direction} ${String(e)}`);
+        }
+      };
 
-    // 翻页速度可调：turnSpeedMs=260 时 fade 180 / slide 入240 / 兜底260（slide 出场见批次17：并行 + 120ms 上限）
-    const k = settings.turnSpeedMs / 260;
-
-    if (settings.pageAnimation === "fade") {
-      el.style.transition = `opacity ${Math.round(180 * k)}ms ease`;
-      el.style.opacity = "0.35";
-      await run();
-      requestAnimationFrame(() => {
-        el.style.opacity = "1";
-      });
-      return;
-    }
-
-    if (settings.pageAnimation === "slide") {
-      // 整页平移：动画节点为 epub 渲染容器（纸框/背景纱不动，内容整页滑出+滑入）
-      const paper = containerRef.current;
-      if (!paper) {
+      if (
+        !el ||
+        settings.pageAnimation === "none" ||
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ) {
         await run();
         return;
       }
-      // 快速连翻：动画进行中直接瞬时跳页，不排队、永不卡死
-      if (turningRef.current) {
+
+      // 翻页速度可调：turnSpeedMs=260 时 fade 180 / slide 入240 / 兜底260（slide 出场见批次17：并行 + 120ms 上限）
+      const k = settings.turnSpeedMs / 260;
+
+      if (settings.pageAnimation === "fade") {
+        el.style.transition = `opacity ${Math.round(180 * k)}ms ease`;
+        el.style.opacity = "0.35";
         await run();
+        requestAnimationFrame(() => {
+          el.style.opacity = "1";
+        });
         return;
       }
-      turningRef.current = true;
-      try {
-        const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
-        // 批次17：出场段与 display 并行（display 异步渲染新页，旧页滑出的同时后台已在画），
-        // 空窗从“出场时长+display 耗时”缩到 max(0, display-出场)；出场再上限 120ms 收紧顺序等待
-        const outMs = Math.min(Math.round(settings.turnSpeedMs * 0.4), 120);
-        const inMs = Math.round(240 * k);
-        paper.style.transition = `transform ${outMs}ms ease-in`;
-        paper.style.transform = `translateX(${direction === "next" ? "-100%" : "100%"})`;
-        const displaying = run();
-        await Promise.all([wait(outMs), displaying]);
-        paper.style.transition = "none";
-        paper.style.transform = `translateX(${direction === "next" ? "100%" : "-100%"})`;
-        void paper.offsetHeight; // 强制 reflow 提交入场起点
-        paper.style.transition = `transform ${inMs}ms cubic-bezier(0.2, 0, 0, 1)`;
-        paper.style.transform = "translateX(0)";
-        await wait(Math.round(260 * k)); // 兜底等待，不依赖 transitionend
-        paper.style.transition = "";
-        paper.style.transform = "";
-      } finally {
-        turningRef.current = false;
-      }
-      return;
-    }
 
-    await run();
-  }
+      if (settings.pageAnimation === "slide") {
+        // 整页平移：动画节点为 epub 渲染容器（纸框/背景纱不动，内容整页滑出+滑入）
+        const paper = containerRef.current;
+        if (!paper) {
+          await run();
+          return;
+        }
+        // 快速连翻：动画进行中直接瞬时跳页，不排队、永不卡死
+        if (turningRef.current) {
+          await run();
+          return;
+        }
+        turningRef.current = true;
+        try {
+          const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+          // 批次17：出场段与 display 并行（display 异步渲染新页，旧页滑出的同时后台已在画），
+          // 空窗从“出场时长+display 耗时”缩到 max(0, display-出场)；出场再上限 120ms 收紧顺序等待
+          const outMs = Math.min(Math.round(settings.turnSpeedMs * 0.4), 120);
+          const inMs = Math.round(240 * k);
+          paper.style.transition = `transform ${outMs}ms ease-in`;
+          paper.style.transform = `translateX(${direction === "next" ? "-100%" : "100%"})`;
+          const displaying = run();
+          await Promise.all([wait(outMs), displaying]);
+          paper.style.transition = "none";
+          paper.style.transform = `translateX(${direction === "next" ? "100%" : "-100%"})`;
+          void paper.offsetHeight; // 强制 reflow 提交入场起点
+          paper.style.transition = `transform ${inMs}ms cubic-bezier(0.2, 0, 0, 1)`;
+          paper.style.transform = "translateX(0)";
+          await wait(Math.round(260 * k)); // 兜底等待，不依赖 transitionend
+          paper.style.transition = "";
+          paper.style.transform = "";
+        } finally {
+          turningRef.current = false;
+        }
+        return;
+      }
+
+      await run();
+    },
+    [settings.pageAnimation, settings.turnSpeedMs],
+  );
 
   /** footer 上一章/下一章（epub 两模式统一；image 书 footer 仍是页翻，走 animateTurn） */
-  function navChapter(direction: "next" | "prev") {
+  const navChapter = useCallback((direction: "next" | "prev") => {
     setSelection(null);
     setNoteDraft(null);
     controllerRef.current?.chapterNav(direction === "next" ? 1 : -1);
-  }
+  }, []);
 
-  function openDrawer(tab: typeof sideTab) {
+  const openDrawer = useCallback((tab: SideTab) => {
     setSideTab(tab);
     setDrawerOpen(true);
     if (tab === "search") requestAnimationFrame(() => searchInputRef.current?.focus());
-  }
+  }, []);
 
   // B4: 书签统一入口——image 书记 img:N、PDF 记 pdf:N + “第N页”，epub 记 CFI + 章名
   function addBookmarkHere() {
@@ -868,7 +1088,7 @@ export default function ReaderPage() {
     })();
   }
 
-  function locate(target?: string) {
+  const locate = useCallback((target?: string) => {
     setSelection(null);
     setNoteDraft(null);
     // B4: img:N / pdf:N 书签在视觉书模式分流到 goToPage（此时无 epub controller）
@@ -878,62 +1098,82 @@ export default function ReaderPage() {
       return;
     }
     void controllerRef.current?.display(target);
-  }
+  }, []);
 
   // locations 就绪后进度条可拖/可点（点击=零位移拖动，同一路径）
   const sliderReady = locationsReady && !isVisualBook && !readerError;
   // 选区与现有高亮相交 → 气泡高亮钮切换为"取消高亮"
   const overlappingHighlights = selection ? highlights.filter((h) => cfiRangesOverlap(h.cfi_range, selection.cfiRange)) : [];
 
-  function pctFromClientX(clientX: number): number | null {
+  const pctFromClientX = useCallback((clientX: number): number | null => {
     const el = progressRef.current;
     if (!el) return null;
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0) return null;
     return Math.min(0.999, Math.max(0, (clientX - rect.left) / rect.width));
-  }
+  }, []);
 
-  function seekTo(p: number) {
-    const cfi = controllerRef.current?.progressCfi(p);
-    if (cfi) locate(cfi);
-  }
+  const seekTo = useCallback(
+    (p: number) => {
+      const ctrl = controllerRef.current;
+      const cfi = ctrl?.progressCfi(p);
+      if (!ctrl || !cfi) return;
+      setSelection(null);
+      setNoteDraft(null);
+      // display 完成后清拖动态：relocated 与旧载荷值相同（拖回原位附近）时会被引用去重吞掉，不再负责清 dragPct
+      void ctrl.display(cfi).finally(() => setDragPct(null));
+    },
+    [],
+  );
 
-  function onProgressKeyDown(e: React.KeyboardEvent) {
-    if (!sliderReady) return;
-    const base = dragPct ?? percent ?? 0;
-    if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      seekTo(Math.max(0, base - 0.01));
-    } else if (e.key === "ArrowRight") {
-      e.preventDefault();
-      seekTo(Math.min(0.999, base + 0.01));
-    }
-  }
+  const onProgressKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!sliderReady) return;
+      const base = dragPct ?? percent ?? 0;
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        seekTo(Math.max(0, base - 0.01));
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        seekTo(Math.min(0.999, base + 0.01));
+      }
+    },
+    [sliderReady, dragPct, percent, seekTo],
+  );
 
-  function onProgressPointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    if (!sliderReady) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    draggingRef.current = true;
-    const p = pctFromClientX(e.clientX);
-    if (p !== null) setDragPct(p);
-  }
+  const onProgressPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!sliderReady) return;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      draggingRef.current = true;
+      const p = pctFromClientX(e.clientX);
+      if (p !== null) setDragPct(p);
+    },
+    [sliderReady, pctFromClientX],
+  );
 
-  function onProgressPointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (!draggingRef.current) return;
-    const p = pctFromClientX(e.clientX);
-    if (p !== null) setDragPct(p);
-  }
+  const onProgressPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!draggingRef.current) return;
+      const p = pctFromClientX(e.clientX);
+      if (p !== null) setDragPct(p);
+    },
+    [pctFromClientX],
+  );
 
-  function onProgressPointerEnd(e: React.PointerEvent<HTMLDivElement>) {
-    if (!draggingRef.current) return;
-    draggingRef.current = false;
-    const p = pctFromClientX(e.clientX);
-    // 松手才 display（拖动仅更新视觉，避免高频 display 抖动）；跳转触发的 relocated 恢复持久化
-    if (p !== null) seekTo(p);
-  }
+  const onProgressPointerEnd = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      const p = pctFromClientX(e.clientX);
+      // 松手才 display（拖动仅更新视觉，避免高频 display 抖动）；跳转触发的 relocated 恢复持久化
+      if (p !== null) seekTo(p);
+    },
+    [pctFromClientX, seekTo],
+  );
 
   // 批次19：返回书架先退出窗口全屏（F11 态不带回书库）；fire-and-forget，不等 setFullscreen 落地再导航
-  function backToLibrary() {
+  const backToLibrary = useCallback(() => {
     void (async () => {
       try {
         if (await getCurrentWindow().isFullscreen()) await getCurrentWindow().setFullscreen(false);
@@ -942,7 +1182,7 @@ export default function ReaderPage() {
       }
     })();
     navigate(typeof fromShelf === "number" ? `/?shelf=${fromShelf}` : "/");
-  }
+  }, [fromShelf, navigate]);
 
   const drawerTitle =
     sideTab === "toc"
@@ -959,12 +1199,6 @@ export default function ReaderPage() {
                 ? "页面"
                 : "阅读设置";
 
-  // 栏淡出/淡入：仅 opacity+transform（栏已是 absolute overlay，不占布局，纸面恒定不 resize）
-  const chromeBarStyle = (dy: number): React.CSSProperties => ({
-    transition: "opacity 200ms ease, transform 200ms ease",
-    ...(chrome.visible ? null : { opacity: 0, transform: `translateY(${dy}px)`, pointerEvents: "none" as const }),
-  });
-
   const pageBadgeStyle = (side: "left" | "right"): React.CSSProperties => ({
     position: "absolute",
     bottom: 6,
@@ -974,6 +1208,44 @@ export default function ReaderPage() {
     fontVariantNumeric: "tabular-nums",
   });
 
+  // §8：视觉书 api 回调稳定化（memo 的 ImageReader/PdfReader 不因无关重渲换引用）
+  const handleImageApi = useCallback((api: ImageReaderApi) => {
+    imageApiRef.current = api;
+  }, []);
+  const handlePdfApi = useCallback((api: PdfReaderApi) => {
+    imageApiRef.current = api;
+  }, []);
+  const onSettingsPanelChange = useCallback(
+    (next: ReaderSettings) => {
+      setSettings(next);
+      void persistSettings(next);
+    },
+    [persistSettings],
+  );
+  const onVisualSettingsChange = useCallback(
+    (next: ImageReaderSettings) => {
+      if (isPdfBook) setPdfSettings(next);
+      else setImageSettings(next);
+      settingsTouchedRef.current = true;
+      void setSetting(visualSettingsKey, JSON.stringify(next));
+    },
+    [isPdfBook, visualSettingsKey],
+  );
+  const toggleFavorite = useCallback(() => {
+    if (!book) return;
+    const next = !book.is_favorite;
+    setBook({ ...book, is_favorite: next });
+    void setBookFavorite(book.id, next);
+  }, [book]);
+  const lockChrome = useCallback(() => chrome.setLocked(true), [chrome]);
+  const footerTurn = useCallback(
+    (direction: "prev" | "next") => {
+      if (isVisualBook) void animateTurn(direction);
+      else navChapter(direction);
+    },
+    [isVisualBook, animateTurn, navChapter],
+  );
+
   return (
     <div
       data-theme={theme}
@@ -981,87 +1253,20 @@ export default function ReaderPage() {
       ref={readerRootRef}
     >
       {!chrome.locked ? (
-        <div
-          className="wr-topbar wr-reader-topbar"
-          style={chromeBarStyle(-8)}
-          onMouseEnter={chrome.enter}
-          onMouseLeave={chrome.leave}
-        >
-          <button
-            className="wr-btn"
-            onClick={backToLibrary}
-          >
-            返回书库
-          </button>
-          <div style={{ fontSize: 16, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {book?.title ?? "阅读"}
-          </div>
-          <div style={{ flex: 1 }} />
-          {!isImageBook ? (
-            <>
-              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("toc")}>
-                <IconList />
-                目录
-              </button>
-              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("bookmarks")}>
-                <IconBookmark />
-                书签
-              </button>
-              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("highlights")}>
-                <IconHighlight />
-                标注
-              </button>
-              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("favorites")}>
-                <IconQuote />
-                收藏
-              </button>
-              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("search")}>
-                <IconSearch />
-                搜索
-              </button>
-            </>
-          ) : null}
-          {isVisualBook && book ? (
-            <>
-              <button
-                className="wr-btn wr-icon-btn"
-                aria-pressed={book.is_favorite}
-                onClick={() => {
-                  const next = !book.is_favorite;
-                  setBook({ ...book, is_favorite: next });
-                  void setBookFavorite(book.id, next);
-                }}
-              >
-                <IconHeart fill={book.is_favorite ? "currentColor" : "none"} aria-hidden />
-                收藏
-              </button>
-              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("bookmarks")}>
-                <IconBookmark />
-                书签
-              </button>
-              <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("pages")}>
-                <IconImage />
-                页面
-              </button>
-            </>
-          ) : null}
-          <button className="wr-btn wr-icon-btn" onClick={() => openDrawer("settings")}>
-            <IconSettings />
-            设置
-          </button>
-          <button
-            className="wr-btn wr-icon-btn"
-            aria-pressed={chrome.locked}
-            title="锁定沉浸：栏与热区全禁用，角落控件或 Esc 解锁"
-            onClick={() => chrome.setLocked(true)}
-          >
-            <IconLock />
-            锁定
-          </button>
-          <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
-            {typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
-          </div>
-        </div>
+        <ReaderTopBar
+          visible={chrome.visible}
+          title={book?.title ?? "阅读"}
+          percentText={typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
+          showEpubTools={!isImageBook}
+          showVisualTools={isVisualBook && !!book}
+          isFavorite={!!book?.is_favorite}
+          onBack={backToLibrary}
+          onOpenDrawer={openDrawer}
+          onToggleFavorite={toggleFavorite}
+          onLock={lockChrome}
+          onEnter={chrome.enter}
+          onLeave={chrome.leave}
+        />
       ) : null}
 
       {/* B12 固定预留：非锁定态 stage 恒定 padding 62px（栏在预留区内淡入淡出，内容零位移）；锁定态一次性收 0；
@@ -1083,27 +1288,11 @@ export default function ReaderPage() {
             }}
           >
             {sideTab === "settings" && isVisualBook ? (
-              <ImageSettingsPanel
-                value={visualSettings}
-                pdf={isPdfBook}
-                onChange={(next) => {
-                  if (isPdfBook) setPdfSettings(next);
-                  else setImageSettings(next);
-                  settingsTouchedRef.current = true;
-                  void setSetting(visualSettingsKey, JSON.stringify(next));
-                }}
-              />
+              <MemoImageSettingsPanel value={visualSettings} pdf={isPdfBook} onChange={onVisualSettingsChange} />
             ) : null}
 
             {sideTab === "settings" && !isVisualBook ? (
-              <SettingsPanel
-                value={settings}
-                bgUrl={bgUrl}
-                onChange={(next) => {
-                  setSettings(next);
-                  void persistSettings(next);
-                }}
-              />
+              <MemoSettingsPanel value={settings} bgUrl={bgUrl} onChange={onSettingsPanelChange} />
             ) : null}
 
             {sideTab === "pages" && isVisualBook && book && imagePage ? (
@@ -1319,9 +1508,7 @@ export default function ReaderPage() {
                   turnSpeedMs={settings.turnSpeedMs}
                   onRelocated={handleImageRelocated}
                   theme={theme}
-                  onApi={(api) => {
-                    imageApiRef.current = api;
-                  }}
+                  onApi={handleImageApi}
                 />
               ) : (
                 <PdfReader
@@ -1330,9 +1517,7 @@ export default function ReaderPage() {
                   settings={visualSettings}
                   onRelocated={handleImageRelocated}
                   theme={theme}
-                  onApi={(api) => {
-                    imageApiRef.current = api;
-                  }}
+                  onApi={handlePdfApi}
                 />
               )
             ) : (
@@ -1600,79 +1785,31 @@ export default function ReaderPage() {
       ) : null}
 
       {!chrome.locked ? (
-        <div
-          className="wr-reader-footer"
-          style={{
-            ...chromeBarStyle(8),
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: 10,
-          }}
-          onMouseEnter={chrome.enter}
-          onMouseLeave={chrome.leave}
-        >
-          <button
-            className="wr-btn wr-icon-btn"
-            onClick={() => (isVisualBook ? void animateTurn("prev") : navChapter("prev"))}
-          >
-            <IconChevronLeft />
-            {isVisualBook ? "上一页" : "上一章"}
-          </button>
-          <button
-            className="wr-btn wr-icon-btn"
-            onClick={() => (isVisualBook ? void animateTurn("next") : navChapter("next"))}
-          >
-            <IconChevronRight />
-            {isVisualBook ? "下一页" : "下一章"}
-          </button>
-          <div
-            ref={progressRef}
-            className="wr-progress"
-            role={sliderReady ? "slider" : undefined}
-            aria-hidden={sliderReady ? undefined : "true"}
-            aria-label={sliderReady ? "阅读进度" : undefined}
-            aria-valuemin={sliderReady ? 0 : undefined}
-            aria-valuemax={sliderReady ? 100 : undefined}
-            aria-valuenow={sliderReady ? Math.round((dragPct ?? percent ?? 0) * 100) : undefined}
-            tabIndex={sliderReady ? 0 : undefined}
-            data-dragging={dragPct !== null ? "" : undefined}
-            onKeyDown={onProgressKeyDown}
-            onPointerDown={onProgressPointerDown}
-            onPointerMove={onProgressPointerMove}
-            onPointerUp={onProgressPointerEnd}
-            onPointerCancel={onProgressPointerEnd}
-            style={sliderReady ? { cursor: "pointer", touchAction: "none", position: "relative" } : undefined}
-          >
-            <div style={{ "--wr-fill": String(dragPct ?? percent ?? 0) } as React.CSSProperties} />
-            {sliderReady ? (
-              <span
-                aria-hidden="true"
-                style={{
-                  position: "absolute",
-                  top: "50%",
-                  // 收进 [5px, 100%-5px]，避免轨道 overflow:hidden 在两端裁掉把手半圆
-                  left: `calc(5px + (100% - 10px) * ${dragPct ?? percent ?? 0})`,
-                  transform: "translate(-50%, -50%)",
-                  width: 10,
-                  height: 10,
-                  borderRadius: 999,
-                  background: "var(--wr-accent)",
-                }}
-              />
-            ) : null}
-          </div>
-          <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
-            {isVisualBook && imagePage !== null
+        <ReaderFooter
+          visible={chrome.visible}
+          isVisualBook={isVisualBook}
+          sliderReady={sliderReady}
+          fill={dragPct ?? percent ?? 0}
+          dragging={dragPct !== null}
+          pageText={
+            isVisualBook && imagePage !== null
               ? `${imagePage.page + 1} / ${imagePage.pageCount}`
               : locPage
                 ? // B12 全局位置页（估算，与角标一致）；未就绪回退百分比
                   `${locPage.index + 1} / ${locPage.total}`
                 : typeof percent === "number"
                   ? `${Math.round(percent * 100)}%`
-                  : ""}
-          </div>
-        </div>
+                  : ""
+          }
+          onTurn={footerTurn}
+          progressRef={progressRef}
+          onProgressKeyDown={onProgressKeyDown}
+          onProgressPointerDown={onProgressPointerDown}
+          onProgressPointerMove={onProgressPointerMove}
+          onProgressPointerEnd={onProgressPointerEnd}
+          onEnter={chrome.enter}
+          onLeave={chrome.leave}
+        />
       ) : null}
 
       {!chrome.locked ? null : (

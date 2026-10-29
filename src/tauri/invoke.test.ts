@@ -21,6 +21,7 @@ import {
   deleteHighlight,
   deleteShelf,
   deleteTag,
+  getBook,
   getReadingState,
   listBookmarks,
   listFavoriteQuotes,
@@ -36,9 +37,12 @@ import {
   renameTag,
   repairBookMetadata,
   restoreBooks,
+  loadBookLocations,
+  saveBookLocations,
   setBookFavorite,
   setBookTags,
   setBooksOrder,
+  setSettings,
   setShelfOrder,
   setTrashRetentionDays,
   updateBookMetadata,
@@ -206,5 +210,29 @@ describe("tauri invoke arg casing", () => {
     hoisted.invokeMock.mockResolvedValueOnce(null);
     await computeBookStats("b1");
     expect(hoisted.invokeMock).toHaveBeenLastCalledWith("compute_book_stats", { bookId: "b1" });
+  });
+});
+
+describe("v2.5 新增 wrapper 参数命名", () => {
+  test("getBook / setSettings / bookLocations 用 camelCase 键", async () => {
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await getBook("b1");
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("get_book", { bookId: "b1" });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await setSettings({ fontSizePercent: "120" });
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("set_settings", { values: { fontSizePercent: "120" } });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await saveBookLocations("b1", "default|120", "[]");
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("save_book_locations", {
+      bookId: "b1",
+      cacheKey: "default|120",
+      payload: "[]",
+    });
+
+    hoisted.invokeMock.mockResolvedValueOnce(null);
+    await loadBookLocations("b1", "default|120");
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("load_book_locations", { bookId: "b1", cacheKey: "default|120" });
   });
 });
