@@ -167,7 +167,8 @@
   --wr-bg: #FAFAF7;
   --wr-paper: #FFFFFF;
   --wr-ink: rgba(36, 35, 33, 0.92);
-  --wr-muted: rgba(36, 35, 33, 0.62);
+  /* M2 评审：0.62 碳墨在近白面板上合成 4.49:1 恰低于 AA，提至 0.65 → 4.94:1（tokens.css ink 块同改） */
+  --wr-muted: rgba(36, 35, 33, 0.65);
   --wr-hairline: rgba(36, 35, 33, 0.12);
   --wr-shadow: 0 16px 60px rgba(36, 35, 33, 0.16);
   --wr-shadow-soft: 0 10px 36px rgba(36, 35, 33, 0.12);
@@ -572,6 +573,13 @@
 .wr-search-input:focus {
   border-color: rgba(var(--wr-accent-rgb), 0.35);
   box-shadow: 0 0 0 4px rgba(var(--wr-accent-rgb), 0.12);
+}
+
+/* M2 评审：UA 默认 placeholder #757575 在八主题 2.8–4.3:1 均低于 AA，统一取墨阶次级色（各主题实测 ≥4.58:1） */
+.wr-search-input::placeholder,
+.wr-input::placeholder,
+.wr-textarea::placeholder {
+  color: var(--m2-ink-soft);
 }
 
 .wr-seg {
@@ -2850,6 +2858,15 @@ input[type="range"]:focus-visible {
   }
   to {
     transform: translateX(100%);
+  }
+}
+
+/* reduced-motion 显式关闭：全局回退 `.wr-shell *` 只命中元素本身，管不到伪元素上的 shimmer（实测会继续跑） */
+@media (prefers-reduced-motion: reduce) {
+  .wr-shelf-skeleton::after,
+  .wr-cover[data-loading="true"]::after,
+  .wr-cover[data-pending="true"]::after {
+    animation: none;
   }
 }
 
