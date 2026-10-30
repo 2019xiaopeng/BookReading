@@ -428,7 +428,7 @@ dependencies = [
 
 [[package]]
 name = "bookreading"
-version = "2.1.0"
+version = "2.5.0"
 dependencies = [
  "encoding_rs",
  "image",
