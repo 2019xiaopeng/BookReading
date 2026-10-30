@@ -620,13 +620,26 @@ export async function createReader(opts: {
     }
   };
 
-  await withTimeout(rendition.display(), 30_000).catch((e) => {
+  // D6 首显直达：带 initialTarget（恢复 CFI/URL cfi）直接 display，不先渲第 1 章再跳（双渲染+闪跳）；
+  // 坏 CFI（书源变更等）退回第 1 章，不让进度残留砖掉开书
+  const firstTarget = opts.initialTarget ?? undefined;
+  const fatal = (e: unknown) => {
     const msg = `首次渲染超时/失败：${String(e)}`;
     opts.onError?.(msg);
     rendition?.destroy?.();
     book.destroy?.();
     throw new Error(msg);
-  });
+  };
+  try {
+    await withTimeout(rendition.display(firstTarget), 30_000);
+  } catch (e) {
+    if (firstTarget) {
+      logOnce("reader.display", `reader: initial target failed, fallback to start ${String(e)}`);
+      await withTimeout(rendition.display(), 30_000).catch(fatal);
+    } else {
+      fatal(e);
+    }
+  }
 
   // 冷启动收敛：请求 scrolled 时在首显成功后立即切换（见 renderTo 注释）
   if (requestedFlow === "scrolled") applyFlow("scrolled");
