@@ -375,6 +375,51 @@ pub fn purge_books(app: tauri::AppHandle, book_ids: Vec<String>) -> Result<(), S
     Ok(())
 }
 
+// v2.5.0 真删：书的源文件/漫画源文件夹移入 Windows 回收站（可从系统回收站找回），再清 DB。
+// 封面与缩略图是派生缓存，直接永久清理不进回收站；trash 失败即该本中止报错，绝不静默永久删除。
+#[tauri::command(async)]
+pub fn delete_books_from_disk(app: tauri::AppHandle, book_ids: Vec<String>) -> Result<u32, String> {
+    if book_ids.is_empty() {
+        return Ok(0);
+    }
+    let conn = db::open_db(&app)?;
+    let library_root = app_paths::library_dir(&app)?;
+    let mut recycled = 0u32;
+    for id in book_ids {
+        let row: (String, Option<String>) = conn
+            .query_row("SELECT library_path, cover_path FROM books WHERE id = ?1", [&id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .map_err(|_| format!("书 {id} 不存在"))?;
+
+        let lp = row.0.replace('\\', "/");
+        if let Some(rest) = lp.strip_prefix("library/") {
+            // 库内副本（EPUB/TXT/PDF/CBZ 导入时复制入库）——它就是这本书的全部数据
+            let abs = library_root.join(rest);
+            if abs.exists() {
+                trash::delete(&abs).map_err(|e| format!("移入回收站失败 {}: {e}", abs.display()))?;
+                recycled += 1;
+            }
+        } else if Path::new(&lp).is_absolute() {
+            // 文件夹漫画原地引用——回收整个源目录
+            let abs = PathBuf::from(&lp);
+            if abs.exists() {
+                trash::delete(&abs).map_err(|e| format!("移入回收站失败 {}: {e}", abs.display()))?;
+                recycled += 1;
+            }
+        }
+        // 派生缓存：封面由 purge_book 清；缩略档两种扩展名在此兜底
+        for ext in ["jpg", "webp"] {
+            let thumb = library_root.join(format!("covers/thumbs/{id}.{ext}"));
+            if thumb.exists() {
+                let _ = fs::remove_file(&thumb);
+            }
+        }
+        purge_book(&conn, &library_root, &id)?; // 派生缓存永久清理 + DB 行删除
+    }
+    Ok(recycled)
+}
+
 #[tauri::command(async)]
 pub fn list_trash(app: tauri::AppHandle) -> Result<Vec<Book>, String> {
     let conn = db::open_db(&app)?;

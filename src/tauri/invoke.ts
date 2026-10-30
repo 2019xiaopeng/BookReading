@@ -115,6 +115,11 @@ export async function purgeBooks(bookIds: string[]): Promise<void> {
   return invoke<void>("purge_books", { bookIds });
 }
 
+// v2.5.0 真删：源文件/漫画源文件夹移入 Windows 回收站（可在系统回收站找回），返回回收的文件/目录数
+export async function deleteBooksFromDisk(bookIds: string[]): Promise<number> {
+  return invoke<number>("delete_books_from_disk", { bookIds });
+}
+
 export async function listTrash(): Promise<Book[]> {
   return invoke<Book[]>("list_trash");
 }

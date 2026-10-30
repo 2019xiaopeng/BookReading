@@ -36,8 +36,9 @@ use commands::favorites::{
     add_favorite_quote, delete_favorite_quote, list_favorite_books, list_favorite_quotes, set_book_favorite,
 };
 use commands::shelves::{
-    create_shelf, delete_books, delete_shelf, list_shelves, list_trash, move_books_to_shelf, move_shelf,
-    purge_books, rename_shelf, restore_books, set_books_order, set_shelf_order, set_trash_retention_days,
+    create_shelf, delete_books, delete_books_from_disk, delete_shelf, list_shelves, list_trash,
+    move_books_to_shelf, move_shelf, purge_books, rename_shelf, restore_books, set_books_order,
+    set_shelf_order, set_trash_retention_days,
 };
 use commands::tags::{
     add_tags_to_books, compute_book_stats, create_tag, delete_tag, list_tags, merge_tags, recolor_tag,
@@ -168,6 +169,7 @@ pub fn run() {
             delete_books,
             restore_books,
             purge_books,
+            delete_books_from_disk,
             list_trash,
             set_trash_retention_days,
             list_tags,

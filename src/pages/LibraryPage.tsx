@@ -19,6 +19,7 @@ import {
   moveBooksToShelf,
   moveShelf,
   purgeBooks,
+  deleteBooksFromDisk,
   renameShelf,
   repairBookMetadata,
   restoreBooks,
@@ -963,6 +964,25 @@ export default function LibraryPage() {
     }
   }
 
+  // 真删：源文件/漫画源文件夹移入 Windows 回收站（可从系统回收站找回），并从书库移除
+  async function onDeleteFromDisk(book: Book) {
+    const ok = await showConfirm(
+      "从电脑删除",
+      `把《${formatTitle(book)}》的源文件（漫画为整个源文件夹）移入 Windows 回收站，并从书库移除？回收站内可找回。`,
+      { danger: true, confirmText: "移入回收站" },
+    );
+    if (!ok) return;
+    setLoading(true);
+    try {
+      await deleteBooksFromDisk([book.id]);
+      await refreshTrash();
+    } catch (e) {
+      await showAlert("从电脑删除失败", String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function onEmptyTrash() {
     if (trash.length === 0 || loading) return;
     const ok = await showConfirm(
@@ -1193,6 +1213,9 @@ export default function LibraryPage() {
                     </button>
                     <button className="wr-btn wr-btn-danger" onClick={() => void onPurge(b)} disabled={loading}>
                       彻底删除
+                    </button>
+                    <button className="wr-btn wr-btn-danger" onClick={() => void onDeleteFromDisk(b)} disabled={loading}>
+                      从电脑删除
                     </button>
                   </div>
                 </div>
