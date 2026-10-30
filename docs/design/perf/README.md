@@ -26,3 +26,16 @@ jank50 / jank100 / maxGap / p95 同场景对比，回退即返工。
 | epubOpenIdle30s | 0/0/24ms → 0/0/24ms（本次命中持久化 locations，未触发生成） |
 
 结论：全部场景改善或持平，无回退。缩略档回填完毕后测量（91 书 90 张，一张源图缺档由幂等回填补）。
+
+## UI 改版后三测（U1–U7 合入后，2026-10-30，results-post-ui.json）
+
+| 场景 | 基线 → 根治包 → UI 后（jank50 / jank100 / maxGap） |
+|---|---|
+| shelfScroll 61 卡 | 11/4/394ms → 1/0/73ms → **0/0/18.3ms** |
+| comicPaged20 | 1/0/54ms → 0/0/42ms → **0/0/12.1ms** |
+| comicWebtoon10s | 7/0/79ms（p95 24.3） → 1/0/55ms → **0/0/24.2ms（p95 6.2）** |
+| epubFontSlider 20 步 | 3/0/67ms → 0/0/19ms → **0/0/12ms** |
+| epubOpenIdle30s | 0/0/24ms → 0/0/24ms → **0/0/7.2ms** |
+
+最终结论：M2 UI 改版（content-visibility + memo + 缩略档叠加）在根治包之上继续改善，全程零回退。
+验收期间另修复 D6 遗留回归：首显未传 initialTarget 导致 EPUB 进度恢复失效（commit 0a18f56）。
