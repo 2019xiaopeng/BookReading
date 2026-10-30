@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="100%" role="img" aria-label="BookReading — Windows 本地全格式阅读器，纸墨界面">
+  <!-- 纸底 -->
+  <rect width="1200" height="360" fill="#FAFAF7"/>
+  <!-- 细噪点不可用（SVG 无滤镜保证渲染一致性），以纸色微差矩形示意肌理 -->
+  <rect x="0" y="358" width="840" height="2" fill="#242321"/>
+  <rect x="0" y="0" width="1200" height="1" fill="rgba(36,35,33,0.16)"/>
+
+  <!-- 刊头大字 -->
+  <text x="72" y="168" font-family="'Segoe UI','Microsoft YaHei','PingFang SC',system-ui,sans-serif" font-size="88" font-weight="800" fill="#242321" letter-spacing="-2">BookReading</text>
+  <text x="76" y="228" font-family="'Segoe UI','Microsoft YaHei','PingFang SC',system-ui,sans-serif" font-size="26" font-weight="400" fill="#6B6A66">Windows 桌面全格式阅读器 —— 书在本地，进度在本地，一墨读完</text>
+
+  <!-- 右侧等宽统计列（tabular 数字，呼应应用刊头） -->
+  <g font-family="'Cascadia Mono',Consolas,ui-monospace,monospace" text-anchor="end" fill="#242321">
+    <text x="1128" y="96"  font-size="17">格式  4 <tspan fill="#6B6A66">EPUB·TXT·漫画·PDF</tspan></text>
+    <text x="1128" y="128" font-size="17">主题  8 <tspan fill="#6B6A66">纸墨为默认</tspan></text>
+    <text x="1128" y="160" font-size="17">联网  0 <tspan fill="#6B6A66">无账号·不上传</tspan></text>
+    <text x="1128" y="192" font-size="17">测试  162 <tspan fill="#6B6A66">vitest 全绿</tspan></text>
+  </g>
+
+  <!-- 底部格式签（1px 墨线空心，呼应书卡 chips） -->
+  <g font-family="'Segoe UI','Microsoft YaHei',system-ui,sans-serif" font-size="17" fill="#242321">
+    <rect x="72"  y="268" width="118" height="40" fill="none" stroke="#242321" stroke-opacity="0.2"/>
+    <text x="131" y="294" text-anchor="middle">EPUB</text>
+    <rect x="202" y="268" width="96"  height="40" fill="none" stroke="#242321" stroke-opacity="0.2"/>
+    <text x="250" y="294" text-anchor="middle">TXT</text>
+    <rect x="310" y="268" width="150" height="40" fill="none" stroke="#242321" stroke-opacity="0.2"/>
+    <text x="385" y="294" text-anchor="middle">漫画 · CBZ</text>
+    <rect x="472" y="268" width="96"  height="40" fill="none" stroke="#242321" stroke-opacity="0.2"/>
+    <text x="520" y="294" text-anchor="middle">PDF</text>
+    <!-- 墨块示意在读墨线 -->
+    <rect x="72" y="258" width="496" height="3" fill="#242321" fill-opacity="0.12"/>
+    <rect x="72" y="258" width="176" height="3" fill="#242321"/>
+  </g>
+</svg>
