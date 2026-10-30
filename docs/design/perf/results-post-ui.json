@@ -1,0 +1,192 @@
+{
+ "label": "post-ui",
+ "ts": "2026-10-30T00:38:04.262Z",
+ "scenarios": {
+  "shelfScroll": {
+   "dom": {
+    "scrollHeight": 1785,
+    "cards": 61
+   },
+   "frames": {
+    "frames": 1580,
+    "avgFps": 157.9,
+    "p95GapMs": 6.2,
+    "p99GapMs": 12.2,
+    "maxGapMs": 18.3,
+    "jank50": 0,
+    "jank100": 0
+   },
+   "metricDelta": {
+    "LayoutDuration": 0,
+    "RecalcStyleDuration": 0.1,
+    "ScriptDuration": 0.1,
+    "TaskDuration": 2.4,
+    "JSHeapUsedSize": 200900,
+    "JSHeapUsedSizeMB": 15.9
+   }
+  }
+ }
+}{
+ "label": "post-ui",
+ "ts": "2026-10-30T00:38:04.262Z",
+ "scenarios": {
+  "shelfScroll": {
+   "dom": {
+    "scrollHeight": 1785,
+    "cards": 61
+   },
+   "frames": {
+    "frames": 1580,
+    "avgFps": 157.9,
+    "p95GapMs": 6.2,
+    "p99GapMs": 12.2,
+    "maxGapMs": 18.3,
+    "jank50": 0,
+    "jank100": 0
+   },
+   "metricDelta": {
+    "LayoutDuration": 0,
+    "RecalcStyleDuration": 0.1,
+    "ScriptDuration": 0.1,
+    "TaskDuration": 2.4,
+    "JSHeapUsedSize": 200900,
+    "JSHeapUsedSizeMB": 15.9
+   }
+  },
+  "comicPaged20": {
+   "frames": {
+    "frames": 1628,
+    "avgFps": 164.4,
+    "p95GapMs": 6.2,
+    "p99GapMs": 6.5,
+    "maxGapMs": 12.1,
+    "jank50": 0,
+    "jank100": 0
+   },
+   "metricDelta": {
+    "LayoutDuration": 0,
+    "RecalcStyleDuration": 0.1,
+    "ScriptDuration": 0.4,
+    "TaskDuration": 1,
+    "JSHeapUsedSize": 380052,
+    "JSHeapUsedSizeMB": 14.3
+   }
+  },
+  "comicWebtoon10s": {
+   "frames": {
+    "frames": 1609,
+    "avgFps": 160.9,
+    "p95GapMs": 6.2,
+    "p99GapMs": 18.1,
+    "maxGapMs": 24.2,
+    "jank50": 0,
+    "jank100": 0
+   },
+   "metricDelta": {
+    "LayoutDuration": 0,
+    "RecalcStyleDuration": 0,
+    "ScriptDuration": 0.6,
+    "TaskDuration": 2,
+    "JSHeapUsedSize": -1888304,
+    "JSHeapUsedSizeMB": 15
+   }
+  }
+ }
+}{
+ "label": "post-ui",
+ "ts": "2026-10-30T00:38:04.262Z",
+ "scenarios": {
+  "shelfScroll": {
+   "dom": {
+    "scrollHeight": 1785,
+    "cards": 61
+   },
+   "frames": {
+    "frames": 1580,
+    "avgFps": 157.9,
+    "p95GapMs": 6.2,
+    "p99GapMs": 12.2,
+    "maxGapMs": 18.3,
+    "jank50": 0,
+    "jank100": 0
+   },
+   "metricDelta": {
+    "LayoutDuration": 0,
+    "RecalcStyleDuration": 0.1,
+    "ScriptDuration": 0.1,
+    "TaskDuration": 2.4,
+    "JSHeapUsedSize": 200900,
+    "JSHeapUsedSizeMB": 15.9
+   }
+  },
+  "comicPaged20": {
+   "frames": {
+    "frames": 1628,
+    "avgFps": 164.4,
+    "p95GapMs": 6.2,
+    "p99GapMs": 6.5,
+    "maxGapMs": 12.1,
+    "jank50": 0,
+    "jank100": 0
+   },
+   "metricDelta": {
+    "LayoutDuration": 0,
+    "RecalcStyleDuration": 0.1,
+    "ScriptDuration": 0.4,
+    "TaskDuration": 1,
+    "JSHeapUsedSize": 380052,
+    "JSHeapUsedSizeMB": 14.3
+   }
+  },
+  "comicWebtoon10s": {
+   "frames": {
+    "frames": 1609,
+    "avgFps": 160.9,
+    "p95GapMs": 6.2,
+    "p99GapMs": 18.1,
+    "maxGapMs": 24.2,
+    "jank50": 0,
+    "jank100": 0
+   },
+   "metricDelta": {
+    "LayoutDuration": 0,
+    "RecalcStyleDuration": 0,
+    "ScriptDuration": 0.6,
+    "TaskDuration": 2,
+    "JSHeapUsedSize": -1888304,
+    "JSHeapUsedSizeMB": 15
+   }
+  },
+  "epubBookId": "28aa2a8f-4aa0-4341-b582-f1134a93995c",
+  "epubOpenIdle30s": {
+   "frames": {
+    "frames": 4951,
+    "avgFps": 165,
+    "p95GapMs": 6.3,
+    "p99GapMs": 6.5,
+    "maxGapMs": 7.2,
+    "jank50": 0,
+    "jank100": 0
+   }
+  },
+  "epubFontSlider": {
+   "frames": {
+    "frames": 949,
+    "avgFps": 165,
+    "p95GapMs": 6.4,
+    "p99GapMs": 6.5,
+    "maxGapMs": 12,
+    "jank50": 0,
+    "jank100": 0
+   },
+   "metricDelta": {
+    "LayoutDuration": 0,
+    "RecalcStyleDuration": 0,
+    "ScriptDuration": 0.2,
+    "TaskDuration": 0.5,
+    "JSHeapUsedSize": -190264,
+    "JSHeapUsedSizeMB": 15.4
+   }
+  }
+ }
+}
