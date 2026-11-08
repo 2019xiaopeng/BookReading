@@ -230,7 +230,14 @@ export default function AppShell(props: {
         ) : null}
 
         <div className="wr-nav" role="navigation">
-          <button className="wr-nav-btn" data-active={props.active === "library" && !trashActive} aria-current={props.active === "library" && !trashActive ? "page" : undefined} onClick={() => navigate("/")}>
+          <button
+            className="wr-nav-btn"
+            data-drop="shelf"
+            data-shelf-id=""
+            data-active={props.active === "library" && !trashActive}
+            aria-current={props.active === "library" && !trashActive ? "page" : undefined}
+            onClick={() => navigate("/")}
+          >
             <div className="wr-nav-title">
               <IconBook />
               书架
@@ -243,6 +250,8 @@ export default function AppShell(props: {
                 <button
                   key={row.id}
                   className="wr-nav-group-btn"
+                  data-drop="shelf"
+                  data-shelf-id={row.id}
                   title={row.name}
                   aria-current={activeShelf === String(row.id) ? "page" : undefined}
                   style={{ paddingLeft: 10 + row.depth * 12 }}
