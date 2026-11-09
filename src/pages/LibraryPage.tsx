@@ -213,6 +213,16 @@ export default function LibraryPage() {
     getSettings()
       .then((m) => {
         setDensity(normalizeLibraryDensity(m.library_density));
+        // 排序与密度同法持久化：退书/切视图重挂后不回落默认“最近阅读·降序”
+        try {
+          const s = JSON.parse(m.library_sort ?? "{}") as { key?: unknown; asc?: unknown };
+          if (typeof s.key === "string" && s.key in SORT_LABELS) setSortKey(s.key as SortKey);
+          if (typeof s.asc === "boolean") setSortAsc(s.asc);
+        } catch {}
+        // 状态过滤（在读/未读）同法持久化，与侧栏快捷 chips 联动不断档
+        if (m.library_status === "reading" || m.library_status === "finished" || m.library_status === "unread") {
+          setStatusFilter(m.library_status);
+        }
         const r = Number(m.trash_retention_days);
         if (Number.isFinite(r) && r >= 0) setRetentionDays(r);
       })
@@ -243,6 +253,17 @@ export default function LibraryPage() {
     setDensity(v);
     void setSetting("library_density", v);
   }
+
+  // 排序写穿（菜单三处 setter 共用这一条通道，含恢复后回写）
+  useEffect(() => {
+    void setSetting("library_sort", JSON.stringify({ key: sortKey, asc: sortAsc }));
+  }, [sortKey, sortAsc]);
+
+  // 状态过滤写穿（"all" 不落盘，等于默认态）
+  useEffect(() => {
+    if (statusFilter !== "all") void setSetting("library_status", statusFilter);
+    else void setSetting("library_status", "");
+  }, [statusFilter]);
 
   // 批次18：打开书时记下来源书架，阅读页返回按钮据此回到该 ?shelf= 视图
   const openBook = useCallback(
