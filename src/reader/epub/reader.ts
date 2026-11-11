@@ -425,9 +425,11 @@ export async function createReader(opts: {
     ".epubjs-hl": { fill: "rgba(255, 230, 0, 0.35)", "fill-opacity": "0.35", "mix-blend-mode": "multiply" },
   });
 
-  // B2 图片惰性解码（一·八 B）：每节内容创建时给 iframe 内 img 补 loading/decoding（滚到视口才解码，
+  // B2 图片惰性解码（一·八 B）：每节内容挂载后给 iframe 内 img 补 loading/decoding（滚到视口才解码，
   // 插图多的书开章不再全幅解码卡顿）。DOM 属性幂等，clear 后重 display 每节重跑一遍。
-  book.spine.hooks.content.register((contents: any) => {
+  // 注意挂 rendition.hooks.content（参数=Contents 对象，与 themes 注入同管线，已验证触发）；
+  // book.spine.hooks.content 的参数是裸 document——v2.6.0 验收发现原先挂错位置导致静默空转（字体注入同病，见下）。
+  rendition.hooks.content.register((contents: any) => {
     try {
       const imgs = contents?.document?.querySelectorAll?.("img");
       if (!imgs) return;
@@ -441,10 +443,11 @@ export async function createReader(opts: {
   });
 
   // 自定义正文 @font-face 注入 iframe（正文在 epubjs iframe 里，宿主 document 的 @font-face 完全无效）。
-  // spine content hook 在每个 section 内容创建时触发（含 clear 后重 display），addStylesheetCss 按 key 幂等覆盖。
+  // 同样必须挂 rendition.hooks.content（Contents.addStylesheetCss 按 key 幂等覆盖）——
+  // v2.5.0 起此 hook 误挂 spine.hooks（参数是 document 无 addStylesheetCss，异常被吞）致自定义字体一直未生效，本批修正。
   // 字体就绪前排版度量错误：epubjs 自带的 fontLoadListeners 已被上游注释停用，这里补 fonts.ready → resizeCheck 重排。
   if (opts.fontFaceCss) {
-    book.spine.hooks.content.register((contents: any) => {
+    rendition.hooks.content.register((contents: any) => {
       const css = opts.fontFaceCss?.();
       const doc = contents?.document;
       if (!css || !doc) return;

@@ -269,17 +269,24 @@ export default function LibraryPage() {
   viewKeyRef.current = viewScrollKey;
   const restoredKeysRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    // 数据未到不还原（高度不足会被钳到顶部）；每键只还原一次
+    // 数据未到不还原（高度不足会被钳到顶部）；本挂载内每键只还原一次（防视图内刷新覆盖用户新位置）
     if ((trashView ? trash : books).length === 0 || restoredKeysRef.current.has(viewScrollKey)) return;
     restoredKeysRef.current.add(viewScrollKey);
     const el = document.querySelector<HTMLElement>(".wr-main-scroll");
     if (el) el.scrollTop = scrollMemory.get(viewScrollKey) ?? 0;
   }, [trashView, currentShelfId, viewScrollKey, trash, books]);
+  // 重新挂载（从阅读器/收藏页返回）= 新一次访问：清还原标记、保留位置记忆——否则第二次进入被"只还原一次"跳过
+  useEffect(() => () => restoredKeysRef.current.clear(), []);
 
   useEffect(() => {
     const el = document.querySelector<HTMLElement>(".wr-main-scroll");
     if (!el) return;
-    const onScroll = () => scrollMemory.set(viewKeyRef.current, el.scrollTop);
+    const onScroll = () => {
+      const st = el.scrollTop;
+      // 切视图瞬间容器被钳回 0 会发 scroll 事件——还原未发生前不记录，防把记忆清零
+      if (st === 0 && !restoredKeysRef.current.has(viewKeyRef.current)) return;
+      scrollMemory.set(viewKeyRef.current, st);
+    };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
