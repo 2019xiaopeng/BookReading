@@ -14,13 +14,14 @@ use tauri::{Emitter, Manager, WindowEvent};
 
 use commands::library::{
     delete_book, delete_reader_font, generate_cover_thumbs, get_book, import_book, list_books,
-    reextract_all_covers, repair_book_metadata, save_reader_background, save_reader_font,
-    set_book_cover, update_book_metadata,
+    reextract_all_covers, repair_book_metadata, reveal_book_location, save_reader_background,
+    save_reader_font, scan_library_health, set_book_cover, update_book_metadata,
 };
 use commands::images::{
     import_image_folder, list_image_page_meta, list_image_pages, list_image_subdirs,
     read_image_page, relink_image_book, AppState as ImageState,
 };
+use commands::epub_optimize::optimize_epub_images;
 use commands::annotations::{
     add_bookmark, add_highlight, delete_bookmark, delete_highlight, export_annotations,
     list_bookmarks, list_highlights,
@@ -88,6 +89,8 @@ pub fn run() {
             app.manage(ImageState::default());
             // A5 存量封面缩略档补生成（幂等；后台线程 + cover-thumbs-progress 事件报进度）
             let _ = generate_cover_thumbs(handle.clone());
+            // v2.6.0 A：存量 epub 阅读优化副本幂等补生成（后台线程 + epub-opt-progress 事件报进度，已有跳过）
+            let _ = optimize_epub_images(handle.clone());
 
             // 批次19：系统托盘——✕ 最小化到托盘后的常驻入口；左键单击恢复主窗口，右键菜单 显示/退出。
             // 常驻：窗口 hide 后任务栏图标消失（Windows 默认），托盘不随窗口隐藏消失。
@@ -156,6 +159,9 @@ pub fn run() {
             set_book_cover,
             reextract_all_covers,
             generate_cover_thumbs,
+            optimize_epub_images,
+            reveal_book_location,
+            scan_library_health,
             update_book_metadata,
             delete_book,
             list_shelves,

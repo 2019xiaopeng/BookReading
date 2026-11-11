@@ -154,7 +154,7 @@ pub struct AppState {
 // 宽高嗅探只读文件头（JPEG SOF/PNG IHDR 等都在前 128KB 内；失败得 0/0，前端回退占位）
 const DIMENSIONS_HEAD_BYTES: u64 = 128 * 1024;
 
-fn sniff_dimensions(head: &[u8]) -> (u32, u32) {
+pub(crate) fn sniff_dimensions(head: &[u8]) -> (u32, u32) {
     image::ImageReader::new(std::io::Cursor::new(head))
         .with_guessed_format()
         .ok()

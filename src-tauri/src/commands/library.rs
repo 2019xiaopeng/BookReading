@@ -400,6 +400,7 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         .as_ref()
         .and_then(|p| p.extension().and_then(|e| e.to_str()))
         .map(|ext| format!("library/covers/{book_id}.{ext}"));
+    let made_epub = library_path.ends_with(".epub");
 
     let book = Book {
         id: book_id,
@@ -436,6 +437,13 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
     // 封面落库成功后顺手生成缩略档（best-effort，失败不影响导入）
     if let (Some(abs), Ok(thumbs)) = (cover_abs.as_ref(), thumbs_dir(&app)) {
         gen_cover_thumb(&thumbs, &book.id, abs);
+    }
+
+    // v2.6.0 A：同步生成阅读优化副本（无图包不落盘；失败只记日志，不阻断导入）
+    if made_epub {
+        if let Err(e) = super::epub_optimize::optimize_epub_file(&final_book_abs) {
+            eprintln!("[epub-opt] {}: {e}", final_book_abs.display());
+        }
     }
 
     Ok(book)
@@ -693,7 +701,7 @@ pub(crate) const THUMB_WIDTH: u32 = 480;
 
 // shortcut: image 0.25 的 webp 只有无损编码（有损需 libwebp C 库），
 // 不透明封面按文档退路直接走 JPEG q80；带透明的图才用无损 webp（保 alpha）
-fn encode_webp_lossless(img: &image::DynamicImage) -> Result<Vec<u8>, String> {
+pub(crate) fn encode_webp_lossless(img: &image::DynamicImage) -> Result<Vec<u8>, String> {
     let rgba = img.to_rgba8();
     let mut buf = Vec::new();
     image::codecs::webp::WebPEncoder::new_lossless(&mut buf)
@@ -870,6 +878,150 @@ fn reextract_covers(conn: &Connection, books_dir: &Path, covers_dir: &Path) -> R
 pub fn reextract_all_covers(app: tauri::AppHandle) -> Result<usize, String> {
     let conn = db::open_db(&app)?;
     reextract_covers(&conn, &app_paths::books_dir(&app)?, &app_paths::covers_dir(&app)?)
+}
+
+// ---- v2.6.0 库管理：P2 打开所在位置 / P3 书库体检 ----
+
+/// P2：在资源管理器中显示源（库内书=选中该文件；文件夹漫画=在父目录中选中源目录）。
+/// Rust 侧直调 opener 插件，不走 JS capability。
+#[tauri::command(async)]
+pub fn reveal_book_location(app: tauri::AppHandle, book_id: String) -> Result<(), String> {
+    let conn = db::open_db(&app)?;
+    let book = fetch_book_by_id(&conn, &book_id).map_err(|_| format!("书 {book_id} 不存在"))?;
+    let lp = book.library_path.replace('\\', "/");
+    let target = if let Some(rest) = lp.strip_prefix("library/") {
+        app_paths::library_dir(&app)?.join(rest)
+    } else if Path::new(&lp).is_absolute() {
+        PathBuf::from(&lp)
+    } else {
+        return Err(format!("无法识别的库路径: {}", book.library_path));
+    };
+    if !target.exists() {
+        return Err("源文件不存在".to_string());
+    }
+    tauri_plugin_opener::reveal_item_in_dir(&target).map_err(|e| format!("打开所在位置失败: {e}"))
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateGroup {
+    pub label: String,
+    pub book_ids: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingSource {
+    pub book_id: String,
+    pub title: Option<String>,
+    pub path: String,
+    pub kind: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingCover {
+    pub book_id: String,
+    pub title: Option<String>,
+    pub cover_path: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryHealth {
+    pub duplicates: Vec<DuplicateGroup>,
+    pub missing_sources: Vec<MissingSource>,
+    pub missing_covers: Vec<MissingCover>,
+}
+
+/// P3 书库体检（只读）：重复导入 / 源失链 / 悬空封面，均只统计未删除书。
+/// 重复判定与前端 buildDedupIndex 同口径：文件夹漫画=小写全路径一组；
+/// 库内书=file_size 非空时按 basename 与标题两种键各挂一份（复制入库的 basename 是 uuid，标题更贴近源文件名）。
+// core takes library_root so tests can run against a tempdir instead of real library
+fn scan_health(conn: &Connection, library_root: &Path) -> Result<LibraryHealth, String> {
+    let rows: Vec<(String, Option<String>, Option<String>, String, Option<i64>)> = conn
+        .prepare("SELECT id, title, cover_path, library_path, file_size FROM books WHERE deleted_at IS NULL ORDER BY id")
+        .map_err(|e| format!("failed to list books: {e}"))?
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+        })
+        .map_err(|e| format!("failed to query books: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to read books: {e}"))?;
+
+    let mut dup: std::collections::HashMap<String, (String, Vec<String>)> = std::collections::HashMap::new();
+    let mut missing_sources = Vec::new();
+    let mut missing_covers = Vec::new();
+
+    for (id, title, cover_path, library_path, file_size) in rows {
+        let lp = library_path.replace('\\', "/");
+        if let Some(rest) = lp.strip_prefix("library/") {
+            if !library_root.join(rest).exists() {
+                missing_sources.push(MissingSource {
+                    book_id: id.clone(),
+                    title: title.clone(),
+                    path: library_path.clone(),
+                    kind: "library".to_string(),
+                });
+            }
+            if let Some(size) = file_size {
+                let base = lp.rsplit('/').next().unwrap_or_default();
+                if !base.is_empty() {
+                    dup.entry(format!("b|{}|{size}", base.to_lowercase()))
+                        .or_insert_with(|| (base.to_string(), Vec::new()))
+                        .1
+                        .push(id.clone());
+                }
+                let t = title.clone().unwrap_or_default().trim().to_lowercase();
+                if !t.is_empty() {
+                    dup.entry(format!("t|{t}|{size}"))
+                        .or_insert_with(|| (title.clone().unwrap_or_default().trim().to_string(), Vec::new()))
+                        .1
+                        .push(id.clone());
+                }
+            }
+        } else if Path::new(&lp).is_absolute() {
+            if !Path::new(&lp).exists() {
+                missing_sources.push(MissingSource {
+                    book_id: id.clone(),
+                    title: title.clone(),
+                    path: library_path.clone(),
+                    kind: "folder".to_string(),
+                });
+            }
+            let label = lp.clone();
+            dup.entry(format!("f|{}", lp.to_lowercase()))
+                .or_insert_with(|| (label, Vec::new()))
+                .1
+                .push(id.clone());
+        }
+        if let Some(cp) = cover_path.filter(|c| !c.trim().is_empty()) {
+            let c = cp.replace('\\', "/");
+            if let Some(rest) = c.strip_prefix("library/") {
+                if !library_root.join(rest).exists() {
+                    missing_covers.push(MissingCover {
+                        book_id: id.clone(),
+                        title: title.clone(),
+                        cover_path: cp,
+                    });
+                }
+            }
+        }
+    }
+
+    let mut duplicates: Vec<DuplicateGroup> = dup
+        .into_iter()
+        .filter(|(_, (_, ids))| ids.len() >= 2)
+        .map(|(_, (label, book_ids))| DuplicateGroup { label, book_ids })
+        .collect();
+    duplicates.sort_by(|a, b| a.label.cmp(&b.label));
+    Ok(LibraryHealth { duplicates, missing_sources, missing_covers })
+}
+
+#[tauri::command(async)]
+pub fn scan_library_health(app: tauri::AppHandle) -> Result<LibraryHealth, String> {
+    let conn = db::open_db(&app)?;
+    scan_health(&conn, &app_paths::library_dir(&app)?)
 }
 
 #[cfg(test)]
@@ -1389,5 +1541,68 @@ mod tests {
         assert!(!thumbs.join("b2.jpg").exists());
         assert!(!thumbs.join("b2.webp").exists()); // 小图不放大也不落盘
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- v2.6.0 P3 书库体检 ----
+
+    #[test]
+    fn health_scan_reports_dups_missing_sources_and_covers() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(db::SCHEMA_SQL).unwrap();
+        let root = std::env::temp_dir().join(format!("bookreading-health-{}", Uuid::new_v4()));
+        fs::create_dir_all(root.join("books")).unwrap();
+        fs::create_dir_all(root.join("covers")).unwrap();
+        let comic = root.join("comicA");
+        fs::create_dir_all(&comic).unwrap();
+        fs::write(root.join("books/u1.epub"), b"a").unwrap();
+        fs::write(root.join("books/u4.epub"), b"a").unwrap();
+        fs::write(root.join("covers/ok.png"), b"c").unwrap();
+
+        let ins = |id: &str, title: Option<&str>, lp: String, cover: Option<&str>, size: Option<i64>| {
+            conn.execute(
+                "INSERT INTO books (id, title, library_path, cover_path, added_at, file_size, format) VALUES (?1,?2,?3,?4,1,?5,?6)",
+                params![id, title, lp, cover, size, if id.starts_with('f') { Some("images") } else { None }],
+            )
+            .unwrap();
+        };
+        // b1/b2：同标题同字节数 → 重复组；b2 文件缺失+封面缺失
+        ins("b1", Some("三体"), "library/books/u1.epub".into(), None, Some(100));
+        ins("b2", Some("三体"), "library/books/u2.epub".into(), Some("library/covers/gone.png"), Some(100));
+        // b3：file_size 为空不参与重复；文件缺失 → 失链
+        ins("b3", None, "library/books/u3.epub".into(), None, None);
+        // b4：完好的书（封面在、文件在），不应出现在任何缺失列表
+        ins("b4", Some("好封面"), "library/books/u4.epub".into(), Some("library/covers/ok.png"), None);
+        // f1/f2：同一源目录（大小写差异也要撞车）→ 文件夹重复组；f3 源目录丢失 → 失链
+        ins("f1", Some("漫画A"), comic.to_string_lossy().into_owned(), None, Some(1));
+        ins("f2", Some("漫画A"), comic.to_string_lossy().to_uppercase(), None, Some(1));
+        ins("f3", Some("丢了"), root.join("gone").to_string_lossy().into_owned(), None, None);
+        // 已软删书不参与
+        ins("b5", Some("三体"), "library/books/u5.epub".into(), None, Some(100));
+        conn.execute("UPDATE books SET deleted_at = 9 WHERE id = 'b5'", []).unwrap();
+
+        let h = scan_health(&conn, &root).unwrap();
+
+        // 重复组：标题“三体”（b1,b2）+ 文件夹 comicA（f1,f2）；f1/f2 标题+size 相同但按口径走全路径组
+        assert_eq!(h.duplicates.len(), 2, "{:?}", h.duplicates);
+        let title_group = h.duplicates.iter().find(|d| d.label == "三体").unwrap();
+        assert_eq!(title_group.book_ids, vec!["b1".to_string(), "b2".to_string()]);
+        let folder_label = comic.to_string_lossy().replace('\\', "/");
+        let folder_group = h.duplicates.iter().find(|d| d.label == folder_label).unwrap();
+        assert_eq!(folder_group.book_ids, vec!["f1".to_string(), "f2".to_string()]);
+
+        // 失链：b2/b3 库内文件缺失（kind=library），f3 源目录缺失（kind=folder）
+        assert_eq!(h.missing_sources.len(), 3, "{:?}", h.missing_sources);
+        let by_id = |id: &str| h.missing_sources.iter().find(|m| m.book_id == id).unwrap();
+        assert_eq!(by_id("b2").kind, "library");
+        assert_eq!(by_id("b2").path, "library/books/u2.epub");
+        assert_eq!(by_id("b3").kind, "library");
+        assert_eq!(by_id("f3").kind, "folder");
+
+        // 悬空封面：只有 b2
+        assert_eq!(h.missing_covers.len(), 1, "{:?}", h.missing_covers);
+        assert_eq!(h.missing_covers[0].book_id, "b2");
+        assert_eq!(h.missing_covers[0].cover_path, "library/covers/gone.png");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

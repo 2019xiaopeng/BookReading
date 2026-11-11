@@ -1,5 +1,6 @@
 pub mod library;
 pub mod images;
+pub mod epub_optimize;
 pub mod annotations;
 pub mod favorites;
 pub mod reading;
