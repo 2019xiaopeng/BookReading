@@ -166,6 +166,14 @@ fn purge_book(conn: &Connection, library_root: &Path, book_id: &str) -> Result<(
     };
     if let Some(abs) = to_abs(&row.0) {
         let _ = fs::remove_file(&abs);
+        // v2.6.0 插图优化副本随主文件一并清理，防删书后 .opt.epub 成为磁盘孤儿
+        if let Some(stem) = abs.file_stem() {
+            if abs.extension().is_some_and(|e| e == "epub") {
+                let mut opt = abs.clone();
+                opt.set_file_name(format!("{}.opt.epub", stem.to_string_lossy()));
+                let _ = fs::remove_file(&opt);
+            }
+        }
     }
     if let Some(abs) = row.1.as_deref().and_then(to_abs) {
         let _ = fs::remove_file(&abs);
