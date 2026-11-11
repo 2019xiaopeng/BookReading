@@ -2,13 +2,20 @@ import { describe, expect, test } from "vitest";
 
 import { defaultSettings } from "./defaults";
 import {
+  normalizeBgVeil,
   normalizeFontFamily,
+  normalizeFontWeight,
+  normalizeLetterSpacing,
   normalizeLineHeight,
   normalizePageAnimation,
+  normalizePageMargin,
+  normalizeParagraphSpacing,
   normalizeReaderBackground,
   normalizeReaderFont,
   normalizeReadingMode,
+  normalizeTextIndent,
   normalizeTheme,
+  normalizeTtsRate,
   normalizeTurnSpeedMs,
   sliderCommitValue,
 } from "./normalize";
@@ -129,6 +136,73 @@ describe("normalize", () => {
     expect(defaultSettings.reader_font).toEqual({ type: "preset" });
     expect(defaultSettings.fontFamily).toBe("default");
     expect(defaultSettings.turnSpeedMs).toBe(260);
+  });
+});
+
+describe("v2.6.0 排版细项与独立键 normalize", () => {
+  test("normalizeFontWeight 只认 400/500/700，其余回 400", () => {
+    expect(normalizeFontWeight(undefined)).toBe(400);
+    expect(normalizeFontWeight("500")).toBe(500);
+    expect(normalizeFontWeight(700)).toBe(700);
+    expect(normalizeFontWeight(600)).toBe(400);
+    expect(normalizeFontWeight("bold")).toBe(400);
+  });
+
+  test("normalizeLetterSpacing 钳 0-2 步 0.1，非法回 0", () => {
+    expect(normalizeLetterSpacing(undefined)).toBe(0);
+    expect(normalizeLetterSpacing("0.5")).toBe(0.5);
+    expect(normalizeLetterSpacing(9)).toBe(2);
+    expect(normalizeLetterSpacing(-1)).toBe(0);
+    expect(normalizeLetterSpacing(0.14)).toBe(0.1);
+    expect(normalizeLetterSpacing(0.16)).toBe(0.2);
+  });
+
+  test("normalizeParagraphSpacing 钳 0-1 步 0.05，非法回 0（默认不注入，存量书零回归）", () => {
+    expect(normalizeParagraphSpacing(undefined)).toBe(0);
+    expect(normalizeParagraphSpacing(0.35)).toBe(0.35);
+    expect(normalizeParagraphSpacing(0.33)).toBe(0.35);
+    expect(normalizeParagraphSpacing(2)).toBe(1);
+    expect(normalizeParagraphSpacing(-3)).toBe(0);
+  });
+
+  test("normalizeTextIndent 钳 0-2 步 0.1，非法回 0（中文默认不缩进）", () => {
+    expect(normalizeTextIndent(undefined)).toBe(0);
+    expect(normalizeTextIndent(2)).toBe(2);
+    expect(normalizeTextIndent("2em")).toBe(0);
+    expect(normalizeTextIndent(1.26)).toBe(1.3);
+  });
+
+  test("normalizePageMargin 钳 12-48 步 2，非法回 24", () => {
+    expect(normalizePageMargin(undefined)).toBe(24);
+    expect(normalizePageMargin("30")).toBe(30);
+    expect(normalizePageMargin(31)).toBe(32);
+    expect(normalizePageMargin(0)).toBe(12);
+    expect(normalizePageMargin(99)).toBe(48);
+  });
+
+  test("normalizeTtsRate 钳 0.5-2 步 0.1，非法回 1", () => {
+    expect(normalizeTtsRate(undefined)).toBe(1);
+    expect(normalizeTtsRate(1.5)).toBe(1.5);
+    expect(normalizeTtsRate(0.1)).toBe(0.5);
+    expect(normalizeTtsRate(9)).toBe(2);
+  });
+
+  test("normalizeBgVeil 钳 60-95 整数，非法回 88", () => {
+    expect(normalizeBgVeil(undefined)).toBe(88);
+    expect(normalizeBgVeil("70")).toBe(70);
+    expect(normalizeBgVeil(88.6)).toBe(89);
+    expect(normalizeBgVeil(10)).toBe(60);
+    expect(normalizeBgVeil(999)).toBe(95);
+    expect(normalizeBgVeil("abc")).toBe(88);
+  });
+
+  test("defaultSettings 含 v2.6.0 排版细项默认值", () => {
+    expect(defaultSettings.fontWeight).toBe(400);
+    expect(defaultSettings.letterSpacing).toBe(0);
+    expect(defaultSettings.paragraphSpacing).toBe(0);
+    expect(defaultSettings.textIndent).toBe(0);
+    expect(defaultSettings.pageMargin).toBe(24);
+    expect(defaultSettings.justify).toBe(false);
   });
 });
 

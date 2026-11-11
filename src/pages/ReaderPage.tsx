@@ -67,14 +67,23 @@ import { defaultSettings, HIGHLIGHT_COLOR } from "../reader/settings/defaults";
 import type { ReaderSettings } from "../reader/settings/types";
 import { normalizeLayoutMode, resolveSpreadMode } from "../reader/settings/layoutMode";
 import {
+  normalizeBgVeil,
   normalizeFontFamily,
+  normalizeFontWeight,
+  normalizeLetterSpacing,
   normalizeLineHeight,
   normalizePageAnimation,
+  normalizePageMargin,
+  normalizeParagraphSpacing,
   normalizeReaderBackground,
   normalizeReaderFont,
   normalizeReadingMode,
+  normalizeTextIndent,
+  normalizeTtsRate,
   normalizeTurnSpeedMs,
 } from "../reader/settings/normalize";
+import { epubSettingsKey, EPUSET_FIELDS, parseEpubSettingsOverride, resolveEpubSettings, type EpubSettingsOverride } from "../reader/settings/epuset";
+import { speak, stop as ttsStop, subscribeTts, ttsSpeaking, ttsSupported } from "../reader/tts";
 import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
@@ -97,6 +106,7 @@ import {
   IconRefresh,
   IconSearch,
   IconSettings,
+  IconSpeaker,
 } from "../ui/icons";
 
 // 漫画/PDF 共用一套翻页 api 消费面（PDF 增量提供 renderThumb 供页面面板缩略图）
@@ -124,6 +134,10 @@ const ReaderTopBar = memo(function ReaderTopBar(props: {
   showEpubTools: boolean;
   showVisualTools: boolean;
   isFavorite: boolean;
+  /** #5 朗读（EPUB 且 WebView 支持 speechSynthesis） */
+  showTts: boolean;
+  ttsOn: boolean;
+  onToggleSpeak: () => void;
   onBack: () => void;
   onOpenDrawer: (tab: SideTab) => void;
   onToggleFavorite: () => void;
@@ -168,6 +182,18 @@ const ReaderTopBar = memo(function ReaderTopBar(props: {
             搜索
           </button>
         </>
+      ) : null}
+      {props.showTts ? (
+        <button
+          className="wr-btn wr-icon-btn"
+          data-active={props.ttsOn ? "true" : undefined}
+          aria-pressed={props.ttsOn}
+          title={props.ttsOn ? "停止朗读" : "从当前章朗读"}
+          onClick={props.onToggleSpeak}
+        >
+          <IconSpeaker />
+          朗读
+        </button>
       ) : null}
       {props.showVisualTools ? (
         <>
@@ -304,6 +330,12 @@ export default function ReaderPage() {
   const [pdfSettings, setPdfSettings] = useState<ImageReaderSettings>(defaultImageReaderSettings);
   // E2 按书记忆：imgset:<bookId> 覆盖键（rtl/layout/fit/webtoonWidth/doubleOffset），叠加在全局默认之上
   const [imgOverride, setImgOverride] = useState<ImageSettingsOverride>({});
+  // #3 排版按书记忆：epuset:<bookId> 覆盖键（字号/行距/排版细项），叠加在全局默认之上（字体族不进书级）
+  const [epuOverride, setEpuOverride] = useState<EpubSettingsOverride>({});
+  // #5 TTS 语速（全局键 ttsRate）与 #7 背景纱浓度（全局键 bg_veil）
+  const [ttsRate, setTtsRate] = useState(1);
+  const [bgVeil, setBgVeil] = useState(88);
+  const [ttsOn, setTtsOn] = useState(false);
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const [imagePage, setImagePage] = useState<{ page: number; pageCount: number } | null>(null);
   const [sideTab, setSideTab] = useState<SideTab>("toc");
@@ -352,6 +384,10 @@ export default function ReaderPage() {
   const imageApiRef = useRef<PageReaderApi | null>(null);
   // E2：本书覆盖键被面板改过后置位，防迟到的 getSettings 回读覆盖用户刚写的值
   const imgOverrideTouchedRef = useRef(false);
+  // #3：epuset 覆盖键同款防回读覆盖；生效排版（全局←书级）与覆盖键的 ref 镜像供稳定回调取用
+  const epuOverrideTouchedRef = useRef(false);
+  const epuOverrideRef = useRef<EpubSettingsOverride>({});
+  const epubSettingsRef = useRef<ReaderSettings>(defaultSettings);
   // 漫画/PDF 皆为“视觉书”：webtoon=原生滚动容器（条漫/PDF 连续滚动共用 webtoon 枚举，滚轮转发不翻页）；
   // 批次15 起空格自动滚动对 PDF 连续滚动同样开放
   const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false, autoscroll: false });
@@ -393,6 +429,8 @@ export default function ReaderPage() {
     () => resolveImageSettings(isPdfBook ? pdfSettings : imageSettings, imgOverride),
     [isPdfBook, pdfSettings, imageSettings, imgOverride],
   );
+  // #3：生效排版 = 全局 ReaderSettings ← epuset:<bookId> 书级覆盖（设置面板显示并改的是生效值）
+  const epubSettings = useMemo(() => resolveEpubSettings(settings, epuOverride), [settings, epuOverride]);
   const visualSettingsKey = isPdfBook ? "pdf_reader_settings" : "image_reader_settings";
   const imageEdgeSwap = isImageBook && visualSettings.rtl;
   const pagerEnabled =
@@ -426,6 +464,14 @@ export default function ReaderPage() {
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+
+  useEffect(() => {
+    epuOverrideRef.current = epuOverride;
+  }, [epuOverride]);
+
+  useEffect(() => {
+    epubSettingsRef.current = epubSettings;
+  }, [epubSettings]);
 
   useEffect(() => {
     spreadModeRef.current = spreadMode;
@@ -466,10 +512,18 @@ export default function ReaderPage() {
         layoutMode,
         lineHeight,
         fontFamily,
+        fontWeight: normalizeFontWeight(map.fontWeight),
+        letterSpacing: normalizeLetterSpacing(map.letterSpacing),
+        paragraphSpacing: normalizeParagraphSpacing(map.paragraphSpacing),
+        textIndent: normalizeTextIndent(map.textIndent),
+        pageMargin: normalizePageMargin(map.pageMargin),
+        justify: map.justify === "true",
         readingMode: normalizeReadingMode(map.readingMode),
         reader_bg: normalizeReaderBackground(map.reader_bg),
         reader_font: normalizeReaderFont(map.reader_font),
       });
+      setTtsRate(normalizeTtsRate(map.ttsRate));
+      setBgVeil(normalizeBgVeil(map.bg_veil));
       setImageSettings(normalizeImageReaderSettings(map.image_reader_settings));
       // 批次16 旧数据迁移：pdf_reader_settings 缺失时继承 image_reader_settings（用户调过的值继承一次），此后独立演化
       setPdfSettings(normalizeImageReaderSettings(map.pdf_reader_settings ?? map.image_reader_settings));
@@ -479,15 +533,19 @@ export default function ReaderPage() {
     };
   }, []);
 
-  // E2：随书加载 imgset:<bookId> 覆盖键（换书路由参数变化不重挂本页，按 bookId 重载）
+  // E2/#3：随书加载 imgset:<bookId> 与 epuset:<bookId> 覆盖键（换书路由参数变化不重挂本页，按 bookId 重载）
   useEffect(() => {
     let cancelled = false;
     imgOverrideTouchedRef.current = false;
+    epuOverrideTouchedRef.current = false;
     setImgOverride({});
+    setEpuOverride({});
     if (!bookId) return;
     void getSettings()
       .then((m) => {
-        if (!cancelled && !imgOverrideTouchedRef.current) setImgOverride(parseImageSettingsOverride(m[imageSettingsKey(bookId)]));
+        if (cancelled) return;
+        if (!imgOverrideTouchedRef.current) setImgOverride(parseImageSettingsOverride(m[imageSettingsKey(bookId)]));
+        if (!epuOverrideTouchedRef.current) setEpuOverride(parseEpubSettingsOverride(m[epubSettingsKey(bookId)]));
       })
       .catch(() => {});
     return () => {
@@ -582,6 +640,8 @@ export default function ReaderPage() {
       };
 
       let ctrl: ReaderController | null = null;
+      // #3：首显即按书级生效值排版（epuset 晚到由 effect 推送兜底）
+      const eff = resolveEpubSettings(settingsRef.current, epuOverrideRef.current);
       try {
         // 恢复目标先取（URL cfi > 阅读状态），首显直达恢复点——旧路径先渲第 1 章再 display 恢复 CFI，开书双渲染闪跳
         const cfiFromUrl = new URLSearchParams(locationSearchRef.current).get("cfi");
@@ -609,10 +669,19 @@ export default function ReaderPage() {
           libraryPath: book.library_path,
           spreadMode: spreadModeRef.current,
           readingMode: settingsRef.current.readingMode,
-          fontFamily: settingsRef.current.fontFamily,
+          lineHeight: eff.lineHeight,
+          fontFamily: eff.fontFamily,
+          typography: {
+            fontWeight: eff.fontWeight,
+            letterSpacing: eff.letterSpacing,
+            paragraphSpacing: eff.paragraphSpacing,
+            textIndent: eff.textIndent,
+            pageMargin: eff.pageMargin,
+            justify: eff.justify,
+          },
           initialTarget,
           bookId: book.id,
-          locationsKey: () => locationsCacheKey(settingsRef.current.fontFamily, settingsRef.current.fontSizePercent),
+          locationsKey: () => locationsCacheKey(epubSettingsRef.current.fontFamily, epubSettingsRef.current.fontSizePercent),
           fontFaceCss: () => fontFaceCssRef.current,
           onRelocated,
           onTocLoaded,
@@ -641,8 +710,8 @@ export default function ReaderPage() {
 
       controllerRef.current = ctrl;
       ctrl.setTheme(getTheme());
-      ctrl.setFontSizePercent(settingsRef.current.fontSizePercent);
-      ctrl.setLineHeight(settingsRef.current.lineHeight);
+      ctrl.setFontSizePercent(eff.fontSizePercent);
+      ctrl.setLineHeight(eff.lineHeight);
       if (settingsRef.current.readingMode !== "scrolled") ctrl.setSpreadMode(spreadModeRef.current);
 
       try {
@@ -719,18 +788,50 @@ export default function ReaderPage() {
   useEffect(() => {
     if (!controllerRef.current) return;
     controllerRef.current.setTheme(theme);
-    controllerRef.current.setFontSizePercent(settings.fontSizePercent);
-    controllerRef.current.setLineHeight(settings.lineHeight);
-    controllerRef.current.setFontFamily(settings.fontFamily);
+    controllerRef.current.setFontSizePercent(epubSettings.fontSizePercent);
+    controllerRef.current.setLineHeight(epubSettings.lineHeight);
+    controllerRef.current.setFontFamily(epubSettings.fontFamily);
+    controllerRef.current.setTypography({
+      fontWeight: epubSettings.fontWeight,
+      letterSpacing: epubSettings.letterSpacing,
+      paragraphSpacing: epubSettings.paragraphSpacing,
+      textIndent: epubSettings.textIndent,
+      pageMargin: epubSettings.pageMargin,
+      justify: epubSettings.justify,
+    });
     // scrolled 模式下分栏失效，跳过 spread 以免与 epubjs scrolled 冲突
     if (settings.readingMode !== "scrolled") controllerRef.current.setSpreadMode(spreadMode);
-  }, [theme, settings.fontSizePercent, settings.lineHeight, settings.fontFamily, settings.layoutMode, spreadMode, settings.readingMode]);
+  }, [
+    theme,
+    epubSettings.fontSizePercent,
+    epubSettings.lineHeight,
+    epubSettings.fontFamily,
+    epubSettings.fontWeight,
+    epubSettings.letterSpacing,
+    epubSettings.paragraphSpacing,
+    epubSettings.textIndent,
+    epubSettings.pageMargin,
+    epubSettings.justify,
+    settings.layoutMode,
+    spreadMode,
+    settings.readingMode,
+  ]);
 
-  // 字号/行距/字体变化后重排：章内页码（displayed.total）随新分页更新
-  // （v2.5 补 fontFamily：换字体不重排会用旧字体的分页度量，页码/翻页错位）
+  // 字号/行距/字体/排版细项变化后重排：章内页码（displayed.total）随新分页更新
+  // （v2.5 补 fontFamily：换字体不重排会用旧字体的分页度量，页码/翻页错位；v2.6 排版细项同因）
   useEffect(() => {
     controllerRef.current?.resize();
-  }, [settings.fontSizePercent, settings.lineHeight, settings.fontFamily]);
+  }, [
+    epubSettings.fontSizePercent,
+    epubSettings.lineHeight,
+    epubSettings.fontFamily,
+    epubSettings.fontWeight,
+    epubSettings.letterSpacing,
+    epubSettings.paragraphSpacing,
+    epubSettings.textIndent,
+    epubSettings.pageMargin,
+    epubSettings.justify,
+  ]);
 
   useEffect(() => {
     controllerRef.current?.setReadingMode(settings.readingMode);
@@ -771,6 +872,41 @@ export default function ReaderPage() {
       cancelled = true;
     };
   }, [settings.reader_font]);
+
+  // #5 TTS 朗读一期：状态订阅驱动顶栏钮高亮；翻章/关书（卸载）/切抽屉自动停。
+  // 无跟随高亮——一期明确不做（需 CFI↔段落映射与实时重排）。
+  const ttsAvailable = ttsSupported();
+  useEffect(() => subscribeTts(() => setTtsOn(ttsSpeaking())), []);
+  useEffect(() => {
+    ttsStop();
+  }, [chapterHref]);
+  useEffect(() => {
+    if (drawerOpen) ttsStop();
+  }, [drawerOpen]);
+  useEffect(() => () => ttsStop(), []);
+  const toggleSpeak = useCallback(() => {
+    if (ttsSpeaking()) {
+      ttsStop();
+      return;
+    }
+    // 当前章正文（innerText 按块级元素分行，tts 内再按段切 utterance）
+    const doc = containerRef.current?.querySelector("iframe")?.contentDocument;
+    const text = doc?.body?.innerText ?? "";
+    if (!text.trim()) return;
+    speak(text, { rate: ttsRate });
+  }, [ttsRate]);
+
+  // #5/#7 全局独立键（ttsRate / bg_veil）：不走 ReaderSettings 批量管线
+  const onTtsRateChange = useCallback((v: number) => {
+    settingsTouchedRef.current = true;
+    setTtsRate(v);
+    void setSetting("ttsRate", String(v));
+  }, []);
+  const onBgVeilChange = useCallback((v: number) => {
+    settingsTouchedRef.current = true;
+    setBgVeil(v);
+    void setSetting("bg_veil", String(v));
+  }, []);
 
   // B12 固定预留：栏显隐只做淡入淡出、布局零变化（不再需要 visible-keyed resize）；
   // 仅锁定切换（padding 62↔0 的一次性 200ms 过渡）后补一次 epub 重排，保持分页正确
@@ -814,18 +950,16 @@ export default function ReaderPage() {
         return;
       }
 
-      // E7 字号快捷键：Ctrl+= / Ctrl+- / Ctrl+0（走现有 setFontSizePercent 通道，钳 80-200）
+      // E7 字号快捷键：Ctrl+= / Ctrl+- / Ctrl+0（走设置面板同一条通道，钳 80-200；#3 书内改动按书钉住）
       if (e.ctrlKey && (e.key === "=" || e.key === "+" || e.key === "-" || e.key === "0")) {
         e.preventDefault();
-        const cur = settingsRef.current.fontSizePercent;
+        const cur = epubSettingsRef.current.fontSizePercent;
         const v =
           e.key === "0"
             ? defaultSettings.fontSizePercent
             : Math.min(200, Math.max(80, cur + (e.key === "-" ? -5 : 5)));
         if (v === cur) return;
-        const next = { ...settingsRef.current, fontSizePercent: v };
-        setSettings(next);
-        void persistSettings(next);
+        changeSettingsRef.current({ ...epubSettingsRef.current, fontSizePercent: v });
         return;
       }
 
@@ -1010,6 +1144,12 @@ export default function ReaderPage() {
       layoutMode: next.layoutMode,
       lineHeight: String(next.lineHeight),
       fontFamily: next.fontFamily,
+      fontWeight: String(next.fontWeight),
+      letterSpacing: String(next.letterSpacing),
+      paragraphSpacing: String(next.paragraphSpacing),
+      textIndent: String(next.textIndent),
+      pageMargin: String(next.pageMargin),
+      justify: String(next.justify),
       readingMode: next.readingMode,
       reader_bg: JSON.stringify(next.reader_bg),
       reader_font: JSON.stringify(next.reader_font),
@@ -1283,13 +1423,45 @@ export default function ReaderPage() {
   const handlePdfApi = useCallback((api: PdfReaderApi) => {
     imageApiRef.current = api;
   }, []);
+  // #3 排版按书记忆：面板显示/改的是生效值；被改的书级字段（epuset 八项）钉进 epuset:<bookId>，
+  // 其余字段（翻页动画/速度/版式/字体族/阅读模式/背景/字体槽）仍写全局键，作为新书默认。
   const onSettingsPanelChange = useCallback(
     (next: ReaderSettings) => {
-      setSettings(next);
-      void persistSettings(next);
+      const prevEff = epubSettingsRef.current;
+      const o: EpubSettingsOverride = { ...epuOverrideRef.current };
+      let overrideDirty = false;
+      for (const k of EPUSET_FIELDS) {
+        if (next[k] !== prevEff[k]) {
+          (o as Record<typeof k, unknown>)[k] = next[k];
+          overrideDirty = true;
+        }
+      }
+      const base = settingsRef.current;
+      const globalNext: ReaderSettings = {
+        ...base,
+        pageAnimation: next.pageAnimation,
+        turnSpeedMs: next.turnSpeedMs,
+        layoutMode: next.layoutMode,
+        fontFamily: next.fontFamily,
+        readingMode: next.readingMode,
+        reader_bg: next.reader_bg,
+        reader_font: next.reader_font,
+      };
+      setSettings(globalNext);
+      void persistSettings(globalNext);
+      if (overrideDirty) {
+        epuOverrideTouchedRef.current = true;
+        // ref 立即同步：同批次连续改动（拖杆连击）diff 不到旧 state 也不丢字段
+        epuOverrideRef.current = o;
+        epubSettingsRef.current = resolveEpubSettings(globalNext, o);
+        setEpuOverride(o);
+        void setSetting(epubSettingsKey(bookId ?? ""), JSON.stringify(o));
+      }
     },
-    [persistSettings],
+    [persistSettings, bookId],
   );
+  const changeSettingsRef = useRef(onSettingsPanelChange);
+  changeSettingsRef.current = onSettingsPanelChange;
   const onVisualSettingsChange = useCallback(
     (next: ImageReaderSettings) => {
       // E2：书级字段（rtl/layout/fit/webtoonWidth/doubleOffset）被改动才钉进 imgset:<bookId>（面板显示合并后的生效值）；
@@ -1388,6 +1560,9 @@ export default function ReaderPage() {
           percentText={typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
           showEpubTools={!isImageBook}
           showVisualTools={isVisualBook && !!book}
+          showTts={ttsAvailable && !!book && !isVisualBook}
+          ttsOn={ttsOn}
+          onToggleSpeak={toggleSpeak}
           isFavorite={!!book?.is_favorite}
           onBack={backToLibrary}
           onOpenDrawer={openDrawer}
@@ -1421,7 +1596,15 @@ export default function ReaderPage() {
             ) : null}
 
             {sideTab === "settings" && !isVisualBook ? (
-              <MemoSettingsPanel value={settings} bgUrl={bgUrl} onChange={onSettingsPanelChange} />
+              <MemoSettingsPanel
+                value={epubSettings}
+                bgUrl={bgUrl}
+                ttsRate={ttsRate}
+                onTtsRate={onTtsRateChange}
+                bgVeil={bgVeil}
+                onBgVeil={onBgVeilChange}
+                onChange={onSettingsPanelChange}
+              />
             ) : null}
 
             {sideTab === "pages" && isVisualBook && book && imagePage ? (
@@ -1695,7 +1878,7 @@ export default function ReaderPage() {
                       : undefined
                   }
                 >
-                  {bgUrl ? <div className="wr-reader-bg-veil" aria-hidden="true" /> : null}
+                  {bgUrl ? <div className="wr-reader-bg-veil" aria-hidden="true" style={{ opacity: bgVeil / 100 }} /> : null}
                   <div ref={containerRef} style={{ height: "100%", position: "relative" }} />
                   {/* B12 页码徽标：locations 就绪显示全书“位置页” X / Y（1024 字/页估算；双页两角 X 与 X+1 近似）；未就绪回退章内页码 */}
                   {locPage ? (

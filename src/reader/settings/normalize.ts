@@ -91,3 +91,49 @@ export function normalizeTurnSpeedMs(v: unknown): number {
 export function sliderCommitValue(draft: number | null, committed: number): number | null {
   return draft !== null && draft !== committed ? draft : null;
 }
+
+// ---- #2 排版细项（v2.6.0）：步进钳位（toFixed 消 0.05/0.1 步进的浮点尾差） ----
+
+function clampStep(v: unknown, min: number, max: number, step: number, fallback: number): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  const snapped = Math.round(n / step) * step;
+  return Number(Math.min(max, Math.max(min, snapped)).toFixed(2));
+}
+
+/** 字重三档 400|500|700，其余值回 400 */
+export function normalizeFontWeight(v: unknown): number {
+  const n = Number(v);
+  return n === 500 || n === 700 ? n : 400;
+}
+
+export function normalizeLetterSpacing(v: unknown): number {
+  return clampStep(v, 0, 2, 0.1, 0);
+}
+
+export function normalizeParagraphSpacing(v: unknown): number {
+  // 默认 0=不注入（存量书观感零变化），>0 才注入 margin-bottom
+  return clampStep(v, 0, 1, 0.05, 0);
+}
+
+export function normalizeTextIndent(v: unknown): number {
+  return clampStep(v, 0, 2, 0.1, 0);
+}
+
+/** 纸面四边内边距 12-48px 步 2 */
+export function normalizePageMargin(v: unknown): number {
+  return clampStep(v, 12, 48, 2, 24);
+}
+
+/** #5 TTS 语速 0.5-2 步 0.1 */
+export function normalizeTtsRate(v: unknown): number {
+  return clampStep(v, 0.5, 2, 0.1, 1);
+}
+
+/** #7 背景纱浓度 60-95（settings 键 bg_veil，字符串存储；空串/垃圾回 88——壳侧同契约，见 AppShell.test.ts） */
+export function normalizeBgVeil(v: unknown): number {
+  // Number("") 会得 0 被钳成 60：字符串走 parseFloat 让空串落 NaN 回默认
+  const n = typeof v === "string" ? Number.parseFloat(v) : Number(v);
+  if (!Number.isFinite(n)) return 88;
+  return Math.min(95, Math.max(60, Math.round(n)));
+}

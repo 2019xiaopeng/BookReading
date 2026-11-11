@@ -156,6 +156,8 @@ export type ReaderController = {
   setFontSizePercent: (percent: number) => void;
   setLineHeight: (lineHeight: number) => void;
   setFontFamily: (fontFamily: FontFamily) => void;
+  /** #2 排版细项（字重/字间距/段距/首行缩进/页边距/两端对齐）：合并当前值重注册主题样式 */
+  setTypography: (t: Partial<TypographyParams>) => void;
   setSpreadMode: (mode: SpreadMode) => void;
   setReadingMode: (mode: ReadingMode) => void;
   addHighlight: (cfiRange: string) => void;
@@ -250,6 +252,18 @@ const FONT_STACKS: Record<FontFamily, string> = {
   fangsong: `"FangSong", "仿宋", "STFangsong", serif`,
 };
 
+/** #2 排版细项全集（registerThemes 注入 iframe；lineHeight/fontFamily 与既有键同源） */
+export type TypographyParams = {
+  lineHeight: number;
+  fontFamily: FontFamily;
+  fontWeight: number;
+  letterSpacing: number;
+  paragraphSpacing: number;
+  textIndent: number;
+  pageMargin: number;
+  justify: boolean;
+};
+
 export async function createReader(opts: {
   container: HTMLElement;
   libraryPath: string;
@@ -257,6 +271,8 @@ export async function createReader(opts: {
   readingMode?: ReadingMode;
   lineHeight?: number;
   fontFamily?: FontFamily;
+  /** 排版细项初始值（ReaderPage 传书级生效值；缺省用默认档） */
+  typography?: Partial<TypographyParams>;
   /** 首显直达目标（CFI）；缺省第 1 章。恢复点在首渲前注入，消除"先渲第 1 章再 display 恢复 CFI"的双渲染 */
   initialTarget?: string;
   /** locations 持久化的书 id（缺省不持久化，仅会话内生成） */
@@ -272,7 +288,18 @@ export async function createReader(opts: {
   onContentsPress?: () => void;
   onError?: (message: string) => void;
 }): Promise<ReaderController> {
-  const bytes = await readAppDataFile(opts.libraryPath);
+  // A 的前端半：优先开导入侧生成的 .opt.epub 阅读优化副本（插图缩放重打包），不存在回落原书。
+  // 导入侧扩展名固定小写 .epub，大写 .EPUB 不探测。
+  let bytes: Uint8Array;
+  if (/\.epub$/.test(opts.libraryPath)) {
+    try {
+      bytes = await readAppDataFile(opts.libraryPath.replace(/\.epub$/, ".opt.epub"));
+    } catch {
+      bytes = await readAppDataFile(opts.libraryPath);
+    }
+  } else {
+    bytes = await readAppDataFile(opts.libraryPath);
+  }
   const book: any = ePub(toArrayBuffer(bytes));
   let openFailed: string | null = null;
   const onOpenFailed = (e: any) => {
@@ -311,10 +338,24 @@ export async function createReader(opts: {
   rendition.on?.("displayerror", onDisplayError);
 
   let currentTheme: Theme = "light";
-  let currentLineHeight = opts.lineHeight ?? 1.9;
   let currentFontSizePercent = 120;
-  let currentFontFamily: FontFamily = opts.fontFamily ?? "default";
-  const registerThemes = (lineHeight: number, fontFamily: FontFamily) => {
+  const DEFAULT_TYPO: TypographyParams = {
+    lineHeight: 1.9,
+    fontFamily: "default",
+    fontWeight: 400,
+    letterSpacing: 0,
+    paragraphSpacing: 0,
+    textIndent: 0,
+    pageMargin: 24,
+    justify: false,
+  };
+  let typo: TypographyParams = {
+    ...DEFAULT_TYPO,
+    lineHeight: opts.lineHeight ?? 1.9,
+    fontFamily: opts.fontFamily ?? "default",
+    ...(opts.typography ?? {}),
+  };
+  const registerThemes = () => {
     const common: Record<string, any> = {
       "*, *::before, *::after": { "box-sizing": "border-box" },
       img: { "max-width": "100%", height: "auto" },
@@ -334,6 +375,14 @@ export async function createReader(opts: {
           `html:has(body.${t}) ${pseudo}`,
           `html:has(body.${t})${pseudo}`,
         ].join(", ");
+      // #2 排版细项：中性档不注入（字重 400/字间距 0/缩进 0/段距 0/不两端对齐——书内自带样式保持现状，存量书零回归）；
+      // !important 同 p 的 line-height 理由：压过书内自带规则。
+      const pRules: Record<string, string> = {};
+      if (typo.paragraphSpacing > 0) pRules["margin-bottom"] = `${typo.paragraphSpacing}em !important`;
+      if (typo.fontWeight !== DEFAULT_TYPO.fontWeight) pRules["font-weight"] = `${typo.fontWeight} !important`;
+      if (typo.letterSpacing > 0) pRules["letter-spacing"] = `${typo.letterSpacing}px !important`;
+      if (typo.textIndent > 0) pRules["text-indent"] = `${typo.textIndent}em !important`;
+      if (typo.justify) pRules["text-align"] = "justify !important";
       // 规则按主题类作用域（themes.select 靠 body class 切换），避免多主题样式表共存时后者压死前者
       rendition.themes.register(t, {
         ...common,
@@ -348,9 +397,10 @@ export async function createReader(opts: {
         [scrollbar("::-webkit-scrollbar-thumb:hover")]: { background: `rgba(${s.inkRgb}, 0.45)` },
         [`body.${t}`]: {
           margin: "0 auto",
-          padding: "24px 20px",
-          "line-height": String(lineHeight),
-          "font-family": `${FONT_STACKS[fontFamily]} !important`,
+          // #2 纸面四边内边距（pageMargin，12-48px）
+          padding: `${typo.pageMargin}px`,
+          "line-height": String(typo.lineHeight),
+          "font-family": `${FONT_STACKS[typo.fontFamily]} !important`,
           "word-break": "break-word",
           "overflow-wrap": "anywhere",
           // epub 自带浅底会透出暗色壳：dark/darkcontrast 注入不透明纸面（!important 压过 epub 自身规则），浅色主题保持 transparent
@@ -360,18 +410,34 @@ export async function createReader(opts: {
         // 段落常自带 line-height / font-family（比 body 继承更具体——继承必输给直命中 p 的声明），
         // 须直接命中 p 且加 !important（B12 字体不生效根因即书内 p/类选择器压过了 body 继承）
         [`body.${t} p, body.${t}`]: {
-          "line-height": `${lineHeight} !important`,
-          "font-family": `${FONT_STACKS[fontFamily]} !important`,
+          "line-height": `${typo.lineHeight} !important`,
+          "font-family": `${FONT_STACKS[typo.fontFamily]} !important`,
         },
+        [`body.${t} p`]: pRules,
       });
     }
     rendition.themes.select(currentTheme);
   };
-  registerThemes(opts.lineHeight ?? 1.9, currentFontFamily);
+  registerThemes();
   rendition.themes.fontSize("120%");
   rendition.themes.default({
     "::selection": { background: "rgba(255, 230, 0, 0.35)" },
     ".epubjs-hl": { fill: "rgba(255, 230, 0, 0.35)", "fill-opacity": "0.35", "mix-blend-mode": "multiply" },
+  });
+
+  // B2 图片惰性解码（一·八 B）：每节内容创建时给 iframe 内 img 补 loading/decoding（滚到视口才解码，
+  // 插图多的书开章不再全幅解码卡顿）。DOM 属性幂等，clear 后重 display 每节重跑一遍。
+  book.spine.hooks.content.register((contents: any) => {
+    try {
+      const imgs = contents?.document?.querySelectorAll?.("img");
+      if (!imgs) return;
+      for (const img of Array.from(imgs) as HTMLImageElement[]) {
+        img.loading = "lazy";
+        img.decoding = "async";
+      }
+    } catch {
+      // 属性赋值在老 WebView 被忽略，无害
+    }
   });
 
   // 自定义正文 @font-face 注入 iframe（正文在 epubjs iframe 里，宿主 document 的 @font-face 完全无效）。
@@ -502,7 +568,7 @@ export async function createReader(opts: {
   };
 
   const ensureLocations = () => {
-    const key = opts.locationsKey?.() ?? locationsCacheKey(currentFontFamily, currentFontSizePercent);
+    const key = opts.locationsKey?.() ?? locationsCacheKey(typo.fontFamily, currentFontSizePercent);
     if (locationsKeyCurrent === key) return;
     locationsKeyCurrent = key;
     const gen = ++locationsGen;
@@ -669,15 +735,22 @@ export async function createReader(opts: {
       ensureLocations(); // locations 按 字体|字号 档缓存：换档重算（命中持久化则零成本灌注）
     },
     setLineHeight: (lineHeight: number) => {
-      if (lineHeight === currentLineHeight) return;
-      currentLineHeight = lineHeight;
-      registerThemes(lineHeight, currentFontFamily);
+      if (lineHeight === typo.lineHeight) return;
+      typo = { ...typo, lineHeight };
+      registerThemes();
     },
     setFontFamily: (fontFamily: FontFamily) => {
-      if (fontFamily === currentFontFamily) return;
-      currentFontFamily = fontFamily;
-      registerThemes(currentLineHeight, fontFamily);
+      if (fontFamily === typo.fontFamily) return;
+      typo = { ...typo, fontFamily };
+      registerThemes();
       ensureLocations();
+    },
+    setTypography: (t: Partial<TypographyParams>) => {
+      const next: TypographyParams = { ...typo, ...t };
+      const changed = (Object.keys(next) as (keyof TypographyParams)[]).some((k) => next[k] !== typo[k]);
+      if (!changed) return;
+      typo = next;
+      registerThemes();
     },
     setSpreadMode: (mode: SpreadMode) => {
       if (mode === lastSpreadMode) return;

@@ -8,6 +8,7 @@ import { resetIframeFontCache } from "../epub/iframeFont";
 import { setTheme, THEME_SWATCHES, useTheme } from "../../ui/theme";
 import type { FontFamily, ReaderSettings } from "../settings/types";
 import { sliderCommitValue } from "../settings/normalize";
+import { ttsVoiceLabel } from "../tts";
 
 /**
  * 提交型滑杆（v2.5 拖杆不整章重渲）：拖动过程只改本地草稿（预览数值显示），
@@ -63,6 +64,12 @@ export default function SettingsPanel(props: {
   /** 全局背景图 URL（模块级单缓存，面板预览复用，不再自建 objectURL） */
   bgUrl: string | null;
   onChange: (next: ReaderSettings) => void;
+  /** #5 朗读：语速（全局键 ttsRate）与当前声音名显示 */
+  ttsRate: number;
+  onTtsRate: (v: number) => void;
+  /** #7 背景纱浓度（全局键 bg_veil，EPUB 纸面定影纱 opacity） */
+  bgVeil: number;
+  onBgVeil: (v: number) => void;
 }) {
   const v = props.value;
   const theme = useTheme();
@@ -190,15 +197,89 @@ export default function SettingsPanel(props: {
         onCommit={(fontSizePercent) => props.onChange({ ...v, fontSizePercent })}
       />
 
-      <CommitSlider
-        label="行距"
-        value={v.lineHeight}
-        min={1.5}
-        max={2.2}
-        step={0.1}
-        format={(n) => n.toFixed(1)}
-        onCommit={(lineHeight) => props.onChange({ ...v, lineHeight })}
-      />
+      {/* #2 排版细项：字重三档 + 行距/字间距/段距/首行缩进/页边距五个滑杆 + 两端对齐（#3：改的是生效值，被改字段按书钉住） */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="wr-muted">排版</div>
+        <div className="wr-seg" role="group" aria-label="字重">
+          {([400, 500, 700] as const).map((w) => (
+            <button
+              key={w}
+              type="button"
+              className="wr-seg-btn"
+              data-active={v.fontWeight === w}
+              aria-pressed={v.fontWeight === w}
+              onClick={() => props.onChange({ ...v, fontWeight: w })}
+            >
+              {w === 400 ? "标准" : w === 500 ? "中等" : "粗体"}
+            </button>
+          ))}
+        </div>
+        <CommitSlider
+          label="行距"
+          value={v.lineHeight}
+          min={1.5}
+          max={2.2}
+          step={0.1}
+          format={(n) => n.toFixed(1)}
+          onCommit={(lineHeight) => props.onChange({ ...v, lineHeight })}
+        />
+        <CommitSlider
+          label="字间距"
+          value={v.letterSpacing}
+          min={0}
+          max={2}
+          step={0.1}
+          format={(n) => `${n.toFixed(1)}px`}
+          onCommit={(letterSpacing) => props.onChange({ ...v, letterSpacing })}
+        />
+        <CommitSlider
+          label="段距"
+          value={v.paragraphSpacing}
+          min={0}
+          max={1}
+          step={0.05}
+          format={(n) => `${n.toFixed(2)}em`}
+          onCommit={(paragraphSpacing) => props.onChange({ ...v, paragraphSpacing })}
+        />
+        <CommitSlider
+          label="首行缩进"
+          value={v.textIndent}
+          min={0}
+          max={2}
+          step={0.1}
+          format={(n) => `${n.toFixed(1)}em`}
+          onCommit={(textIndent) => props.onChange({ ...v, textIndent })}
+        />
+        <CommitSlider
+          label="页边距"
+          value={v.pageMargin}
+          min={12}
+          max={48}
+          step={2}
+          format={(n) => `${n}px`}
+          onCommit={(pageMargin) => props.onChange({ ...v, pageMargin })}
+        />
+        <div className="wr-seg" role="group" aria-label="两端对齐">
+          <button
+            type="button"
+            className="wr-seg-btn"
+            data-active={!v.justify}
+            aria-pressed={!v.justify}
+            onClick={() => props.onChange({ ...v, justify: false })}
+          >
+            默认
+          </button>
+          <button
+            type="button"
+            className="wr-seg-btn"
+            data-active={v.justify}
+            aria-pressed={v.justify}
+            onClick={() => props.onChange({ ...v, justify: true })}
+          >
+            两端对齐
+          </button>
+        </div>
+      </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div className="wr-muted">正文字体</div>
@@ -297,6 +378,23 @@ export default function SettingsPanel(props: {
         </select>
       </div>
 
+      {/* #5 TTS 一期：语速 + 当前声音名（朗读入口在顶栏；无跟随高亮，一期不做） */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div className="wr-muted">朗读</div>
+        <CommitSlider
+          label="语速"
+          value={props.ttsRate}
+          min={0.5}
+          max={2}
+          step={0.1}
+          format={(n) => `${n.toFixed(1)}x`}
+          onCommit={props.onTtsRate}
+        />
+        <div className="wr-muted" style={{ fontSize: 12 }}>
+          声音：{ttsVoiceLabel()}
+        </div>
+      </div>
+
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div className="wr-muted">全局背景</div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -327,6 +425,16 @@ export default function SettingsPanel(props: {
             />
           ) : null}
         </div>
+        {/* #7 纱浓度：背景图在 EPUB 纸面上的定影纱不透明度（壳侧浓度不归此面板） */}
+        <CommitSlider
+          label="纱浓度"
+          value={props.bgVeil}
+          min={60}
+          max={95}
+          step={1}
+          format={(n) => `${n}%`}
+          onCommit={props.onBgVeil}
+        />
         {bgError ? (
           <div role="alert" className="wr-muted" style={{ fontSize: 12 }}>
             {bgError}
