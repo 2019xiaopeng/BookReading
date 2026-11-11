@@ -7,6 +7,7 @@ import {
   createTag,
   exportAnnotations,
   listReadingTimes,
+  revealBookLocation,
   setBookCover,
   setBookTags,
   updateBookMetadata,
@@ -144,6 +145,15 @@ export default function BookDetailsDialog({
       onChanged();
     } catch (e) {
       await showAlert("设置封面失败", String(e));
+    }
+  }
+
+  // P2：在资源管理器中显示源文件/源目录
+  async function onRevealLocation() {
+    try {
+      await revealBookLocation(b.id);
+    } catch (e) {
+      await showAlert("打开所在位置失败", String(e));
     }
   }
 
@@ -309,8 +319,19 @@ export default function BookDetailsDialog({
               <span>格式</span>
               <span>{formatLabel(b)}</span>
               <span>文件</span>
-              <span className="wr-details-ellipsis" title={b.library_path}>
-                {b.library_path.split(/[\\/]/).pop() ?? b.library_path}
+              <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                <span className="wr-details-ellipsis" title={b.library_path}>
+                  {b.library_path.split(/[\\/]/).pop() ?? b.library_path}
+                </span>
+                <button
+                  type="button"
+                  className="wr-btn"
+                  style={{ padding: "4px 10px", fontSize: 12, flexShrink: 0 }}
+                  title="在资源管理器中显示源文件"
+                  onClick={() => void onRevealLocation()}
+                >
+                  打开
+                </button>
               </span>
               <span>大小</span>
               <span>{formatFileSize(b.file_size)}</span>

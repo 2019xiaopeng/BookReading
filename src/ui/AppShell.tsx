@@ -5,7 +5,7 @@ import { IconBook, IconPalette, IconSearch, IconSettings, IconStar, IconTrash } 
 import { getCachedBackgroundUrl, getBackgroundUrl, subscribeBackground } from "./appBackground";
 import { applyPersistedTheme, setTheme, THEME_SWATCHES, useTheme } from "./theme";
 import { getSettings, listShelves, type Shelf } from "../tauri/invoke";
-import { normalizeReaderBackground } from "../reader/settings/normalize";
+import { normalizeBgVeil, normalizeReaderBackground } from "../reader/settings/normalize";
 import { shelfTreeRows } from "../library/shelves";
 import type { ReadingStatus } from "../library/readingStatus";
 import { BOOKS_CHANGED_EVENT, runImports, subscribeImportProgress, type ImportProgress } from "../library/importRunner";
@@ -13,6 +13,11 @@ import SettingsDialog from "./SettingsDialog";
 
 // 八个 30px 色块 + 7*8 间距 + 12 内边距 + 2 边框
 const THEME_MENU_WIDTH = 310;
+
+/** 壳纱浓度：本项目 settings 以空串表示"无值"（如 library_status），空串不能当 0 钳到 60 */
+export function parseBgVeil(raw: string | undefined): number {
+  return raw === "" ? 88 : normalizeBgVeil(raw);
+}
 
 // 侧栏书架树模块级单例（批次12b）：每页各渲染一个 AppShell，路由切换整树重挂曾是闪烁根因；
 // 数据上提后重挂首帧即有旧值，LibraryPage.refresh 推写，导入事件兜底（LibraryPage 卸载时也能刷新）
@@ -84,6 +89,8 @@ export default function AppShell(props: {
   const theme = useTheme();
   // 首帧命中背景单槽缓存：路由切换重挂不再闪回无背景（DB 纠偏仍走下方 load）
   const [bgUrl, setBgUrl] = useState<string | null>(getCachedBackgroundUrl);
+  // 壳纱浓度（bg_veil）：默认 88%，与主题/背景同一次 settings 读取顺带解析
+  const [veil, setVeil] = useState(88);
   const [themeMenu, setThemeMenu] = useState<{ x: number; y: number } | null>(null);
   const shelves = useShellShelves();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -108,6 +115,7 @@ export default function AppShell(props: {
         const map = await getSettings();
         if (cancelled) return;
         applyPersistedTheme(map.theme);
+        setVeil(parseBgVeil(map.bg_veil));
         setBgUrl(await getBackgroundUrl(normalizeReaderBackground(map.reader_bg)));
       } catch {
         // DB 不可达：维持缓存主题与默认底色
@@ -176,10 +184,10 @@ export default function AppShell(props: {
   }
 
   // 全局背景：cover 居中铺满 + 半透明主题色纱保证八主题下内容对比度（底色 var(--wr-bg) 仍兜底）；
-  // §8 静态铺法（cover/center）迁入 .wr-shell--userbg，动态 url 留内联
+  // §8 静态铺法（cover/center）迁入 .wr-shell--userbg，动态 url 留内联；纱浓度读 bg_veil（F1-6）
   const shellStyle: CSSProperties | undefined = bgUrl
     ? {
-        backgroundImage: `linear-gradient(color-mix(in srgb, var(--wr-bg) 88%, transparent), color-mix(in srgb, var(--wr-bg) 88%, transparent)), url("${bgUrl}")`,
+        backgroundImage: `linear-gradient(color-mix(in srgb, var(--wr-bg) ${veil}%, transparent), color-mix(in srgb, var(--wr-bg) ${veil}%, transparent)), url("${bgUrl}")`,
       }
     : undefined;
 
@@ -343,7 +351,9 @@ export default function AppShell(props: {
             <IconPalette />
           </button>
         </div>
-        <div style={{ minHeight: 0, overflow: "auto" }}>{props.children}</div>
+        <div className="wr-main-scroll" style={{ minHeight: 0, overflow: "auto" }}>
+          {props.children}
+        </div>
       </div>
 
       {themeMenu ? (

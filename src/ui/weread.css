@@ -3179,3 +3179,72 @@ body::after {
   }
 }
 
+
+/* v2.6.0 P3 书库体检（HealthScanDialog）：三组结果行，结构沿回收站行（图标+信息+动作） */
+.wr-health-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.wr-health-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--m2-line);
+  border-radius: var(--wr-radius-lg);
+  background: var(--wr-paper);
+  box-shadow: var(--wr-shadow-card);
+}
+
+[data-theme="dark"] .wr-health-row,
+[data-theme="darkcontrast"] .wr-health-row {
+  background: rgba(var(--wr-ink-rgb), 0.06);
+}
+
+.wr-health-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--wr-muted);
+}
+
+.wr-health-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.wr-health-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--m2-ink);
+}
+
+.wr-health-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--m2-ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wr-health-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.wr-health-actions .wr-btn {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.wr-health-ok {
+  font-size: 13px;
+  color: var(--wr-muted);
+}

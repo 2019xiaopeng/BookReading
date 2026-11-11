@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { clearCache, getSettings, migrateLibraryRoot, reextractAllCovers, removeOldLibrary, storageStats, type StorageStats } from "../tauri/invoke";
 import { formatFileSize } from "../library/tags";
 import { BOOKS_CHANGED_EVENT } from "../library/importRunner";
+import HealthScanDialog from "../library/HealthScanDialog";
 import { invalidateAllCoverUrls } from "../library/useCoverUrls";
 import { notifyBackgroundChanged, resetBackgroundCache } from "./appBackground";
 import { showAlert, showConfirm } from "./dialog";
@@ -38,6 +39,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [version, setVersion] = useState("");
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [healthOpen, setHealthOpen] = useState(false);
 
   const reload = async () => {
     const [s, settings] = await Promise.all([storageStats(), getSettings()]);
@@ -207,6 +209,14 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
+        <div className="wr-settings-row">
+          <span className="wr-settings-label">书库体检</span>
+          <span className="wr-settings-value">检查重复导入、失链与悬空封面</span>
+          <button className="wr-btn" onClick={() => setHealthOpen(true)}>
+            开始体检
+          </button>
+        </div>
+
         {rows.map((r) => (
           <div className="wr-settings-row" key={r.key}>
             <span className="wr-settings-label">
@@ -314,6 +324,8 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
+
+      {healthOpen ? <HealthScanDialog onClose={() => setHealthOpen(false)} /> : null}
     </div>
   );
 }

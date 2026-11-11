@@ -25,7 +25,8 @@ export type BookCardProps = {
   onCardPointerDown: (e: ReactPointerEvent<HTMLElement>, book: Book, coverUrl?: string) => void;
   onCardActivate: (bookId: string) => void;
   onCardSelectToggle: (bookId: string) => void;
-  onCardMenu: (book: Book, anchor: HTMLElement) => void;
+  /** ⋯ 按钮传 anchor（菜单贴按钮）；右键传 pos（菜单贴光标），二选一 */
+  onCardMenu: (book: Book, anchor: HTMLElement | null, pos?: { x: number; y: number }) => void;
 };
 
 function BookCardImpl(props: BookCardProps) {
@@ -56,6 +57,12 @@ function BookCardImpl(props: BookCardProps) {
       data-pop={pop}
       onPointerDown={(e) => onCardPointerDown(e, book, coverUrl)}
       onKeyDown={onActivateKey}
+      onContextMenu={(e) => {
+        // P4：右键=⋯菜单（贴光标定位），并拦下网格层的空白右键
+        e.preventDefault();
+        e.stopPropagation();
+        onCardMenu(book, null, { x: e.clientX, y: e.clientY });
+      }}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest("button")) return;
         if (selectMode) onCardSelectToggle(book.id);

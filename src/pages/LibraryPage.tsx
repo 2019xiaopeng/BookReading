@@ -23,6 +23,7 @@ import {
   renameShelf,
   repairBookMetadata,
   restoreBooks,
+  revealBookLocation,
   saveReaderBackground,
   setBookCover,
   setBookFavorite,
@@ -56,7 +57,7 @@ import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
 import AppShell, { setShelvesCache, useShellShelves } from "../ui/AppShell";
 import { showAlert, showConfirm } from "../ui/dialog";
-import { IconBook, IconCheckSquare, IconDensity, IconFolder, IconImage, IconRefresh, IconShelf, IconSort, IconTrash } from "../ui/icons";
+import { IconBook, IconCheckSquare, IconDensity, IconFolder, IconImage, IconRefresh, IconReveal, IconShelf, IconSort, IconTrash } from "../ui/icons";
 
 type SortKey = "recent" | "title" | "added" | "custom";
 
@@ -66,6 +67,14 @@ const SORT_LABELS: Record<SortKey, string> = {
   added: "导入时间",
   custom: "自定义",
 };
+
+// F1-5 滚动位置记忆（会话内，不落盘）：视图键 → scrollTop。卸载不清空，从阅读器返回原书架时还原。
+const scrollMemory = new Map<string, number>();
+
+/** 视图键：回收站 / 根书架 / 各书架各自记忆 */
+export function viewKey(trashView: boolean, shelfId: number | null): string {
+  return trashView ? "trash" : shelfId == null ? "root" : `s${shelfId}`;
+}
 
 type MenuState =
   | { kind: "sort"; x: number; y: number }
@@ -120,6 +129,8 @@ export default function LibraryPage() {
   const menuTriggerRef = useRef<HTMLElement | null>(null);
   const repairingRef = useRef<Set<string>>(new Set());
   const attemptedRef = useRef<Set<string>>(new Set());
+  // 竞态加固：settings 恢复完成前不回写默认值（挂载首帧 sort/status effect 会先把默认值落盘覆盖存量）
+  const settingsHydratedRef = useRef(false);
 
   // 回收站视图与当前书架都走 URL（?trash=1 / ?shelf=id），侧栏树与面包屑同源
   const trashView = searchParams.get("trash") === "1";
@@ -226,7 +237,10 @@ export default function LibraryPage() {
         const r = Number(m.trash_retention_days);
         if (Number.isFinite(r) && r >= 0) setRetentionDays(r);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        settingsHydratedRef.current = true;
+      });
     // E3：时长随书库一起拉（回书库页重挂即刷新，阅读中每 60s 落库一次）
     listReadingTimes()
       .then((m) => setReadingTimes(m))
@@ -249,18 +263,41 @@ export default function LibraryPage() {
     if (!shelves.some((s) => s.id === currentShelfId)) navigate("/", { replace: true });
   }, [shelves, currentShelfId]);
 
+  // ---- F1-5 滚动位置记忆：视图数据首达时还原；滚动持续写入（容器=AppShell 的 .wr-main-scroll）----
+  const viewScrollKey = viewKey(trashView, currentShelfId);
+  const viewKeyRef = useRef(viewScrollKey);
+  viewKeyRef.current = viewScrollKey;
+  const restoredKeysRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    // 数据未到不还原（高度不足会被钳到顶部）；每键只还原一次
+    if ((trashView ? trash : books).length === 0 || restoredKeysRef.current.has(viewScrollKey)) return;
+    restoredKeysRef.current.add(viewScrollKey);
+    const el = document.querySelector<HTMLElement>(".wr-main-scroll");
+    if (el) el.scrollTop = scrollMemory.get(viewScrollKey) ?? 0;
+  }, [trashView, currentShelfId, viewScrollKey, trash, books]);
+
+  useEffect(() => {
+    const el = document.querySelector<HTMLElement>(".wr-main-scroll");
+    if (!el) return;
+    const onScroll = () => scrollMemory.set(viewKeyRef.current, el.scrollTop);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
   function changeDensity(v: LibraryDensity) {
     setDensity(v);
     void setSetting("library_density", v);
   }
 
-  // 排序写穿（菜单三处 setter 共用这一条通道，含恢复后回写）
+  // 排序写穿（菜单三处 setter 共用这一条通道，含恢复后回写）；恢复完成前跳过（见 settingsHydratedRef）
   useEffect(() => {
+    if (!settingsHydratedRef.current) return;
     void setSetting("library_sort", JSON.stringify({ key: sortKey, asc: sortAsc }));
   }, [sortKey, sortAsc]);
 
-  // 状态过滤写穿（"all" 不落盘，等于默认态）
+  // 状态过滤写穿（"all" 不落盘，等于默认态）；恢复完成前跳过
   useEffect(() => {
+    if (!settingsHydratedRef.current) return;
     if (statusFilter !== "all") void setSetting("library_status", statusFilter);
     else void setSetting("library_status", "");
   }, [statusFilter]);
@@ -985,8 +1022,9 @@ export default function LibraryPage() {
     }
   }
 
-  // 真删：源文件/漫画源文件夹移入 Windows 回收站（可从系统回收站找回），并从书库移除
-  async function onDeleteFromDisk(book: Book) {
+  // 真删：源文件/漫画源文件夹移入 Windows 回收站（可从系统回收站找回），并从书库移除；
+  // after 区分入口收尾——回收站行刷新回收站清单，⋯ 菜单（P1）刷新书库并退出批量态
+  async function onDeleteFromDisk(book: Book, after: () => Promise<void>) {
     const ok = await showConfirm(
       "从电脑删除",
       `把《${formatTitle(book)}》的源文件（漫画为整个源文件夹）移入 Windows 回收站，并从书库移除？回收站内可找回。`,
@@ -996,7 +1034,7 @@ export default function LibraryPage() {
     setLoading(true);
     try {
       await deleteBooksFromDisk([book.id]);
-      await refreshTrash();
+      await after();
     } catch (e) {
       await showAlert("从电脑删除失败", String(e));
     } finally {
@@ -1041,10 +1079,25 @@ export default function LibraryPage() {
       startCardDragRef.current(e, { kind: "book", id: book.id, label: formatTitle(book), cover: coverUrl }),
     [],
   );
-  const onCardMenu = useCallback((book: Book, anchor: HTMLElement) => {
-    const r = anchor.getBoundingClientRect();
-    openMenu({ kind: "book", x: r.right, y: r.bottom + 4, book }, anchor);
-  }, []);
+  const onCardMenu = useCallback(
+    (book: Book, anchor: HTMLElement | null, pos?: { x: number; y: number }) => {
+      // ⋯ 按钮贴按钮右下角；右键（P4）贴光标；两者都缺省退到左上角（由 clamp 兜底）
+      const r = anchor?.getBoundingClientRect();
+      const x = pos?.x ?? r?.right ?? 8;
+      const y = pos?.y ?? (r ? r.bottom + 4 : 8);
+      openMenu({ kind: "book", x, y, book }, anchor);
+    },
+    [],
+  );
+
+  // P2：在资源管理器中显示源文件/源目录
+  async function onRevealBook(book: Book) {
+    try {
+      await revealBookLocation(book.id);
+    } catch (e) {
+      await showAlert("打开所在位置失败", String(e));
+    }
+  }
 
   const nowSec = Date.now() / 1000;
   // E3 书卡时长 chip 文案（不足 1 分钟不显示）
@@ -1235,7 +1288,11 @@ export default function LibraryPage() {
                     <button className="wr-btn wr-btn-danger" onClick={() => void onPurge(b)} disabled={loading}>
                       彻底删除
                     </button>
-                    <button className="wr-btn wr-btn-danger" onClick={() => void onDeleteFromDisk(b)} disabled={loading}>
+                    <button
+                      className="wr-btn wr-btn-danger"
+                      onClick={() => void onDeleteFromDisk(b, refreshTrash)}
+                      disabled={loading}
+                    >
                       从电脑删除
                     </button>
                   </div>
@@ -1520,9 +1577,17 @@ export default function LibraryPage() {
               <button
                 className="wr-menu-item"
                 role="menuitem"
-                onClick={() => { closeMenu(); onToggleFavorite(menu.book); }}
+                onClick={() => { closeMenu(); void onToggleFavorite(menu.book); }}
               >
                 {menu.book.is_favorite ? "取消收藏" : "收藏"}
+              </button>
+              <button
+                className="wr-menu-item"
+                role="menuitem"
+                onClick={() => { closeMenu(); void onRevealBook(menu.book); }}
+              >
+                <IconReveal width={16} height={16} />
+                打开所在位置
               </button>
               <button
                 className="wr-menu-item"
@@ -1531,6 +1596,21 @@ export default function LibraryPage() {
                 onClick={() => { closeMenu(); void onDeleteBook(menu.book); }}
               >
                 删除
+              </button>
+              <button
+                className="wr-menu-item"
+                role="menuitem"
+                data-danger="true"
+                onClick={() => {
+                  closeMenu();
+                  void onDeleteFromDisk(menu.book, async () => {
+                    await refresh();
+                    exitSelect();
+                  });
+                }}
+              >
+                <IconTrash width={16} height={16} />
+                从电脑删除
               </button>
             </>
           ) : (

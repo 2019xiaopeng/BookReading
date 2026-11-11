@@ -16,9 +16,27 @@ import AppShell from "../ui/AppShell";
 import { showAlert, showConfirm } from "../ui/dialog";
 import { IconBook, IconHeart, IconQuote, IconStar, IconTrash } from "../ui/icons";
 
+// F1-6：tab 会话内记忆（重挂不回到"收藏书籍"）；sessionStorage 够用且不污染跨会话
+const FAV_TAB_KEY = "wr-fav-tab";
+
 export default function FavoritesPage() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<"books" | "quotes">("books");
+  const [tab, setTab] = useState<"books" | "quotes">(() => {
+    try {
+      return sessionStorage.getItem(FAV_TAB_KEY) === "quotes" ? "quotes" : "books";
+    } catch {
+      return "books";
+    }
+  });
+
+  function changeTab(k: "books" | "quotes") {
+    setTab(k);
+    try {
+      sessionStorage.setItem(FAV_TAB_KEY, k);
+    } catch {
+      // 私密窗口等场景存储被禁：仅失去记忆，不影响功能
+    }
+  }
   const [favoriteBooks, setFavoriteBooks] = useState<Book[]>([]);
   const [allBooks, setAllBooks] = useState<Book[]>([]);
   const [quotes, setQuotes] = useState<FavoriteQuote[]>([]);
@@ -102,7 +120,7 @@ export default function FavoritesPage() {
         ],
         active: tab,
         onChange: (k) => {
-          if (k === "books" || k === "quotes") setTab(k);
+          if (k === "books" || k === "quotes") changeTab(k);
         },
       }}
     >
