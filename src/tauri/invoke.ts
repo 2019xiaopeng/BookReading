@@ -120,6 +120,38 @@ export async function deleteBooksFromDisk(bookIds: string[]): Promise<number> {
   return invoke<number>("delete_books_from_disk", { bookIds });
 }
 
+// ---- v2.6.0 库管理 ----
+
+// 在资源管理器中显示源文件（库内书=选中该文件；文件夹漫画=选中源目录）
+export async function revealBookLocation(bookId: string): Promise<void> {
+  return invoke<void>("reveal_book_location", { bookId });
+}
+
+export type DuplicateGroup = { label: string; bookIds: string[] };
+export type MissingSource = {
+  bookId: string;
+  title: string | null;
+  path: string;
+  kind: "folder" | "library";
+};
+export type MissingCover = { bookId: string; title: string | null; coverPath: string };
+export type LibraryHealth = {
+  duplicates: DuplicateGroup[];
+  missingSources: MissingSource[];
+  missingCovers: MissingCover[];
+};
+
+// 书库体检：重复导入 / 源目录失链 / 悬空封面（只读扫描）
+export async function scanLibraryHealth(): Promise<LibraryHealth> {
+  return invoke<LibraryHealth>("scan_library_health");
+}
+
+// EPUB 插图优化副本（.opt.epub）存量补生成：立即返回总数，后台线程逐本生成，
+// 进度事件 "epub-opt-progress"（payload { done, total }），done==total 即完成
+export async function optimizeEpubImages(): Promise<number> {
+  return invoke<number>("optimize_epub_images");
+}
+
 export async function listTrash(): Promise<Book[]> {
   return invoke<Book[]>("list_trash");
 }

@@ -435,3 +435,49 @@ export function IconAlert(props: P) {
   );
 }
 
+/** 朗读（TTS，v2.6.0） */
+export function IconSpeaker(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M4 9.5v5h3.2L12 18.6V5.4L7.2 9.5H4Z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <path d="M15.2 9a4.3 4.3 0 0 1 0 6" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <path d="M17.8 6.6a7.6 7.6 0 0 1 0 10.8" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** 书库体检（v2.6.0） */
+export function IconHealth(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M3.5 12h3l1.8-4 3 8 2.2-6 1.5 2h5.5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** 打开所在位置（v2.6.0） */
+export function IconReveal(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M3.5 7.5v9.8c0 .6.4 1.1 1 1.2l5.2.7c.6.1 1.1-.3 1.2-.9l.9-5.4-1-6.3c-.1-.6-.6-1-1.2-.9l-5.1.7c-.6.1-1 .6-1 1.1Z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <path d="M11.8 11.9h3.9l2-2.4 2 2.4v5.6" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
