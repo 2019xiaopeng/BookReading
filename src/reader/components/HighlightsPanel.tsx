@@ -9,6 +9,8 @@ export default function HighlightsPanel(props: {
   onDelete: (id: string) => void;
   /** E4 标注导出（ReaderPage 提供 save 对话框 + exportAnnotations 链路） */
   onExport?: () => void;
+  /** D-4：清空本书标注（一次确认由 ReaderPage 提供） */
+  onClear?: () => void;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -17,6 +19,11 @@ export default function HighlightsPanel(props: {
         {props.onExport ? (
           <button className="wr-btn" style={{ marginLeft: "auto" }} onClick={props.onExport}>
             导出
+          </button>
+        ) : null}
+        {props.onClear && props.items.length > 0 ? (
+          <button className="wr-btn wr-btn-danger" onClick={props.onClear}>
+            清空
           </button>
         ) : null}
       </div>

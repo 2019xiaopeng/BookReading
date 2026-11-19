@@ -20,7 +20,7 @@ fn set_book_favorite_db(conn: &Connection, book_id: &str, is_favorite: bool) -> 
 
 fn list_favorite_books_db(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite, format, page_count, shelf_id, sort_order, deleted_at
+        "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite, format, page_count, shelf_id, sort_order, deleted_at, manual_status
          FROM books
          WHERE is_favorite = 1 AND deleted_at IS NULL
          ORDER BY COALESCE(last_opened_at, added_at) DESC",
@@ -47,6 +47,7 @@ fn list_favorite_books_db(conn: &Connection) -> Result<Vec<Book>, rusqlite::Erro
             description: None,
             content_chars: None,
             file_size: None,
+            manual_status: row.get(13)?,
             tags: Vec::new(),
         })
     })?;

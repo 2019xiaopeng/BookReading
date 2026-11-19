@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { defaultSettings } from "./defaults";
-import { epubSettingsKey, EPUSET_FIELDS, parseEpubSettingsOverride, resolveEpubSettings } from "./epuset";
+import { epubDefaultsFromEffective, epubSettingsKey, EPUSET_FIELDS, parseEpubSettingsOverride, resolveEpubSettings } from "./epuset";
 
 describe("epuset 排版按书记忆", () => {
   test("键名形如 epuset:<bookId>", () => {
@@ -57,5 +57,17 @@ describe("epuset 排版按书记忆", () => {
   test("parseEpubSettingsOverride：justify 两个方向都可钉", () => {
     expect(parseEpubSettingsOverride({ justify: true }).justify).toBe(true);
     expect(parseEpubSettingsOverride({ justify: false }).justify).toBe(false);
+  });
+
+  test("epubDefaultsFromEffective（G-1 设为默认）：书级八项写回全局，其余全局字段不动", () => {
+    const effective = resolveEpubSettings(defaultSettings, { fontSizePercent: 150, lineHeight: 2, justify: true });
+    const next = epubDefaultsFromEffective(defaultSettings, effective);
+    expect(next.fontSizePercent).toBe(150);
+    expect(next.lineHeight).toBe(2);
+    expect(next.justify).toBe(true);
+    // 非书级字段保持全局原值（不因书内生效值被污染）
+    expect(next.fontFamily).toBe(defaultSettings.fontFamily);
+    expect(next.readingMode).toBe(defaultSettings.readingMode);
+    expect(next.reader_bg).toEqual(defaultSettings.reader_bg);
   });
 });

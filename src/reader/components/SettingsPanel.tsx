@@ -2,6 +2,7 @@ import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { deleteReaderFont, saveReaderBackground, saveReaderFont } from "../../tauri/invoke";
+import { showToast } from "../../ui/toast";
 import { resetBackgroundCache } from "../../ui/appBackground";
 import { resetFontCache } from "../../ui/readerFont";
 import { resetIframeFontCache } from "../epub/iframeFont";
@@ -70,6 +71,10 @@ export default function SettingsPanel(props: {
   /** #7 背景纱浓度（全局键 bg_veil，EPUB 纸面定影纱 opacity） */
   bgVeil: number;
   onBgVeil: (v: number) => void;
+  /** G-1/G-2：本书 epuset 覆盖存在 + 写全局默认/清本书覆盖（ReaderPage 提供） */
+  hasOverride: boolean;
+  onSetDefault: () => void;
+  onResetBook: () => void;
 }) {
   const v = props.value;
   const theme = useTheme();
@@ -439,6 +444,36 @@ export default function SettingsPanel(props: {
           <div role="alert" className="wr-muted" style={{ fontSize: 12 }}>
             {bgError}
           </div>
+        ) : null}
+      </div>
+
+      {/* G-1/G-2 偏好默认：当前生效配置 → 新书默认；本书覆盖 → 回默认（样式内联：weread.css 本批禁改） */}
+      <div
+        className="wr-pref-defaults"
+        style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", paddingTop: 10, borderTop: "1px solid var(--wr-hairline)" }}
+      >
+        {props.hasOverride ? (
+          <span
+            className="wr-pref-chip"
+            style={{ fontSize: 12, color: "var(--wr-muted)", border: "1px solid var(--wr-hairline)", borderRadius: 999, padding: "2px 8px" }}
+          >
+            本书已单独设置
+          </span>
+        ) : null}
+        <button
+          type="button"
+          className="wr-btn wr-btn-primary"
+          onClick={() => {
+            props.onSetDefault();
+            showToast("新书将使用此配置");
+          }}
+        >
+          设为我的默认
+        </button>
+        {props.hasOverride ? (
+          <button type="button" className="wr-btn" onClick={props.onResetBook}>
+            本书恢复默认
+          </button>
         ) : null}
       </div>
     </div>

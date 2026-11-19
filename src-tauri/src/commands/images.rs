@@ -377,6 +377,7 @@ fn import_folder(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) 
         description: None,
         content_chars: None,
         file_size: None,
+        manual_status: None,
         tags: Vec::new(),
     };
 
@@ -451,6 +452,7 @@ fn import_cbz(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) -> 
         description: None,
         content_chars: None,
         file_size: None,
+        manual_status: None,
         tags: Vec::new(),
     };
 
@@ -814,6 +816,7 @@ mod tests {
             description: None,
             content_chars: None,
             file_size: None,
+            manual_status: None,
             tags: Vec::new(),
         }
     }

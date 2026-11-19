@@ -4,6 +4,8 @@ vi.mock("../tauri/invoke", () => ({
   listBooks: vi.fn(),
   importBook: vi.fn(),
   computeBookStats: vi.fn(),
+  // M 前端半：默认空 settings（import_mode 缺省=copy）
+  getSettings: vi.fn().mockResolvedValue({}),
   probePaths: vi.fn(),
   moveBooksToShelf: vi.fn(),
 }));
@@ -12,7 +14,15 @@ vi.mock("../ui/dialog", () => ({ showAlert: vi.fn(), showConfirm: vi.fn(), showC
 vi.mock("../tauri/frontendLog", () => ({ logFrontend: vi.fn() }));
 
 import { importImageFolder } from "../reader/image/api";
-import { listBooks, moveBooksToShelf, probePaths, type Book, type PathInfo } from "../tauri/invoke";
+import {
+  getSettings,
+  importBook,
+  listBooks,
+  moveBooksToShelf,
+  probePaths,
+  type Book,
+  type PathInfo,
+} from "../tauri/invoke";
 import { showAlert } from "../ui/dialog";
 import { buildDedupIndex, checkDuplicate, importSingle, isImportableFile } from "./importRunner";
 
@@ -125,5 +135,28 @@ describe("importSingle（批次16：单本导入交互式查重）", () => {
     vi.mocked(moveBooksToShelf).mockClear();
     await importSingle("D:/Comics/C");
     expect(moveBooksToShelf).not.toHaveBeenCalled();
+  });
+
+  test("M 前端半 import_mode：文件类透传 req.mode；txt 忽略；非法/缺省回落 copy", async () => {
+    vi.mocked(listBooks).mockResolvedValue([]);
+    vi.mocked(probePaths).mockResolvedValue([
+      info("X.epub", 1, "C:/in/X.epub") as PathInfo,
+      info("Y.txt", 1, "C:/in/Y.txt") as PathInfo,
+    ]);
+    vi.mocked(getSettings).mockResolvedValue({ import_mode: "move" });
+    vi.mocked(importBook).mockResolvedValue(makeBook({ id: "nid" }));
+    await importSingle("C:/in/X.epub");
+    expect(importBook).toHaveBeenCalledWith(
+      expect.objectContaining({ source_path: "C:/in/X.epub", mode: "move" }),
+    );
+    vi.mocked(importBook).mockClear();
+    await importSingle("C:/in/Y.txt");
+    // txt 必须转换复制：不吃 mode
+    expect(importBook).toHaveBeenCalledWith(expect.objectContaining({ mode: undefined }));
+    vi.mocked(importBook).mockClear();
+    vi.mocked(getSettings).mockResolvedValue({});
+    await importSingle("C:/in/X.epub");
+    // 缺省=copy（不下发，后端默认）
+    expect(importBook).toHaveBeenCalledWith(expect.objectContaining({ mode: undefined }));
   });
 });

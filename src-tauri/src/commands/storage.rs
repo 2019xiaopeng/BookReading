@@ -535,6 +535,25 @@ pub fn read_library_file(app: tauri::AppHandle, rel: String) -> Result<tauri::ip
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// v2.7.0 M-2 引用书读取桥：按 book_id 解析 library_path（库内相对或原地引用绝对路径）读整本书字节。
+/// 前端 readAppDataFile 的 isSafeRelPath 拒绝盘符，引用书走此命令。
+#[tauri::command(async)]
+pub fn read_book_file(app: tauri::AppHandle, book_id: String) -> Result<tauri::ipc::Response, String> {
+    let conn = db::open_db(&app)?;
+    let lp: String = conn
+        .query_row("SELECT library_path FROM books WHERE id = ?1", [&book_id], |r| r.get(0))
+        .map_err(|_| format!("书 {book_id} 不存在"))?;
+    let v = lp.replace('\\', "/");
+    let abs = if Path::new(&v).is_absolute() {
+        PathBuf::from(&v)
+    } else {
+        let rel = v.strip_prefix("library/").ok_or_else(|| format!("非法书路径: {v}"))?;
+        app_paths::library_abs(&app, &rel)?
+    };
+    let bytes = fs::read(&abs).map_err(|e| format!("failed to read {}: {e}", abs.display()))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

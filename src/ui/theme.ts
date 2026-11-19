@@ -4,8 +4,12 @@ import { setSetting } from "../tauri/invoke";
 import { normalizeTheme } from "../reader/settings/normalize";
 import type { Theme } from "../reader/settings/types";
 
-/** 全局主题八色块：壳顶栏菜单与阅读设置面板共用同一份 */
-export const THEME_SWATCHES: { value: Theme; label: string; color: string }[] = [
+/** H-8：壳层可选主题 = reader 八主题 + auto（跟随系统；仅壳层解析，传给 reader 前已落地为 ink/ink-dark） */
+export type ShellTheme = Theme | "auto";
+
+/** 全局主题色块：壳顶栏菜单与阅读设置面板共用同一份；auto 格为纸墨/墨夜半分色 */
+export const THEME_SWATCHES: { value: ShellTheme; label: string; color: string }[] = [
+  { value: "auto", label: "跟随系统", color: "linear-gradient(135deg, #EDECE7 0 50%, #242321 50% 100%)" },
   { value: "light", label: "白色", color: "#ffffff" },
   { value: "sepia", label: "米黄", color: "#fffaf0" },
   { value: "green", label: "护眼", color: "#c8e6c4" },
@@ -20,21 +24,42 @@ export const THEME_SWATCHES: { value: Theme; label: string; color: string }[] = 
 
 const LS_KEY = "wr-theme"; // 首帧缓存：import 时同步应用，避免启动闪白
 
+/** 纯映射：auto → 系统深色 ? 墨夜 : 纸墨；具体主题原样透传（reader 侧 THEME_STYLES 只见八主题） */
+export function resolveShellTheme(t: ShellTheme, prefersDark: boolean): Theme {
+  return t === "auto" ? (prefersDark ? "ink-dark" : "ink") : t;
+}
+
+/** 壳层归一化：接受 auto；其余走 reader 侧 normalizeTheme（默认纸墨） */
+export function normalizeShellTheme(v: unknown): ShellTheme {
+  return String(v ?? "").trim().toLowerCase() === "auto" ? "auto" : normalizeTheme(v);
+}
+
+function systemPrefersDark(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+  );
+}
+
 // node 测试环境无 document/localStorage，守卫模块顶层访问
-let current: Theme = normalizeTheme(typeof localStorage !== "undefined" ? localStorage.getItem(LS_KEY) : null);
+let current: ShellTheme = normalizeShellTheme(
+  typeof localStorage !== "undefined" ? localStorage.getItem(LS_KEY) : null,
+);
 let touched = false; // 本会话用户改过主题后，不再用 DB 旧值覆盖（写库可能仍在途）
 const listeners = new Set<() => void>();
 
-function applyDom(t: Theme) {
+function applyDom(t: ShellTheme) {
   if (typeof document === "undefined") return;
-  document.documentElement.dataset.theme = t;
+  const resolved = resolveShellTheme(t, systemPrefersDark());
+  document.documentElement.dataset.theme = resolved;
   // 原生弹层（select option 列表/滚动条）跟随 color-scheme；个别 WebView2 运行时对样式表里的
   // color-scheme 缓存不稳，内联直写兜底（tokens.css/weread.css 已有六主题映射，此处双保险）
   const style = document.documentElement.style;
-  if (style) style.colorScheme = t === "dark" || t === "darkcontrast" || t === "ink-dark" ? "dark" : "light";
+  if (style) style.colorScheme = resolved === "dark" || resolved === "darkcontrast" || resolved === "ink-dark" ? "dark" : "light";
 }
 
-function commit(t: Theme) {
+function commit(t: ShellTheme) {
   current = t;
   if (typeof localStorage !== "undefined") localStorage.setItem(LS_KEY, t);
   applyDom(t);
@@ -43,12 +68,27 @@ function commit(t: Theme) {
 
 applyDom(current); // 启动即应用：html[data-theme] 驱动 tokens.css/weread.css 全套变量
 
+// H-8：auto 档跟随系统切换——系统深浅色变更时重解析并广播（useTheme 订阅方拿到新的落地主题）
+if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (current !== "auto") return;
+    applyDom(current);
+    for (const l of listeners) l();
+  });
+}
+
+/** 落地主题（auto 已解析）：reader THEME_STYLES / 页面消费此契约，永不见 "auto" */
 export function getTheme(): Theme {
+  return resolveShellTheme(current, systemPrefersDark());
+}
+
+/** 用户的选择值（含 auto）：壳顶栏菜单选中态用 */
+export function getThemeSelection(): ShellTheme {
   return current;
 }
 
 /** 用户切换（壳菜单 / 阅读设置面板色块）：即时生效，双写 localStorage + DB */
-export function setTheme(t: Theme) {
+export function setTheme(t: ShellTheme) {
   touched = true;
   applyDom(t);
   if (t !== current) commit(t);
@@ -58,10 +98,11 @@ export function setTheme(t: Theme) {
 /** getSettings 回填纠偏：DB 与缓存不一致时以 DB 为准（用户已改则跳过） */
 export function applyPersistedTheme(v: unknown) {
   if (touched) return;
-  const t = normalizeTheme(v);
+  const t = normalizeShellTheme(v);
   if (t !== current) commit(t);
 }
 
+/** 落地主题（auto 已解析）——页面/阅读器订阅契约不变 */
 export function useTheme(): Theme {
   return useSyncExternalStore(
     (cb) => {
@@ -72,5 +113,19 @@ export function useTheme(): Theme {
     },
     getTheme,
     getTheme,
+  );
+}
+
+/** 选择值（含 auto）——壳顶栏主题菜单选中态 */
+export function useThemeSelection(): ShellTheme {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => {
+        listeners.delete(cb);
+      };
+    },
+    getThemeSelection,
+    getThemeSelection,
   );
 }

@@ -1,4 +1,5 @@
 import type { Book, Shelf } from "../tauri/invoke";
+import { bookMatchesQuery } from "./bookFormat";
 
 export function sortShelves(list: Shelf[]): Shelf[] {
   return [...list].sort(
@@ -60,6 +61,49 @@ export function countByShelf(books: Book[]): Map<number, number> {
     m.set(b.shelf_id, (m.get(b.shelf_id) ?? 0) + 1);
   }
   return m;
+}
+
+/** K-3 递归计数：直属 + 全部后代的书（每本书沿祖先链各记一次；环由深度守卫兜底） */
+export function countByShelfDeep(shelves: Shelf[], books: Book[]): Map<number, number> {
+  const parent = new Map(shelves.map((s) => [s.id, s.parent_id ?? null]));
+  const m = new Map<number, number>();
+  for (const b of books) {
+    let cur = b.shelf_id ?? null;
+    let guard = 0;
+    while (cur != null && parent.has(cur) && guard++ < 100) {
+      m.set(cur, (m.get(cur) ?? 0) + 1);
+      cur = parent.get(cur) ?? null;
+    }
+  }
+  return m;
+}
+
+/** W-1 搜索态子书架过滤：本架或后代架名匹配、或子树内有命中书的架保留（资源管理器式——命中的
+ *  嵌套架其祖先链可达，否则根视图永远看不到它）；hits=子树命中书数（纯名匹配为 0）。query 为空时全保留。 */
+export function filterShelvesBySearch(
+  shelves: Shelf[],
+  parentId: number | null,
+  books: Book[],
+  query: string,
+): { shelf: Shelf; hits: number }[] {
+  const q = query.trim().toLowerCase();
+  const byId = new Map(shelves.map((s) => [s.id, s]));
+  const out: { shelf: Shelf; hits: number }[] = [];
+  for (const shelf of sortShelves(shelves).filter((s) => (s.parent_id ?? null) === parentId)) {
+    if (!q) {
+      out.push({ shelf, hits: 0 });
+      continue;
+    }
+    const ids = descendantIds(shelves, shelf.id);
+    ids.add(shelf.id);
+    let hits = 0;
+    for (const b of books) {
+      if (b.shelf_id != null && ids.has(b.shelf_id) && bookMatchesQuery(b, q)) hits++;
+    }
+    const nameHit = [...ids].some((id) => byId.get(id)?.name.toLowerCase().includes(q));
+    if (hits > 0 || nameHit) out.push({ shelf, hits });
+  }
+  return out;
 }
 
 /** 每架固定取前 max 本（书库顺序）：四宫格封面选择与加载状态无关，不随封面到达顺序洗牌 */

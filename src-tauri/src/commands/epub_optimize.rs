@@ -1,4 +1,5 @@
 // v2.6.0 一·八 A+B：EPUB 阅读优化副本（.opt.epub）——插图降采样 + xhtml img 尺寸注入。
+// v2.7 B-1 v2：剥离音视频条目 + xhtml 移除 <video>/<audio> + jpg/png 字节阈值重编码。
 // 只换 media 资源不动结构（CFI 不受影响）；OPF/xhtml 除注入尺寸外字节级保留。
 use std::collections::HashMap;
 use std::fs;
@@ -9,6 +10,7 @@ use std::sync::OnceLock;
 use image::ImageEncoder;
 use regex::Regex;
 use tauri::Emitter;
+use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -20,10 +22,12 @@ use crate::db;
 // 长边 >1800 才缩；缩到 1520（纸面 2x DPR 上限）
 const TRIGGER_LONG: u32 = 1800;
 const TARGET_LONG: u32 = 1520;
+// B-1 v2：jpg/png 超过此字节数即使尺寸达标也重编码（大插图书多为"尺寸合格但字节肥"）
+const BYTES_TRIGGER: usize = 300 * 1024;
 // 尺寸嗅探只读条目头部（PNG IHDR/JPEG SOF 都在前 128KB 内）
 const HEAD_BYTES: u64 = 128 * 1024;
 
-fn ext_lower(name: &str) -> String {
+pub(crate) fn ext_lower(name: &str) -> String {
     Path::new(name)
         .extension()
         .and_then(|e| e.to_str())
@@ -36,6 +40,16 @@ fn is_opt_image(name: &str) -> bool {
 
 fn is_xhtml(name: &str) -> bool {
     matches!(ext_lower(name).as_str(), "xhtml" | "html" | "htm")
+}
+
+// B-1 v2：可播放音视频（V-1 媒体面板白名单同源）
+pub(crate) fn is_media_entry(name: &str) -> bool {
+    matches!(ext_lower(name).as_str(), "mp4" | "mp3" | "m4a" | "ogg" | "wav" | "avi")
+}
+
+// .opt 剥离集 = 音视频 + smil（媒体叠加时间轴，非可播放文件）
+fn is_stripped_entry(name: &str) -> bool {
+    is_media_entry(name) || ext_lower(name) == "smil"
 }
 
 fn basename_lower(name: &str) -> String {
@@ -59,8 +73,9 @@ fn final_dims((w, h): (u32, u32)) -> (u32, u32) {
     ((w as f64 * s).round() as u32, (h as f64 * s).round() as u32)
 }
 
-// R1 图片重编码：GIF 动图透传；长边>1800 才 LANCZOS3 缩到 1520，容器格式保持
-// 不变（jpeg q85 / png 无损 / webp 无损重打包），缩幅 <10% 或解码失败保留原始字节
+// R1 图片重编码：GIF 动图透传；长边>1800 LANCZOS3 缩到 1520；B-1 v2 jpg/png >300KB
+// 即使尺寸达标也重编码（jpeg q85 / png 无损重打包，容器格式保持不变）。
+// 缩幅 <10% 或解码失败保留原始字节
 fn process_image(bytes: &[u8], ext: &str) -> Vec<u8> {
     let passthrough = || bytes.to_vec();
     if ext == "gif" {
@@ -69,21 +84,27 @@ fn process_image(bytes: &[u8], ext: &str) -> Vec<u8> {
     let Ok(img) = image::load_from_memory(bytes) else {
         return passthrough();
     };
-    if img.width().max(img.height()) <= TRIGGER_LONG {
+    let big = img.width().max(img.height()) > TRIGGER_LONG;
+    let fat = bytes.len() > BYTES_TRIGGER && matches!(ext, "jpg" | "jpeg" | "png");
+    if !big && !fat {
         return passthrough();
     }
-    let resized = img.resize(TARGET_LONG, TARGET_LONG, image::imageops::FilterType::Lanczos3);
+    let target = if big {
+        img.resize(TARGET_LONG, TARGET_LONG, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
     let encoded: Result<Vec<u8>, String> = match ext {
-        "jpg" | "jpeg" => encode_jpeg(&resized, 85),
+        "jpg" | "jpeg" => encode_jpeg(&target, 85),
         "png" => {
-            let rgba = resized.to_rgba8();
+            let rgba = target.to_rgba8();
             let mut buf = Vec::new();
             image::codecs::png::PngEncoder::new(&mut buf)
                 .write_image(rgba.as_raw(), rgba.width(), rgba.height(), image::ExtendedColorType::Rgba8)
                 .map(|_| buf)
                 .map_err(|e| format!("png encode: {e}"))
         }
-        "webp" => encode_webp_lossless(&resized),
+        "webp" => encode_webp_lossless(&target),
         _ => return passthrough(),
     };
     match encoded {
@@ -92,13 +113,24 @@ fn process_image(bytes: &[u8], ext: &str) -> Vec<u8> {
     }
 }
 
-// R2：往缺 width/height 的 <img> 注入实量尺寸（仅当 src 基名在已测图片表内）
+// B-1 v2：xhtml 内整体移除 <video>/<audio> 元素（含自闭合变体），其余内容保留。
+// shortcut: 正则非贪婪配对，未闭合的 <video> 不动（EPUB XHTML 要求良构，罕见）
+fn strip_av_elements(html: &str) -> String {
+    static AV: OnceLock<Regex> = OnceLock::new();
+    let re = AV.get_or_init(|| {
+        Regex::new(r"(?is)<(video|audio)\b[^>]*/>|<(video|audio)\b[^>]*>.*?</(video|audio)\s*>").unwrap()
+    });
+    re.replace_all(html, "").into_owned()
+}
+
+// R2：往缺 width/height 的 <img> 注入实量尺寸（仅当 src 基名在已测图片表内）；
+// B-1 v2：同时移除 <video>/<audio> 元素。非 UTF-8 的 xhtml 原样返回。
 // shortcut: 纯正则匹配、src 不做 URL 解码、SVG 包装的 <image xlink:href>（Z-Library 风格）本轮不处理
-fn inject_img_dims(bytes: &[u8], dims: &HashMap<String, (u32, u32)>) -> Vec<u8> {
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return bytes.to_vec();
-    };
-    inject_img_dims_str(text, dims).into_bytes()
+fn rebuild_xhtml(bytes: &[u8], dims: &HashMap<String, (u32, u32)>) -> Vec<u8> {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => strip_av_elements(&inject_img_dims_str(text, dims)).into_bytes(),
+        Err(_) => bytes.to_vec(),
+    }
 }
 
 fn inject_img_dims_str(html: &str, dims: &HashMap<String, (u32, u32)>) -> String {
@@ -149,7 +181,8 @@ fn inject_img_dims_str(html: &str, dims: &HashMap<String, (u32, u32)>) -> String
 }
 
 /// 生成同目录 {stem}.opt.epub：mimetype 保持 STORED 且最前（沿用原条目顺序）；
-/// 图片条目按 process_image 优化；xhtml 注入 img 尺寸；其余条目字节原样。
+/// 图片条目按 process_image 优化；xhtml 注入 img 尺寸并移除 video/audio 元素；
+/// 音视频/媒体叠加条目整条跳过；其余条目字节原样。
 /// 包内无可测图片时返回 Ok(false)（无事可做，不落盘——txt 转 epub 等纯文字书走原书）。
 pub fn optimize_epub_file(src: &Path) -> Result<bool, String> {
     let f = fs::File::open(src).map_err(|e| format!("failed to open {}: {e}", src.display()))?;
@@ -174,18 +207,20 @@ pub fn optimize_epub_file(src: &Path) -> Result<bool, String> {
         return Ok(false);
     }
 
-    // Pass 2：逐条目重打包（保持原条目顺序 → mimetype 天然最前）
+    // Pass 2：逐条目重打包（保持原条目顺序 → mimetype 天然最前；音视频条目跳过）
     let out = opt_path(src);
-    let mut tmp = out.clone().into_os_string();
-    tmp.push(".part");
-    let tmp = PathBuf::from(tmp);
+    // B-4：临时名带 uuid，防"启动补生成线程"与"导入内联优化"两个写者互踩同一 .part
+    let tmp = PathBuf::from(format!("{}.part-{}", out.display(), Uuid::new_v4()));
     let mut w = ZipWriter::new(
         fs::File::create(&tmp).map_err(|e| format!("failed to create {}: {e}", tmp.display()))?,
     );
     let mut error: Option<String> = None;
-    for i in 0..zip.len() {
+    'entries: for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| format!("failed to read entry: {e}"))?;
         let name = entry.name().to_string();
+        if !entry.is_dir() && is_stripped_entry(&name) {
+            continue; // B-1 v2：音视频/媒体叠加条目不进阅读副本
+        }
         let mut bytes = Vec::new();
         if let Err(e) = entry.read_to_end(&mut bytes) {
             error = Some(format!("failed to read {name}: {e}"));
@@ -205,7 +240,7 @@ pub fn optimize_epub_file(src: &Path) -> Result<bool, String> {
             } else if is_opt_image(&name) {
                 process_image(&bytes, &ext_lower(&name))
             } else if is_xhtml(&name) {
-                inject_img_dims(&bytes, &dims)
+                rebuild_xhtml(&bytes, &dims)
             } else {
                 bytes
             };
@@ -213,7 +248,7 @@ pub fn optimize_epub_file(src: &Path) -> Result<bool, String> {
         };
         if let Err(e) = res {
             error = Some(format!("failed to write {name}: {e}"));
-            break;
+            break 'entries;
         }
     }
     let finished = w.finish();
@@ -257,6 +292,7 @@ struct EpubOptProgress {
 
 /// 存量 .opt.epub 幂等补生成：立即返回候选总数，后台线程逐本生成（已有跳过，
 /// 独立 open_db_bg 连接取清单后不再碰库），每本 emit "epub-opt-progress" {done,total}。
+/// B-3：按文件体积降序处理——最危险的大书最先拿到 .opt（file_size 列可能为 NULL，fs 实测最稳）。
 #[tauri::command(async)]
 pub fn optimize_epub_images(app: tauri::AppHandle) -> Result<u32, String> {
     let books = candidate_epubs(&db::open_db_bg(&app)?)?;
@@ -264,8 +300,17 @@ pub fn optimize_epub_images(app: tauri::AppHandle) -> Result<u32, String> {
     let handle = app.clone();
     std::thread::spawn(move || {
         let Ok(root) = app_paths::library_dir(&handle) else { return };
-        for (i, lp) in books.iter().enumerate() {
-            let abs = root.join(lp.strip_prefix("library/").unwrap_or(lp));
+        let mut sized: Vec<(u64, String)> = books
+            .into_iter()
+            .map(|lp| {
+                let abs = root.join(lp.strip_prefix("library/").unwrap_or(&lp));
+                let size = fs::metadata(&abs).map(|m| m.len()).unwrap_or(0);
+                (size, lp)
+            })
+            .collect();
+        sized.sort_by(|a, b| b.0.cmp(&a.0));
+        for (i, (_, lp)) in sized.into_iter().enumerate() {
+            let abs = root.join(lp.strip_prefix("library/").unwrap_or(&lp));
             if !opt_path(&abs).exists() {
                 if let Err(e) = optimize_epub_file(&abs) {
                     eprintln!("[epub-opt] {}: {e}", abs.display());
@@ -275,6 +320,36 @@ pub fn optimize_epub_images(app: tauri::AppHandle) -> Result<u32, String> {
         }
     });
     Ok(total as u32)
+}
+
+/// B-2 配套：单本立即优化。已有 .opt 或非库内 epub（引用书）返回 false；
+/// 启动后台线程生成，进度事件复用 "epub-opt-progress"（单本 total=1，done 0→1）。
+#[tauri::command(async)]
+pub fn optimize_epub_now(app: tauri::AppHandle, book_id: String) -> Result<bool, String> {
+    let lp: String = db::open_db(&app)?
+        .query_row("SELECT library_path FROM books WHERE id = ?1", [&book_id], |r| r.get(0))
+        .map_err(|_| format!("书 {book_id} 不存在"))?;
+    let lp = lp.replace('\\', "/");
+    let lower = lp.to_lowercase();
+    if !lower.ends_with(".epub") || lower.ends_with(".opt.epub") {
+        return Ok(false);
+    }
+    let Some(rest) = lp.strip_prefix("library/") else {
+        return Ok(false); // 引用书（绝对路径）：.opt 无处消费，不做
+    };
+    let abs = app_paths::library_dir(&app)?.join(rest);
+    if opt_path(&abs).exists() {
+        return Ok(false);
+    }
+    let handle = app.clone();
+    let _ = handle.emit("epub-opt-progress", EpubOptProgress { done: 0, total: 1 });
+    std::thread::spawn(move || {
+        if let Err(e) = optimize_epub_file(&abs) {
+            eprintln!("[epub-opt] {}: {e}", abs.display());
+        }
+        let _ = handle.emit("epub-opt-progress", EpubOptProgress { done: 1, total: 1 });
+    });
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -412,5 +487,89 @@ mod tests {
         assert_eq!(optimize_epub_file(&src).unwrap(), false);
         assert!(!dir.join("t.opt.epub").exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // B-1 v2：音视频/媒体叠加条目整条剥除；xhtml 内 video/audio 元素移除（含自闭合）
+    #[test]
+    fn optimize_strips_av_entries_and_elements() {
+        let dir = temp("opt-av");
+        let src = dir.join("av.epub");
+        let small = noise_png(800, 600);
+        let xhtml = r#"<html><body><p>前</p><video src="video/ch1.mp4" width="640">fallback</video><audio controls src="audio/a.mp3">no audio</audio><audio src="audio/b.ogg"/><p>正文 <img src="images/s.png"></p></body></html>"#
+            .as_bytes()
+            .to_vec();
+        write_zip(
+            &src,
+            &[
+                ("mimetype", b"application/epub+zip".to_vec(), true),
+                ("OEBPS/ch1.xhtml", xhtml, false),
+                ("OEBPS/images/s.png", small, false),
+                ("OEBPS/video/ch1.mp4", vec![1u8; 128], false),
+                ("OEBPS/audio/a.mp3", vec![2u8; 64], false),
+                ("OEBPS/audio/b.ogg", vec![3u8; 32], false),
+                ("OEBPS/nav.smil", b"<smil/>".to_vec(), false),
+            ],
+        );
+
+        assert_eq!(optimize_epub_file(&src).unwrap(), true);
+        let mut zip = ZipArchive::new(BufReader::new(fs::File::open(dir.join("av.opt.epub")).unwrap())).unwrap();
+        let names: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert_eq!(names, vec!["mimetype", "OEBPS/ch1.xhtml", "OEBPS/images/s.png"]);
+        let mut text = Vec::new();
+        zip.by_index(1).unwrap().read_to_end(&mut text).unwrap();
+        let text = String::from_utf8(text).unwrap();
+        assert!(!text.contains("video") && !text.contains("audio"), "{text}");
+        // 元素外内容保留；img 尺寸注入照常工作
+        assert!(text.contains("<p>前</p>") && text.contains("<p>正文"), "{text}");
+        assert!(
+            text.contains(r#"<img src="images/s.png" width="800" height="600">"#),
+            "{text}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // B-1 v2：jpg >300KB 即使长边 ≤1800 也重编码（q85），尺寸不动、缩幅 ≥10% 才换
+    #[test]
+    fn optimize_reencodes_fat_small_jpg() {
+        let dir = temp("opt-fat");
+        let src = dir.join("fat.epub");
+        let img = image::RgbImage::from_fn(1000, 1000, |x, y| {
+            image::Rgb([
+                ((x * 7 + y * 13) % 251) as u8,
+                ((x * 31 + y * 5) % 241) as u8,
+                ((x * 3 + y * 17) % 251) as u8,
+            ])
+        });
+        let mut fat = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut fat, 100)
+            .write_image(img.as_raw(), 1000, 1000, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        assert!(fat.len() > BYTES_TRIGGER, "fixture must exceed byte threshold: {}", fat.len());
+        write_zip(
+            &src,
+            &[
+                ("mimetype", b"application/epub+zip".to_vec(), true),
+                ("OEBPS/i.jpg", fat.clone(), false),
+            ],
+        );
+
+        assert_eq!(optimize_epub_file(&src).unwrap(), true);
+        let mut zip = ZipArchive::new(BufReader::new(fs::File::open(dir.join("fat.opt.epub")).unwrap())).unwrap();
+        let mut out = Vec::new();
+        zip.by_index(1).unwrap().read_to_end(&mut out).unwrap();
+        let decoded = image::load_from_memory(&out).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (1000, 1000)); // 尺寸达标不动尺寸
+        assert!(out.len() * 10 < fat.len() * 9, "expect >=10% shrink: {} -> {}", fat.len(), out.len());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn strip_av_handles_plain_and_selfclosing_only() {
+        assert_eq!(strip_av_elements("<p>a<video>b</video>c</p>"), "<p>ac</p>");
+        assert_eq!(strip_av_elements(r#"<audio src="x.ogg"/>"#), "");
+        // 未闭合标签不动（良构 EPUB 不会出现）
+        assert_eq!(strip_av_elements("<video>unclosed"), "<video>unclosed");
     }
 }

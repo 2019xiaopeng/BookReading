@@ -3,11 +3,12 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerE
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import type { Book, Shelf, Tag, UpdateBookMetadataRequest } from "../tauri/invoke";
+import type { Book, ManualStatus, Shelf, Tag, UpdateBookMetadataRequest } from "../tauri/invoke";
 import {
   addTagsToBooks,
   createShelf,
   deleteBooks,
+  deleteBooksFromDisk,
   deleteShelf,
   getSettings,
   listBooks,
@@ -19,7 +20,6 @@ import {
   moveBooksToShelf,
   moveShelf,
   purgeBooks,
-  deleteBooksFromDisk,
   renameShelf,
   repairBookMetadata,
   restoreBooks,
@@ -27,22 +27,25 @@ import {
   saveReaderBackground,
   setBookCover,
   setBookFavorite,
+  setBookManualStatus,
   setBooksOrder,
   setSetting,
   setTrashRetentionDays,
   updateBookMetadata,
 } from "../tauri/invoke";
 import { needsMetadataRepair } from "../library/metadataRepair";
-import { readingStatus, type ReadingStatus } from "../library/readingStatus";
+import { effectiveStatus, READING_STATUS_LABELS, type ReadingStatus } from "../library/readingStatus";
 import { formatReadingTime } from "../library/readingTime";
-import { formatAuthor, formatTitle } from "../library/bookFormat";
+import { bookMatchesQuery, formatAuthor, formatTitle } from "../library/bookFormat";
 import BookDetailsDialog from "../library/BookDetailsDialog";
 import BookCard from "../library/BookCard";
 import { BatchTagDialog, ManageTagsDialog, TagFilterMenu } from "../library/TagDialogs";
 import StatusFilterMenu from "../library/StatusFilterMenu";
 import {
   countByShelf,
+  countByShelfDeep,
   descendantIds,
+  filterShelvesBySearch,
   firstBooksByShelf,
   shelfPath,
   shelfTreeRows,
@@ -57,6 +60,7 @@ import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
 import AppShell, { setShelvesCache, useShellShelves } from "../ui/AppShell";
 import { showAlert, showConfirm } from "../ui/dialog";
+import { showToast } from "../ui/toast";
 import { IconBook, IconCheckSquare, IconDensity, IconFolder, IconImage, IconRefresh, IconReveal, IconShelf, IconSort, IconTrash } from "../ui/icons";
 
 type SortKey = "recent" | "title" | "added" | "custom";
@@ -68,12 +72,37 @@ const SORT_LABELS: Record<SortKey, string> = {
   custom: "自定义",
 };
 
+// K-2 文件夹排序（settings 键 folder_sort）：默认=创建序（sortShelves 兜底）
+type FolderSortKey = "default" | "title-asc" | "title-desc" | "count-desc";
+
+const FOLDER_SORT_LABELS: Record<FolderSortKey, string> = {
+  default: "默认（创建序）",
+  "title-asc": "书名升序",
+  "title-desc": "书名降序",
+  "count-desc": "书数降序",
+};
+
+// S-4 ⋯ 菜单「状态」段：三档手动状态 + 恢复自动（null=清除覆盖回推导）
+const MANUAL_STATUS_OPTIONS: { value: ManualStatus | null; label: string }[] = [
+  { value: "unread", label: READING_STATUS_LABELS.unread },
+  { value: "reading", label: READING_STATUS_LABELS.reading },
+  { value: "finished", label: READING_STATUS_LABELS.finished },
+  { value: null, label: "恢复自动" },
+];
+
 // F1-5 滚动位置记忆（会话内，不落盘）：视图键 → scrollTop。卸载不清空，从阅读器返回原书架时还原。
 const scrollMemory = new Map<string, number>();
 
 /** 视图键：回收站 / 根书架 / 各书架各自记忆 */
 export function viewKey(trashView: boolean, shelfId: number | null): string {
   return trashView ? "trash" : shelfId == null ? "root" : `s${shelfId}`;
+}
+
+/** T-4 回收站行内搜索过滤（书名+作者）：全选口径=本过滤结果而非全库（与主视图一致） */
+export function filterTrash(list: Book[], query: string): Book[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return list;
+  return list.filter((b) => `${formatTitle(b)} ${formatAuthor(b)}`.toLowerCase().includes(q));
 }
 
 type MenuState =
@@ -111,6 +140,7 @@ export default function LibraryPage() {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("recent");
   const [sortAsc, setSortAsc] = useState(false);
+  const [folderSort, setFolderSort] = useState<FolderSortKey>("default");
   const [density, setDensity] = useState<LibraryDensity>("standard");
   const [tagFilter, setTagFilter] = useState<Set<number>>(new Set());
   const [statusFilter, setStatusFilter] = useState<"all" | ReadingStatus>("all");
@@ -146,6 +176,8 @@ export default function LibraryPage() {
   );
   const path = useMemo(() => shelfPath(shelves, currentShelfId), [shelves, currentShelfId]);
   const counts = useMemo(() => countByShelf(books), [books]);
+  // K-3 计数含子孙：卡面"N 本"=递归总数；+N 徽章与四宫格仍用直属（counts），视觉口径不变
+  const deepCounts = useMemo(() => countByShelfDeep(shelves, books), [shelves, books]);
   const shelfBooks = useMemo(
     () => books.filter((b) => (b.shelf_id ?? null) === currentShelfId),
     [books, currentShelfId],
@@ -153,16 +185,33 @@ export default function LibraryPage() {
   // 书架卡四宫格：固定每架前 4 本（与封面加载状态无关，不随到达顺序洗牌）；未就绪格显示骨架
   const topBooksByShelf = useMemo(() => firstBooksByShelf(books), [books]);
 
+  const searching = query.trim().length > 0;
+  // W-1 搜索态子书架过滤（名匹配或子树命中书），非搜索=全部子架 hits=0；K-2 文件夹排序只作用于书架卡
+  const folderEntries = useMemo(() => {
+    const entries = searching
+      ? filterShelvesBySearch(shelves, currentShelfId, books, query)
+      : subShelves.map((shelf) => ({ shelf, hits: 0 }));
+    if (folderSort === "title-asc" || folderSort === "title-desc") {
+      const dir = folderSort === "title-asc" ? 1 : -1;
+      return [...entries].sort(
+        (a, b) => dir * a.shelf.name.localeCompare(b.shelf.name, "zh") || a.shelf.id - b.shelf.id,
+      );
+    }
+    if (folderSort === "count-desc") {
+      return [...entries].sort(
+        (a, b) => (deepCounts.get(b.shelf.id) ?? 0) - (deepCounts.get(a.shelf.id) ?? 0) || a.shelf.id - b.shelf.id,
+      );
+    }
+    return entries;
+  }, [shelves, currentShelfId, books, query, searching, subShelves, folderSort, deepCounts]);
+
   const booksFiltered = useMemo(() => {
     const q = query.trim().toLowerCase();
     // E6 全局搜索：有搜索词时源改全库 books（跨书架命中直接以书卡列出，点击正常打开）；无搜索词仍按当前书架
     let list = q ? books : shelfBooks;
     if (q) {
-      // 搜索匹配：书名 + 作者 + 文件名（library_path basename）
-      list = list.filter((b) => {
-        const file = b.library_path.split(/[\\/]/).pop() ?? "";
-        return `${formatTitle(b)} ${formatAuthor(b)} ${file}`.toLowerCase().includes(q);
-      });
+      // 搜索匹配：书名 + 作者 + 文件名（与文件夹过滤同口径，bookMatchesQuery）
+      list = list.filter((b) => bookMatchesQuery(b, q));
     }
     if (tagFilter.size > 0) {
       // 标签多选 = AND：选中标签全部命中
@@ -173,7 +222,8 @@ export default function LibraryPage() {
       });
     }
     if (statusFilter !== "all") {
-      list = list.filter((b) => readingStatus(b.reading_percent) === statusFilter);
+      // S-5 过滤走合并口径（手动状态优先）
+      list = list.filter((b) => effectiveStatus(b) === statusFilter);
     }
     const dir = sortAsc ? 1 : -1;
     return [...list].sort((a, b) => {
@@ -187,15 +237,22 @@ export default function LibraryPage() {
     });
   }, [books, shelfBooks, query, tagFilter, statusFilter, sortKey, sortAsc]);
 
-  // 封面请求集 = 当前过滤视图 + 子书架卡固定前 4 本（书架卡也要封面）；不再对全库/回收站急加载
+  // K-1 置顶=无视分组的真最顶：渲染顺序 置顶书→新建卡→书架组→普通书（booksFiltered 已置顶优先，这里只切两段）
+  const pinnedBooks = useMemo(() => booksFiltered.filter((b) => b.pinned_at), [booksFiltered]);
+  const unpinnedBooks = useMemo(() => booksFiltered.filter((b) => !b.pinned_at), [booksFiltered]);
+
+  // T-4 回收站过滤集（全选与渲染同源）
+  const trashFiltered = useMemo(() => filterTrash(trash, query), [trash, query]);
+
+  // 封面请求集 = 当前过滤视图 + 可见子书架卡固定前 4 本（书架卡也要封面；搜索态隐藏的架不请求）
   const coverItems = useMemo(() => {
     const items: { id: string; cover_path: string | null }[] = [];
-    for (const s of subShelves) {
-      for (const b of topBooksByShelf.get(s.id) ?? []) items.push(b);
+    for (const { shelf } of folderEntries) {
+      for (const b of topBooksByShelf.get(shelf.id) ?? []) items.push(b);
     }
     for (const b of booksFiltered) items.push(b);
     return items;
-  }, [subShelves, topBooksByShelf, booksFiltered]);
+  }, [folderEntries, topBooksByShelf, booksFiltered]);
   // preferThumb：书架封面走 480px 缩略档（缺失自动回退原图，见 useCoverUrls）；详情页大封面不在此列
   const coverUrls = useCoverUrls(coverItems, { preferThumb: true });
   const trashCoverUrls = useCoverUrls(trash, { preferThumb: true });
@@ -230,6 +287,10 @@ export default function LibraryPage() {
           if (typeof s.key === "string" && s.key in SORT_LABELS) setSortKey(s.key as SortKey);
           if (typeof s.asc === "boolean") setSortAsc(s.asc);
         } catch {}
+        // K-2 文件夹排序持久化恢复（非法值回落默认）
+        if (typeof m.folder_sort === "string" && m.folder_sort in FOLDER_SORT_LABELS) {
+          setFolderSort(m.folder_sort as FolderSortKey);
+        }
         // 状态过滤（在读/未读）同法持久化，与侧栏快捷 chips 联动不断档
         if (m.library_status === "reading" || m.library_status === "finished" || m.library_status === "unread") {
           setStatusFilter(m.library_status);
@@ -301,6 +362,24 @@ export default function LibraryPage() {
     if (!settingsHydratedRef.current) return;
     void setSetting("library_sort", JSON.stringify({ key: sortKey, asc: sortAsc }));
   }, [sortKey, sortAsc]);
+
+  // K-2 文件夹排序写穿（同法持久化）
+  useEffect(() => {
+    if (!settingsHydratedRef.current) return;
+    void setSetting("folder_sort", folderSort);
+  }, [folderSort]);
+
+  // H-1：Ctrl+F 聚焦搜索框（AppShell 顶栏 .wr-search-input；阅读器书内搜索路由隔离不受影响）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        document.querySelector<HTMLInputElement>(".wr-search-input")?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // 状态过滤写穿（"all" 不落盘，等于默认态）；恢复完成前跳过
   useEffect(() => {
@@ -613,6 +692,20 @@ export default function LibraryPage() {
       .finally(() => setLoading(false));
   }
 
+  // S-4 手动阅读状态：null=恢复自动推导（过滤与统计随即走 effectiveStatus 合并口径）
+  async function onSetManualStatus(book: Book, status: ManualStatus | null) {
+    if (loading) return;
+    setLoading(true);
+    try {
+      await setBookManualStatus(book.id, status);
+      await refresh();
+    } catch (e) {
+      await showAlert("设置状态失败", String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   // ---- 书架操作 ----
 
   function onNewShelf() {
@@ -681,6 +774,7 @@ export default function LibraryPage() {
       if (d.kind === "books") {
         await moveBooksToShelf(d.bookIds, targetId);
         if (d.bookIds.some((id) => selected.has(id))) setSelected(new Set());
+        showToast(`已移动 ${d.bookIds.length} 本`); // H-3
       } else {
         await moveShelf(d.shelfId, targetId);
       }
@@ -955,10 +1049,12 @@ export default function LibraryPage() {
     setSelected(new Set());
   }
 
-  const allSelected = booksFiltered.length > 0 && booksFiltered.every((b) => selected.has(b.id));
+  // 全选口径 = 当前视图的过滤集（主视图 booksFiltered / 回收站 trashFiltered），T-4
+  const selectAllList = trashView ? trashFiltered : booksFiltered;
+  const allSelected = selectAllList.length > 0 && selectAllList.every((b) => selected.has(b.id));
 
   function toggleSelectAll() {
-    setSelected(allSelected ? new Set() : new Set(booksFiltered.map((b) => b.id)));
+    setSelected(allSelected ? new Set() : new Set(selectAllList.map((b) => b.id)));
   }
 
   async function onBatchDelete() {
@@ -1010,6 +1106,82 @@ export default function LibraryPage() {
       setLoading(false);
     }
   }
+
+  // T-2 批量三动作：各一次确认（文案带 N），后端命令本就是数组签名
+  async function onBatchRestore() {
+    const ids = [...selected];
+    if (ids.length === 0 || loading) return;
+    setLoading(true);
+    try {
+      await restoreBooks(ids);
+      setSelected(new Set());
+      await Promise.all([refresh(), refreshTrash()]);
+      showToast(`已恢复 ${ids.length} 本`); // H-3
+    } catch (e) {
+      await showAlert("恢复失败", String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onBatchPurge() {
+    const ids = [...selected];
+    if (ids.length === 0 || loading) return;
+    const ok = await showConfirm(
+      "彻底删除",
+      `彻底删除选中的 ${ids.length} 本书？将删除书籍文件与全部阅读记录，不可恢复。`,
+      { danger: true, confirmText: "彻底删除" },
+    );
+    if (!ok) return;
+    setLoading(true);
+    try {
+      await purgeBooks(ids);
+      setSelected(new Set());
+      await refreshTrash();
+    } catch (e) {
+      await showAlert("删除失败", String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onBatchDeleteFromDisk() {
+    const ids = [...selected];
+    if (ids.length === 0 || loading) return;
+    const ok = await showConfirm(
+      "从电脑删除",
+      `把选中的 ${ids.length} 本书的源文件（漫画为整个源文件夹）移入 Windows 回收站，并从书库移除？回收站内可找回。`,
+      { danger: true, confirmText: "移入回收站" },
+    );
+    if (!ok) return;
+    setLoading(true);
+    try {
+      await deleteBooksFromDisk(ids);
+      setSelected(new Set());
+      await refreshTrash();
+      showToast(`已从电脑删除 ${ids.length} 本`); // H-3
+    } catch (e) {
+      await showAlert("从电脑删除失败", String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // H-6 回收站键盘：Delete=选中行彻底删除（无选中忽略），Esc=退出选择态；输入框内不劫持
+  useEffect(() => {
+    if (!trashView) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      if (e.key === "Escape" && selectMode) {
+        exitSelect();
+        return;
+      }
+      if (e.key === "Delete") void onBatchPurge();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   async function onPurge(book: Book) {
     const ok = await showConfirm(
@@ -1113,9 +1285,9 @@ export default function LibraryPage() {
     return t ? `已读 ${t}` : null;
   };
 
-  // 刊头统计口径：根视图=全库，书架视图=该书架直属书；在读=readingStatus 判定为在读
+  // 刊头统计口径：根视图=全库，书架视图=该书架直属书；在读=effectiveStatus 合并口径（S-5）
   const mastheadScope = currentShelfId == null ? books : shelfBooks;
-  const mastheadReading = mastheadScope.filter((b) => readingStatus(b.reading_percent) === "reading").length;
+  const mastheadReading = mastheadScope.filter((b) => effectiveStatus(b) === "reading").length;
   const mastheadName = path.length > 0 ? path[path.length - 1].name : "书 架";
 
   return (
@@ -1153,6 +1325,20 @@ export default function LibraryPage() {
           <button className="wr-btn" onClick={() => navigate("/")}>
             返回书架
           </button>
+          {/* T-1 回收站选择模式（与主工具行同款复选图标钮） */}
+          <div className="wr-seg" role="group" aria-label="批量选择">
+            <button
+              type="button"
+              className="wr-seg-btn wr-seg-btn--icon wr-seg-btn--solid"
+              aria-pressed={selectMode}
+              data-active={selectMode}
+              aria-label={selectMode ? "退出选择" : "选择"}
+              title={selectMode ? "退出选择" : "选择"}
+              onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
+            >
+              <IconCheckSquare />
+            </button>
+          </div>
           <label htmlFor="trash-retention" className="wr-muted" style={{ fontSize: 13 }}>
             保留期
           </label>
@@ -1266,46 +1452,64 @@ export default function LibraryPage() {
 
       {trashView ? (
         <div className="wr-trash-list">
-          {trash
-            .filter((b) => {
-              const q = query.trim().toLowerCase();
-              return !q || `${formatTitle(b)} ${formatAuthor(b)}`.toLowerCase().includes(q);
-            })
-            .map((b) => {
-              const remaining = trashRemainingDays(b.deleted_at ?? 0, retentionDays, nowSec);
-              return (
-                <div key={b.id} className="wr-trash-row">
-                  <div className="wr-trash-cover" aria-hidden="true">
-                    {b.cover_path && trashCoverUrls[b.cover_path] ? (
-                      <img src={trashCoverUrls[b.cover_path]} alt="" loading="lazy" decoding="async" />
-                    ) : null}
-                    {!b.cover_path || !trashCoverUrls[b.cover_path] ? <IconBook width={18} height={18} /> : null}
-                  </div>
-                  <div className="wr-trash-info">
-                    <div className="wr-trash-title" title={formatTitle(b)}>{formatTitle(b)}</div>
-                    <div className="wr-trash-meta">
-                      {new Date((b.deleted_at ?? 0) * 1000).toLocaleString()} ·{" "}
-                      {remaining == null ? "永久保留" : `剩余 ${remaining} 天`}
-                    </div>
-                  </div>
-                  <div className="wr-trash-actions">
-                    <button className="wr-btn" onClick={() => void onRestore(b)} disabled={loading}>
-                      恢复
-                    </button>
-                    <button className="wr-btn wr-btn-danger" onClick={() => void onPurge(b)} disabled={loading}>
-                      彻底删除
-                    </button>
-                    <button
-                      className="wr-btn wr-btn-danger"
-                      onClick={() => void onDeleteFromDisk(b, refreshTrash)}
-                      disabled={loading}
-                    >
-                      从电脑删除
-                    </button>
+          {trashFiltered.map((b) => {
+            const remaining = trashRemainingDays(b.deleted_at ?? 0, retentionDays, nowSec);
+            return (
+              <div
+                key={b.id}
+                className="wr-trash-row"
+                tabIndex={0} // H-6 行可聚焦，上下键在行间移动
+                data-selected={selectMode && selected.has(b.id)}
+                onKeyDown={(e) => {
+                  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+                  e.preventDefault();
+                  const rows = Array.from(document.querySelectorAll<HTMLElement>(".wr-trash-row"));
+                  const i = rows.indexOf(e.currentTarget);
+                  rows[i + (e.key === "ArrowDown" ? 1 : -1)]?.focus();
+                }}
+              >
+                {selectMode ? (
+                  <button
+                    className="wr-select-check"
+                    role="checkbox"
+                    aria-checked={selected.has(b.id)}
+                    aria-label={`选择《${formatTitle(b)}》`}
+                    onClick={() => toggleSelected(b.id)}
+                  >
+                    {selected.has(b.id) ? "✓" : ""}
+                  </button>
+                ) : null}
+                <div className="wr-trash-cover" aria-hidden="true">
+                  {b.cover_path && trashCoverUrls[b.cover_path] ? (
+                    <img src={trashCoverUrls[b.cover_path]} alt="" loading="lazy" decoding="async" />
+                  ) : null}
+                  {!b.cover_path || !trashCoverUrls[b.cover_path] ? <IconBook width={18} height={18} /> : null}
+                </div>
+                <div className="wr-trash-info">
+                  <div className="wr-trash-title" title={formatTitle(b)}>{formatTitle(b)}</div>
+                  <div className="wr-trash-meta">
+                    {new Date((b.deleted_at ?? 0) * 1000).toLocaleString()} ·{" "}
+                    {remaining == null ? "永久保留" : `剩余 ${remaining} 天`}
                   </div>
                 </div>
-              );
-            })}
+                <div className="wr-trash-actions">
+                  <button className="wr-btn" onClick={() => void onRestore(b)} disabled={loading}>
+                    恢复
+                  </button>
+                  <button className="wr-btn wr-btn-danger" onClick={() => void onPurge(b)} disabled={loading}>
+                    彻底删除
+                  </button>
+                  <button
+                    className="wr-btn wr-btn-danger"
+                    onClick={() => void onDeleteFromDisk(b, refreshTrash)}
+                    disabled={loading}
+                  >
+                    从电脑删除
+                  </button>
+                </div>
+              </div>
+            );
+          })}
 
           {trash.length === 0 ? (
             <div className="wr-state">
@@ -1327,40 +1531,65 @@ export default function LibraryPage() {
             openMenu({ kind: "grid", x: e.clientX, y: e.clientY }, e.currentTarget);
           }}
         >
-          {/* 常驻"新建书架"虚线卡：网格第一格，空书架也显示；拖书入内 = 新建并放入（data-drop） */}
-          <div
-            className="wr-book-card wr-shelf-create"
-            role="button"
-            tabIndex={0}
-            aria-label="新建书架"
-            data-drop="new-shelf"
-            onClick={onNewShelf}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
+          {/* K-1 置顶=无视分组的真最顶：置顶书 → 新建卡 → 书架组 → 普通书 */}
+          {pinnedBooks.map((b) => (
+            <BookCard
+              key={b.id}
+              book={b}
+              coverUrl={b.cover_path ? coverUrls[b.cover_path] : undefined}
+              readingTimeText={readingTimeText(b.id)}
+              shelfPathText={searching ? shelfPath(shelves, b.shelf_id).map((s) => s.name).join(" / ") : undefined}
+              selectMode={selectMode}
+              selected={selected.has(b.id)}
+              dragging={dragBookId === b.id}
+              pop={popKey === `book:${b.id}`}
+              loading={loading}
+              onCardPointerDown={onCardPointerDown}
+              onCardActivate={openBook}
+              onCardSelectToggle={toggleSelected}
+              onCardMenu={onCardMenu}
+            />
+          ))}
+
+          {/* 常驻"新建书架"虚线卡：网格第一格，空书架也显示；拖书入内 = 新建并放入（data-drop）。
+              W-3 搜索态隐藏（找书模式非整理模式） */}
+          {!searching ? (
+            <div
+              className="wr-book-card wr-shelf-create"
+              role="button"
+              tabIndex={0}
+              aria-label="新建书架"
+              data-drop="new-shelf"
+              onClick={onNewShelf}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onNewShelf();
+                }
+              }}
+              onContextMenu={(e) => {
                 e.preventDefault();
                 onNewShelf();
-              }
-            }}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              onNewShelf();
-            }}
-          >
-            <IconFolder width={22} height={22} />
-            <span>新建书架</span>
-          </div>
+              }}
+            >
+              <IconFolder width={22} height={22} />
+              <span>新建书架</span>
+            </div>
+          ) : null}
 
-          {subShelves.map((s) => {
-            const count = counts.get(s.id) ?? 0;
+          {folderEntries.map(({ shelf: s, hits }) => {
+            const direct = counts.get(s.id) ?? 0;
+            const deep = deepCounts.get(s.id) ?? 0;
             return (
             <div
               key={s.id}
               className="wr-book-card wr-shelf-card"
               role="button"
               tabIndex={0}
-              aria-label={`书架 ${s.name}，${count} 本`}
+              aria-label={`书架 ${s.name}，${deep} 本`}
               data-drop="shelf"
               data-shelf-id={s.id}
+              data-hits={searching && hits > 0 ? hits : undefined}
               data-dragging={dragShelfId === s.id}
               data-pop={popKey === `shelf:${s.id}`}
               onPointerDown={(e) => startCardDrag(e, { kind: "shelf", id: s.id, label: s.name })}
@@ -1388,22 +1617,24 @@ export default function LibraryPage() {
                     );
                   })}
                 </div>
-                {count > 4 ? <span className="wr-shelf-badge">+{count - 4}</span> : null}
+                {direct > 4 ? <span className="wr-shelf-badge">+{direct - 4}</span> : null}
               </div>
               <div className="wr-meta">
                 <div className="wr-title" title={s.name}>{s.name}</div>
-                <div className="wr-author">{count} 本</div>
+                {/* K-3 卡面=含子孙总数；title 补直属/子书架拆分 */}
+                <div className="wr-author" title={`直属 ${direct} 本 · 含子书架 ${deep - direct} 本`}>{deep} 本</div>
               </div>
             </div>
             );
           })}
 
-          {booksFiltered.map((b) => (
+          {unpinnedBooks.map((b) => (
             <BookCard
               key={b.id}
               book={b}
               coverUrl={b.cover_path ? coverUrls[b.cover_path] : undefined}
               readingTimeText={readingTimeText(b.id)}
+              shelfPathText={searching ? shelfPath(shelves, b.shelf_id).map((s) => s.name).join(" / ") : undefined}
               selectMode={selectMode}
               selected={selected.has(b.id)}
               dragging={dragBookId === b.id}
@@ -1416,14 +1647,14 @@ export default function LibraryPage() {
             />
           ))}
 
-          {booksFiltered.length === 0 && subShelves.length === 0 ? (
+          {booksFiltered.length === 0 && folderEntries.length === 0 ? (
             <div className="wr-state" style={{ gridColumn: "1 / -1" }}>
               <span className="wr-state-icon" aria-hidden="true">
                 <IconShelf width={40} height={40} />
               </span>
               {query.trim() ? (
                 <>
-                  <div className="wr-state-title">没有匹配的书籍</div>
+                  <div className="wr-state-title">全库未找到「{query.trim()}」</div>
                   <div className="wr-state-sub">换个书名或作者试试</div>
                 </>
               ) : currentShelfId != null ? (
@@ -1458,6 +1689,28 @@ export default function LibraryPage() {
             删除
           </button>
           <button className="wr-btn" onClick={toggleSelectAll} disabled={booksFiltered.length === 0}>
+            {allSelected ? "取消全选" : "全选"}
+          </button>
+          <button className="wr-btn" onClick={exitSelect}>
+            取消
+          </button>
+        </div>
+      ) : null}
+
+      {/* T-2 回收站批量条变体：恢复/彻底删除/从电脑删除/全选（过滤集）/取消 */}
+      {selectMode && trashView ? (
+        <div className="wr-batch-bar" role="toolbar" aria-label="回收站批量操作">
+          <span className="wr-batch-count">已选 {selected.size}</span>
+          <button className="wr-btn" onClick={() => void onBatchRestore()} disabled={selected.size === 0}>
+            恢复
+          </button>
+          <button className="wr-btn wr-btn-danger" onClick={() => void onBatchPurge()} disabled={selected.size === 0}>
+            彻底删除
+          </button>
+          <button className="wr-btn wr-btn-danger" onClick={() => void onBatchDeleteFromDisk()} disabled={selected.size === 0}>
+            从电脑删除
+          </button>
+          <button className="wr-btn" onClick={toggleSelectAll} disabled={trashFiltered.length === 0}>
             {allSelected ? "取消全选" : "全选"}
           </button>
           <button className="wr-btn" onClick={exitSelect}>
@@ -1528,6 +1781,29 @@ export default function LibraryPage() {
               >
                 降序
               </button>
+              {/* K-2 文件夹排序段：含子书架的视图才出现 */}
+              {subShelves.length > 0 ? (
+                <>
+                  <div className="wr-menu-label" role="presentation" style={{ padding: "6px 10px 2px", fontSize: 12, color: "var(--wr-muted)", fontWeight: 600 }}>
+                    文件夹
+                  </div>
+                  {(Object.keys(FOLDER_SORT_LABELS) as FolderSortKey[]).map((k) => (
+                    <button
+                      key={k}
+                      className="wr-menu-item"
+                      role="menuitemradio"
+                      aria-checked={folderSort === k}
+                      data-checked={folderSort === k}
+                      onClick={() => {
+                        closeMenu();
+                        setFolderSort(k);
+                      }}
+                    >
+                      {FOLDER_SORT_LABELS[k]}
+                    </button>
+                  ))}
+                </>
+              ) : null}
             </>
           ) : menu.kind === "grid" ? (
             <>
@@ -1619,6 +1895,31 @@ export default function LibraryPage() {
                 <IconTrash width={16} height={16} />
                 从电脑删除
               </button>
+              {/* S-4 手动状态段：三档手动 + 恢复自动；勾选=当前合并口径（effectiveStatus）。
+                  “恢复自动”在无覆盖时置灰——本就处于自动，无可恢复 */}
+              <div className="wr-menu-label" role="presentation" style={{ padding: "6px 10px 2px", fontSize: 12, color: "var(--wr-muted)", fontWeight: 600 }}>
+                状态
+              </div>
+              {MANUAL_STATUS_OPTIONS.map((opt) => {
+                const cur = effectiveStatus(menu.book);
+                return (
+                  <button
+                    key={opt.label}
+                    className="wr-menu-item"
+                    role="menuitemradio"
+                    aria-checked={opt.value != null && cur === opt.value}
+                    data-checked={opt.value != null && cur === opt.value}
+                    disabled={opt.value == null && menu.book.manual_status == null}
+                    title={opt.value == null ? "清除手动覆盖，回到按打开记录与进度推导" : undefined}
+                    onClick={() => {
+                      closeMenu();
+                      void onSetManualStatus(menu.book, opt.value);
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
             </>
           ) : (
             <>
@@ -1742,6 +2043,7 @@ export default function LibraryPage() {
             void (async () => {
               try {
                 await addTagsToBooks([...selected], ids);
+                showToast(`已为 ${selected.size} 本打标签`); // H-3
                 await refresh();
               } catch (e) {
                 await showAlert("打标签失败", String(e));

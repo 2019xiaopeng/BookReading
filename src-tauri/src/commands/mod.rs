@@ -5,6 +5,8 @@ pub mod annotations;
 pub mod favorites;
 pub mod reading;
 pub mod logging;
+pub mod media;
 pub mod shelves;
 pub mod storage;
 pub mod tags;
+pub mod update;

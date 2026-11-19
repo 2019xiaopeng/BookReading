@@ -15,13 +15,16 @@ use tauri::{Emitter, Manager, WindowEvent};
 use commands::library::{
     delete_book, delete_reader_font, generate_cover_thumbs, get_book, import_book, list_books,
     reextract_all_covers, repair_book_metadata, reveal_book_location, save_reader_background,
-    save_reader_font, scan_library_health, set_book_cover, update_book_metadata,
+    save_reader_font, scan_library_health, set_book_cover, set_book_manual_status,
+    update_book_metadata,
 };
 use commands::images::{
     import_image_folder, list_image_page_meta, list_image_pages, list_image_subdirs,
     read_image_page, relink_image_book, AppState as ImageState,
 };
-use commands::epub_optimize::optimize_epub_images;
+use commands::epub_optimize::{optimize_epub_images, optimize_epub_now};
+use commands::media::{list_book_media, read_book_media, read_epub_image};
+use commands::update::{check_app_update, download_app_update, run_update_installer};
 use commands::annotations::{
     add_bookmark, add_highlight, delete_bookmark, delete_highlight, export_annotations,
     list_bookmarks, list_highlights,
@@ -32,7 +35,7 @@ use commands::reading::{
     save_book_locations, upsert_reading_state,
 };
 use commands::logging::append_frontend_log;
-use commands::storage::{clear_cache, migrate_library_root, probe_paths, read_library_file, remove_old_library, storage_stats};
+use commands::storage::{clear_cache, migrate_library_root, probe_paths, read_book_file, read_library_file, remove_old_library, storage_stats};
 use commands::favorites::{
     add_favorite_quote, delete_favorite_quote, list_favorite_books, list_favorite_quotes, set_book_favorite,
 };
@@ -160,8 +163,16 @@ pub fn run() {
             reextract_all_covers,
             generate_cover_thumbs,
             optimize_epub_images,
+            optimize_epub_now,
             reveal_book_location,
             scan_library_health,
+            set_book_manual_status,
+            list_book_media,
+            read_book_media,
+            read_epub_image,
+            check_app_update,
+            download_app_update,
+            run_update_installer,
             update_book_metadata,
             delete_book,
             list_shelves,
@@ -218,6 +229,7 @@ pub fn run() {
             clear_cache,
             probe_paths,
             read_library_file,
+            read_book_file,
             quit_app
         ])
         .run(tauri::generate_context!())

@@ -65,3 +65,10 @@ export function parseEpubSettingsOverride(raw: unknown): EpubSettingsOverride {
 export function resolveEpubSettings(global: ReaderSettings, perBook: unknown): ReaderSettings {
   return { ...global, ...parseEpubSettingsOverride(perBook) };
 }
+
+/** G-1「设为我的默认」：把当前生效值中的书级字段（八项）写回全局（新书起点=当前阅读习惯）；其余全局字段不动 */
+export function epubDefaultsFromEffective(global: ReaderSettings, effective: ReaderSettings): ReaderSettings {
+  const out = { ...global };
+  for (const k of EPUSET_FIELDS) (out as Record<(typeof EPUSET_FIELDS)[number], unknown>)[k] = effective[k];
+  return out;
+}

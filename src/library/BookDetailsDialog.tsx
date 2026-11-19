@@ -9,6 +9,7 @@ import {
   listReadingTimes,
   revealBookLocation,
   setBookCover,
+  setBookFavorite,
   setBookTags,
   updateBookMetadata,
 } from "../tauri/invoke";
@@ -154,6 +155,27 @@ export default function BookDetailsDialog({
       await revealBookLocation(b.id);
     } catch (e) {
       await showAlert("打开所在位置失败", String(e));
+    }
+  }
+
+  // D-3：置顶/收藏（与书卡 ⋯ 菜单同一后端调用）；本地同步一份让按钮文案即时翻转
+  async function onTogglePinned() {
+    try {
+      await updateBookMetadata({ book_id: b.id, pinned: !b.pinned_at });
+      setB((prev) => ({ ...prev, pinned_at: prev.pinned_at ? Date.now() / 1000 : null }));
+      onChanged();
+    } catch (e) {
+      await showAlert("操作失败", String(e));
+    }
+  }
+
+  async function onToggleFavorite() {
+    try {
+      await setBookFavorite(b.id, !b.is_favorite);
+      setB((prev) => ({ ...prev, is_favorite: !prev.is_favorite }));
+      onChanged();
+    } catch (e) {
+      await showAlert("收藏失败", String(e));
     }
   }
 
@@ -359,6 +381,12 @@ export default function BookDetailsDialog({
         </div>
 
         <div className="wr-prompt-actions">
+          <button className="wr-btn" onClick={() => void onTogglePinned()}>
+            {b.pinned_at ? "取消置顶" : "置顶"}
+          </button>
+          <button className="wr-btn" onClick={() => void onToggleFavorite()}>
+            {b.is_favorite ? "取消收藏" : "收藏"}
+          </button>
           {/* E4 导出本书标注（Markdown）；只读操作，不影响保存表单 */}
           <button
             className="wr-btn"

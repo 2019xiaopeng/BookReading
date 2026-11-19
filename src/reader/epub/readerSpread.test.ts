@@ -3,12 +3,25 @@ import { describe, expect, test, vi } from "vitest";
 import {
   applySpreadMode,
   cfiRangesOverlap,
+  lazyImagesForFlow,
   locationsCacheKey,
   sameRelocatedPayload,
   scrollEdgeDirection,
   spineIndexFromCfi,
   type RelocatedPayload,
 } from "./reader";
+
+describe("lazyImagesForFlow（E-4 懒加载仅滚动模式）", () => {
+  test("滚动模式注入 lazy，分页模式不注入（横向分栏下 lazy 永不清算→破图）", () => {
+    expect(lazyImagesForFlow("scrolled")).toBe(true);
+    expect(lazyImagesForFlow("paginated")).toBe(false);
+  });
+
+  test("未知/异常值按分页处理（宁可不懒加载，不可破图）", () => {
+    expect(lazyImagesForFlow("")).toBe(false);
+    expect(lazyImagesForFlow("scroll")).toBe(false);
+  });
+});
 
 describe("applySpreadMode", () => {
   test("uses rendition.spread when available", () => {

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 
 import type { Book } from "../tauri/invoke";
@@ -17,8 +18,10 @@ import {
   getReadingState,
   getSettings,
   listBookmarks,
+  listBookMedia,
   listFavoriteQuotes,
   listHighlights,
+  optimizeEpubNow,
   setBookFavorite,
   setSetting,
   setSettings as setSettingsBatch,
@@ -26,6 +29,7 @@ import {
   type Bookmark,
   type FavoriteQuote,
   type Highlight,
+  type MediaEntry,
 } from "../tauri/invoke";
 import {
   cfiRangesOverlap,
@@ -42,6 +46,8 @@ import { readerFontFaceCss } from "../reader/epub/iframeFont";
 import { tocLabelFor } from "../reader/epub/tocLabel";
 import BookmarksPanel from "../reader/components/BookmarksPanel";
 import HighlightsPanel from "../reader/components/HighlightsPanel";
+import ImageLightbox from "../reader/components/ImageLightbox";
+import MediaPanel from "../reader/components/MediaPanel";
 import SearchPanel from "../reader/components/SearchPanel";
 import SettingsPanel from "../reader/components/SettingsPanel";
 import SelectionToolbar from "../reader/components/SelectionToolbar";
@@ -51,6 +57,7 @@ import PagesPanel from "../reader/image/PagesPanel";
 import {
   defaultImageReaderSettings,
   imageCfi,
+  imageDefaultsFromEffective,
   imageSettingsKey,
   normalizeImageReaderSettings,
   pagePercent,
@@ -82,7 +89,14 @@ import {
   normalizeTtsRate,
   normalizeTurnSpeedMs,
 } from "../reader/settings/normalize";
-import { epubSettingsKey, EPUSET_FIELDS, parseEpubSettingsOverride, resolveEpubSettings, type EpubSettingsOverride } from "../reader/settings/epuset";
+import {
+  epubDefaultsFromEffective,
+  epubSettingsKey,
+  EPUSET_FIELDS,
+  parseEpubSettingsOverride,
+  resolveEpubSettings,
+  type EpubSettingsOverride,
+} from "../reader/settings/epuset";
 import { speak, stop as ttsStop, subscribeTts, ttsSpeaking, ttsSupported } from "../reader/tts";
 import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
@@ -107,12 +121,31 @@ import {
   IconSearch,
   IconSettings,
   IconSpeaker,
+  IconVideo,
 } from "../ui/icons";
 
 // 漫画/PDF 共用一套翻页 api 消费面（PDF 增量提供 renderThumb 供页面面板缩略图）
 type PageReaderApi = ImageReaderApi & { renderThumb?: (page: number) => Promise<string | undefined> };
 
-type SideTab = "toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings" | "pages";
+type SideTab = "toc" | "bookmarks" | "highlights" | "favorites" | "search" | "settings" | "pages" | "media";
+
+const SIDE_TABS: readonly SideTab[] = ["toc", "bookmarks", "highlights", "favorites", "search", "settings", "pages", "media"];
+
+// H-2 抽屉 tab 会话内记忆（同收藏页 tab 方案）：重开抽屉回到上次 tab
+const READER_TAB_KEY = "wr-reader-tab";
+function initialSideTab(): SideTab {
+  try {
+    const v = sessionStorage.getItem(READER_TAB_KEY);
+    return (SIDE_TABS as readonly string[]).includes(v ?? "") ? (v as SideTab) : "toc";
+  } catch {
+    return "toc";
+  }
+}
+
+/** B-2 大书守卫判据：库内 EPUB 且 >64MB（漫画/PDF/非 .epub 不经此路径） */
+export function bigEpubGuard(fileSize: number | null, libraryPath: string): boolean {
+  return (fileSize ?? 0) > 64_000_000 && /\.epub$/.test(libraryPath);
+}
 
 // §8 轻拆（零行为变化）：设置面板 memo——搜索输入/选区/进度拖动等无关重渲不再触面板
 const MemoSettingsPanel = memo(SettingsPanel);
@@ -133,6 +166,8 @@ const ReaderTopBar = memo(function ReaderTopBar(props: {
   percentText: string;
   showEpubTools: boolean;
   showVisualTools: boolean;
+  /** V-1：原书含音视频时显示媒体入口 */
+  showMedia: boolean;
   isFavorite: boolean;
   /** #5 朗读（EPUB 且 WebView 支持 speechSynthesis） */
   showTts: boolean;
@@ -181,6 +216,12 @@ const ReaderTopBar = memo(function ReaderTopBar(props: {
             <IconSearch />
             搜索
           </button>
+          {props.showMedia ? (
+            <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("media")}>
+              <IconVideo />
+              媒体
+            </button>
+          ) : null}
         </>
       ) : null}
       {props.showTts ? (
@@ -338,7 +379,15 @@ export default function ReaderPage() {
   const [ttsOn, setTtsOn] = useState(false);
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const [imagePage, setImagePage] = useState<{ page: number; pageCount: number } | null>(null);
-  const [sideTab, setSideTab] = useState<SideTab>("toc");
+  const [sideTab, setSideTab] = useState<SideTab>(initialSideTab);
+  // E-1 已删书死胡同：getBook null（或 90s 仍无书）→ 可返回书库的错误态，不再永久加载
+  const [bookGone, setBookGone] = useState(false);
+  // B-2 大书守卫：>64MB 且 .opt 缺失 → "生成优化副本"占位进度（done/total），完成自动重试开书
+  const [optProgress, setOptProgress] = useState<{ done: number; total: number } | null>(null);
+  // P-1：iframe 内 img 点击 → 全屏 Lightbox（src=当前 blob，rendition 存续期内有效，关闭不 revoke）
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
+  // V-1：原书音视频清单（非空才显示媒体 tab；非 epub 后端返回空数组）
+  const [media, setMedia] = useState<MediaEntry[] | null>(null);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [favoriteQuotes, setFavoriteQuotes] = useState<FavoriteQuote[]>([]);
@@ -382,6 +431,8 @@ export default function ReaderPage() {
   const wheelAccumRef = useRef(0);
   const turningRef = useRef(false);
   const imageApiRef = useRef<PageReaderApi | null>(null);
+  // B-2：大书守卫的生成等待次数（生成失败也发 done==total → 无限重试死循环，2 次后放行直开走错误态）
+  const optRetriesRef = useRef(0);
   // E2：本书覆盖键被面板改过后置位，防迟到的 getSettings 回读覆盖用户刚写的值
   const imgOverrideTouchedRef = useRef(false);
   // #3：epuset 覆盖键同款防回读覆盖；生效排版（全局←书级）与覆盖键的 ref 镜像供稳定回调取用
@@ -397,18 +448,35 @@ export default function ReaderPage() {
   const fontFaceCssRef = useRef<string | null>(null);
   // 沉浸 chrome（B12 精简版）：显示=指针进顶/底热区（无延迟）；隐藏=离开热区与栏 1.2s / 翻页动作即收 /
   // 开始选字或打开抽屉、错误浮层（disabled=栏隐藏）；锁定=全藏+热区禁用。单击正文不承担收栏职责。
-  const chrome = useImmersiveChrome({ disabled: drawerOpen || !!readerError || !!selection || !!noteDraft });
+  const chrome = useImmersiveChrome({ disabled: drawerOpen || !!readerError || bookGone || !!selection || !!noteDraft });
+
+  // H-2：切 tab 即写 sessionStorage（重开抽屉回到上次 tab；存储被禁仅失去记忆）
+  const changeSideTab = useCallback((tab: SideTab) => {
+    setSideTab(tab);
+    try {
+      sessionStorage.setItem(READER_TAB_KEY, tab);
+    } catch {
+      // 私密窗口等场景存储被禁：仅失去记忆，不影响功能
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
+    // E-1 加载兜底：90s 仍无书（IPC 挂死等）也进 bookGone，防其它死等
+    const bail = window.setTimeout(() => {
+      if (!cancelled) setBookGone(true);
+    }, 90_000);
     (async () => {
       // 单本直取（不再全库拉书后 find）
       const found = await getBook(bookId ?? "").catch(() => null);
+      window.clearTimeout(bail);
       if (cancelled) return;
       setBook(found);
+      setBookGone(!found);
     })();
     return () => {
       cancelled = true;
+      window.clearTimeout(bail);
     };
   }, [bookId]);
 
@@ -419,6 +487,8 @@ export default function ReaderPage() {
   const stage = calcPaperStage({ viewerWidth, viewerHeight, margin: 18, edgeRatio });
   const isImageBook = book?.format === "images";
   const isPdfBook = book?.format === "pdf";
+  // E-2：大部头（>64MB EPUB）加载文案提示（.opt 已有但首显仍慢的场景）
+  const heavyEpub = !!book && bigEpubGuard(book.file_size, book.library_path);
   // 批次18：从书库书架进入时带 fromShelf state——返回回原书架；其它入口（收藏页）无 state 保持回根
   const fromShelf = (location.state as { fromShelf?: number | null } | null)?.fromShelf;
   // 漫画/PDF 共用视觉阅读管线（顶栏/热区/页码/书签）；分支差异只在设置面板与 api 来源
@@ -538,6 +608,7 @@ export default function ReaderPage() {
     let cancelled = false;
     imgOverrideTouchedRef.current = false;
     epuOverrideTouchedRef.current = false;
+    optRetriesRef.current = 0; // 换书重置大书守卫重试配额
     setImgOverride({});
     setEpuOverride({});
     if (!bookId) return;
@@ -553,8 +624,24 @@ export default function ReaderPage() {
     };
   }, [bookId]);
 
+  // V-1 媒体清单：书加载后查一次（仅有多媒体的书显示媒体 tab；失败按无媒体处理）
+  useEffect(() => {
+    setMedia(null);
+    if (!book || isVisualBook) return;
+    let cancelled = false;
+    void listBookMedia(book.id)
+      .then((m) => {
+        if (!cancelled) setMedia(m);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [book?.id, isVisualBook]);
+
   useEffect(() => {
     let cancelled = false;
+    let unlistenOpt: (() => void) | null = null;
     (async () => {
       if (!book) return;
       if (book.format === "images" || book.format === "pdf") {
@@ -572,6 +659,32 @@ export default function ReaderPage() {
         setAnnotationsLoaded(true);
         return;
       }
+
+      // B-2 大书守卫：>64MB EPUB 先补生成 .opt——原书直开会内存失控 → 冻结 → 强杀 → 补生成被反复中断
+      // 的死循环。optimizeEpubNow 返回 false（.opt 已有/无图可优化）→ 正常开书；true → 挂"生成中"占位，
+      // 监听 epub-opt-progress，done==total 后 bump retryKey 重跑本 effect 自动开书。
+      if (bigEpubGuard(book.file_size, book.library_path) && optRetriesRef.current < 2) {
+        const started = await optimizeEpubNow(book.id).catch(() => false);
+        if (cancelled) return;
+        if (started) {
+          optRetriesRef.current += 1;
+          setOptProgress({ done: 0, total: 0 });
+          try {
+            unlistenOpt = await listen<{ done: number; total: number }>("epub-opt-progress", (e) => {
+              if (cancelled) return;
+              const p = e.payload;
+              setOptProgress({ done: p.done, total: p.total });
+              if (p.total > 0 && p.done >= p.total) setRetryKey((k) => k + 1);
+            });
+          } catch (e) {
+            logFrontend(`reader: opt progress listen failed ${String(e)}`);
+          }
+          if (cancelled) unlistenOpt?.();
+          return;
+        }
+      }
+      setOptProgress(null);
+
       if (!containerRef.current) return;
 
       const container = containerRef.current;
@@ -693,6 +806,8 @@ export default function ReaderPage() {
           onContentsPress: () => {
             setSelection(null);
           },
+          // P-1：iframe 内 img 点击 → 全屏 Lightbox（reader.ts content hook 挂的监听）
+          onImageClick: (p) => setLightbox(p),
           onError,
         });
       } catch (e) {
@@ -735,6 +850,8 @@ export default function ReaderPage() {
 
     return () => {
       cancelled = true;
+      unlistenOpt?.();
+      unlistenOpt = null;
       if (persistTimerRef.current) {
         window.clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
@@ -758,7 +875,9 @@ export default function ReaderPage() {
     };
   }, [book?.id]);
 
-  // E3 阅读时长：页面可见时每秒累计，满 60s 落库一次；隐藏/关书补一次尾款（秒数取整）
+  // E3 阅读时长：页面可见且窗口聚焦时每秒累计，满 60s 落库一次；隐藏/失焦/关书补一次尾款（秒数取整）。
+  // S-1：Tauri 最小化不触发 WebView visibilitychange——判据加 document.hasFocus()，另听原生窗口焦点
+  // （blur 含最小化即停并 flush 尾款；复焦自然续计），与微信读书同语义：窗口不在前台就不算阅读。
   useEffect(() => {
     if (!book) return;
     const readSecondsRef = { current: 0 };
@@ -769,7 +888,7 @@ export default function ReaderPage() {
       void addReadingTime(book.id, s);
     };
     const tick = window.setInterval(() => {
-      if (document.visibilityState === "visible") readSecondsRef.current += 1;
+      if (document.visibilityState === "visible" && document.hasFocus()) readSecondsRef.current += 1;
       if (readSecondsRef.current >= 60) flush();
     }, 1000);
     const onVisibility = () => {
@@ -777,7 +896,20 @@ export default function ReaderPage() {
     };
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("pagehide", flush);
+    let disposed = false;
+    let unFocus: (() => void) | null = null;
+    void getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (!focused) flush();
+      })
+      .then((f) => {
+        if (disposed) f();
+        else unFocus = f;
+      })
+      .catch((e) => logFrontend(`reader: focus listen failed ${String(e)}`));
     return () => {
+      disposed = true;
+      unFocus?.();
       window.clearInterval(tick);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", flush);
@@ -931,7 +1063,7 @@ export default function ReaderPage() {
 
       if (e.ctrlKey && e.key.toLowerCase() === "f" && !imageCtxRef.current.active) {
         e.preventDefault();
-        setSideTab("search");
+        changeSideTab("search");
         setDrawerOpen(true);
         requestAnimationFrame(() => searchInputRef.current?.focus());
         return;
@@ -946,7 +1078,7 @@ export default function ReaderPage() {
       if (e.ctrlKey && e.key.toLowerCase() === "b") {
         e.preventDefault();
         addBookmarkHere();
-        setSideTab("bookmarks");
+        changeSideTab("bookmarks");
         return;
       }
 
@@ -1286,11 +1418,14 @@ export default function ReaderPage() {
     controllerRef.current?.chapterNav(direction === "next" ? 1 : -1);
   }, []);
 
-  const openDrawer = useCallback((tab: SideTab) => {
-    setSideTab(tab);
-    setDrawerOpen(true);
-    if (tab === "search") requestAnimationFrame(() => searchInputRef.current?.focus());
-  }, []);
+  const openDrawer = useCallback(
+    (tab: SideTab) => {
+      changeSideTab(tab);
+      setDrawerOpen(true);
+      if (tab === "search") requestAnimationFrame(() => searchInputRef.current?.focus());
+    },
+    [changeSideTab],
+  );
 
   // B4: 书签统一入口——image 书记 img:N、PDF 记 pdf:N + “第N页”，epub 记 CFI + 章名
   function addBookmarkHere() {
@@ -1412,7 +1547,9 @@ export default function ReaderPage() {
               ? "搜索"
               : sideTab === "pages"
                 ? "页面"
-                : "阅读设置";
+                : sideTab === "media"
+                  ? "媒体"
+                  : "阅读设置";
 
   // §8：页码徽标样式已迁 weread.css（wr-page-badge--left/--right），此处只留文案
 
@@ -1520,6 +1657,34 @@ export default function ReaderPage() {
     setBook({ ...book, is_favorite: next });
     void setBookFavorite(book.id, next);
   }, [book]);
+  // G-1「设为我的默认」：当前生效的书级字段写回全局键（新书起点=当前习惯；本书覆盖不动，互不传染）
+  const setEpubDefault = useCallback(() => {
+    const globalNext = epubDefaultsFromEffective(settingsRef.current, epubSettingsRef.current);
+    settingsTouchedRef.current = true;
+    setSettings(globalNext);
+    void persistSettings(globalNext);
+  }, [persistSettings]);
+  // G-2「本书恢复默认」：清 epuset:<bookId> 覆盖（空串即清——parse 对空/坏 JSON 回空覆盖）
+  const resetEpubBook = useCallback(() => {
+    epuOverrideTouchedRef.current = true;
+    epuOverrideRef.current = {};
+    epubSettingsRef.current = resolveEpubSettings(settingsRef.current, {});
+    setEpuOverride({});
+    void setSetting(epubSettingsKey(bookId ?? ""), "");
+  }, [bookId]);
+  const setVisualDefault = useCallback(() => {
+    const base = isPdfBook ? pdfSettings : imageSettings;
+    const globalNext = imageDefaultsFromEffective(base, visualSettings);
+    settingsTouchedRef.current = true;
+    if (isPdfBook) setPdfSettings(globalNext);
+    else setImageSettings(globalNext);
+    void setSetting(visualSettingsKey, JSON.stringify(globalNext));
+  }, [isPdfBook, pdfSettings, imageSettings, visualSettings, visualSettingsKey]);
+  const resetVisualBook = useCallback(() => {
+    imgOverrideTouchedRef.current = true;
+    setImgOverride({});
+    void setSetting(imageSettingsKey(bookId ?? ""), "");
+  }, [bookId]);
   // E4 标注导出：save 对话框（默认“标注-<书名>.md”）→ exportAnnotations 写出 Markdown
   const exportHighlights = useCallback(() => {
     void (async () => {
@@ -1558,8 +1723,9 @@ export default function ReaderPage() {
           visible={chrome.visible}
           title={book?.title ?? "阅读"}
           percentText={typeof percent === "number" ? `${Math.round(percent * 100)}%` : ""}
-          showEpubTools={!isImageBook}
+          showEpubTools={!!book && !isImageBook}
           showVisualTools={isVisualBook && !!book}
+          showMedia={!!media && media.length > 0}
           showTts={ttsAvailable && !!book && !isVisualBook}
           ttsOn={ttsOn}
           onToggleSpeak={toggleSpeak}
@@ -1592,7 +1758,14 @@ export default function ReaderPage() {
             }}
           >
             {sideTab === "settings" && isVisualBook ? (
-              <MemoImageSettingsPanel value={visualSettings} pdf={isPdfBook} onChange={onVisualSettingsChange} />
+              <MemoImageSettingsPanel
+                value={visualSettings}
+                pdf={isPdfBook}
+                onChange={onVisualSettingsChange}
+                hasOverride={Object.keys(imgOverride).length > 0}
+                onSetDefault={setVisualDefault}
+                onResetBook={resetVisualBook}
+              />
             ) : null}
 
             {sideTab === "settings" && !isVisualBook ? (
@@ -1604,8 +1777,13 @@ export default function ReaderPage() {
                 bgVeil={bgVeil}
                 onBgVeil={onBgVeilChange}
                 onChange={onSettingsPanelChange}
+                hasOverride={Object.keys(epuOverride).length > 0}
+                onSetDefault={setEpubDefault}
+                onResetBook={resetEpubBook}
               />
             ) : null}
+
+            {sideTab === "media" && book && media && media.length > 0 ? <MediaPanel bookId={book.id} items={media} /> : null}
 
             {sideTab === "pages" && isVisualBook && book && imagePage ? (
               <PagesPanel
@@ -1660,6 +1838,18 @@ export default function ReaderPage() {
                     setBookmarks((prev) => prev.filter((b) => b.id !== id));
                   })();
                 }}
+                onClear={() => {
+                  // D-4 清空：一次确认 + 逐条现有命令循环（书内量级小，无批量后端）
+                  void (async () => {
+                    const ok = await showConfirm("清空书签", `确定删除本书全部 ${bookmarks.length} 个书签吗？`, {
+                      danger: true,
+                      confirmText: "清空",
+                    });
+                    if (!ok) return;
+                    for (const b of bookmarks) await deleteBookmark(b.id);
+                    setBookmarks([]);
+                  })();
+                }}
               />
             ) : null}
 
@@ -1669,6 +1859,20 @@ export default function ReaderPage() {
                 loaded={annotationsLoaded}
                 onExport={exportHighlights}
                 onOpen={(cfiRange) => locate(cfiRange)}
+                onClear={() => {
+                  void (async () => {
+                    const ok = await showConfirm("清空标注", `确定删除本书全部 ${highlights.length} 条标注吗？笔记将一并删除。`, {
+                      danger: true,
+                      confirmText: "清空",
+                    });
+                    if (!ok) return;
+                    for (const h of highlights) {
+                      await deleteHighlight(h.id);
+                      controllerRef.current?.removeHighlight(h.cfi_range);
+                    }
+                    setHighlights([]);
+                  })();
+                }}
                 onDelete={(id) => {
                   void (async () => {
                     const ok = await showConfirm("删除标注", "确定删除该标注吗？笔记将一并删除。", {
@@ -1858,12 +2062,30 @@ export default function ReaderPage() {
                     {chapterTitle}
                   </div>
                 )}
-                {!readerError && (!book || tocLoading) ? (
+                {bookGone ? (
+                  // E-1 已删书死胡同：getBook null（或 90s 兜底）→ 错误态可返回书库，不再永久加载
+                  <div className="wr-state wr-state-gone" style={{ margin: "auto" }} role="alert">
+                    <div className="wr-state-title">书已删除或不存在</div>
+                    <div className="wr-state-sub">可能已被删除，或链接已过期</div>
+                    <div className="wr-state-actions">
+                      <button className="wr-btn wr-btn-primary" onClick={backToLibrary}>
+                        返回书库
+                      </button>
+                    </div>
+                  </div>
+                ) : !readerError && (!book || tocLoading || optProgress) ? (
                   <div className="wr-state wr-state-loading" style={{ margin: "auto" }}>
                     <span className="wr-state-icon" aria-hidden="true">
                       <IconRefresh />
                     </span>
-                    <div className="wr-state-title">加载中</div>
+                    <div className="wr-state-title">
+                      {optProgress
+                        ? `正在生成优化副本…${optProgress.total > 0 ? `（${optProgress.done}/${optProgress.total}）` : ""}`
+                        : heavyEpub
+                          ? "正在加载大部头…"
+                          : "加载中"}
+                    </div>
+                    {optProgress ? <div className="wr-state-sub">大书首次打开需要几分钟，完成后自动进入</div> : null}
                   </div>
                 ) : null}
                 <div
@@ -2144,6 +2366,9 @@ export default function ReaderPage() {
           已进入 {chapterToast}
         </div>
       ) : null}
+
+      {/* P-1 图片 Lightbox：iframe img 点击唤起；z 取 hud 之下最高（toast 之上） */}
+      {lightbox ? <ImageLightbox src={lightbox.src} alt={lightbox.alt} onClose={() => setLightbox(null)} /> : null}
     </div>
   );
 }

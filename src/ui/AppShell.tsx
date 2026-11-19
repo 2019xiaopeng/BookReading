@@ -1,18 +1,23 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getVersion } from "@tauri-apps/api/app";
 import { IconBook, IconPalette, IconSearch, IconSettings, IconStar, IconTrash } from "./icons";
 import { getCachedBackgroundUrl, getBackgroundUrl, subscribeBackground } from "./appBackground";
-import { applyPersistedTheme, setTheme, THEME_SWATCHES, useTheme } from "./theme";
-import { getSettings, listShelves, type Shelf } from "../tauri/invoke";
+import { applyPersistedTheme, setTheme, THEME_SWATCHES, useThemeSelection } from "./theme";
+import { getSettings, listBooks, listShelves, setSetting, type Book, type Shelf } from "../tauri/invoke";
 import { normalizeBgVeil, normalizeReaderBackground } from "../reader/settings/normalize";
-import { shelfTreeRows } from "../library/shelves";
+import { countByShelf, descendantIds, shelfTreeRows } from "../library/shelves";
 import type { ReadingStatus } from "../library/readingStatus";
 import { BOOKS_CHANGED_EVENT, runImports, subscribeImportProgress, type ImportProgress } from "../library/importRunner";
+import { primeCloseAction } from "./closeAction";
+import { startSilentUpdateCheck, subscribeUpdateAvailable, getUpdateAvailable } from "./updater";
+import { showAlert } from "./dialog";
+import { ToastHost } from "./toast";
 import SettingsDialog from "./SettingsDialog";
 
-// 八个 30px 色块 + 7*8 间距 + 12 内边距 + 2 边框
-const THEME_MENU_WIDTH = 310;
+// 色块 30px + 块间 8 间距 + 12 内边距 + 2 边框（H-8 加 auto 格后 9 格，宽度随格数算）
+const THEME_MENU_WIDTH = THEME_SWATCHES.length * 30 + (THEME_SWATCHES.length - 1) * 8 + 12 * 2 + 2;
 
 /** 壳纱浓度：本项目 settings 以空串表示"无值"（如 library_status），空串不能当 0 钳到 60 */
 export function parseBgVeil(raw: string | undefined): number {
@@ -21,7 +26,9 @@ export function parseBgVeil(raw: string | undefined): number {
 
 // 侧栏书架树模块级单例（批次12b）：每页各渲染一个 AppShell，路由切换整树重挂曾是闪烁根因；
 // 数据上提后重挂首帧即有旧值，LibraryPage.refresh 推写，导入事件兜底（LibraryPage 卸载时也能刷新）
+// v2.7.0 K-4：同一次加载顺带拉 books 算每架递归计数（countByShelf 上卷到祖先），books 失败不拖垮树
 let shelvesCache: Shelf[] = [];
+let shelfCountsCache: Map<number, number> = new Map();
 let shelvesLoaded = false;
 let shelvesInflight: Promise<void> | null = null;
 const shelvesListeners = new Set<() => void>();
@@ -33,9 +40,25 @@ export function setShelvesCache(list: Shelf[]): void {
   for (const l of shelvesListeners) l();
 }
 
+/** 纯：books 按直接归属计数后上卷到祖先书架（父架计数含全部后代的书） */
+export function rollupShelfCounts(shelves: Shelf[], books: Book[]): Map<number, number> {
+  const direct = countByShelf(books);
+  const out = new Map<number, number>();
+  for (const s of shelves) {
+    let n = direct.get(s.id) ?? 0;
+    for (const d of descendantIds(shelves, s.id)) n += direct.get(d) ?? 0;
+    out.set(s.id, n);
+  }
+  return out;
+}
+
 function loadShelves(): Promise<void> {
-  shelvesInflight ??= listShelves()
-    .then(setShelvesCache)
+  shelvesInflight ??= Promise.all([listShelves(), listBooks().catch((): Book[] => [])])
+    .then(([shelves, books]) => {
+      setShelvesCache(shelves);
+      shelfCountsCache = rollupShelfCounts(shelves, books);
+      for (const l of shelvesListeners) l();
+    })
     .catch(() => {
       // DB 不可达：侧栏不渲染书架树
     })
@@ -63,6 +86,45 @@ export function useShellShelves(): Shelf[] {
   return useSyncExternalStore(subscribeShelves, () => shelvesCache, () => shelvesCache);
 }
 
+/** K-4 侧栏每架递归计数（与书架树同一数据源同一订阅；LibraryPage 推写 setShelvesCache 不带 books，靠 books-changed 事件纠偏） */
+export function useShelfCounts(): Map<number, number> {
+  useShellShelves();
+  return useSyncExternalStore(subscribeShelves, () => shelfCountsCache, () => shelfCountsCache);
+}
+
+// H-9 升级亮点：硬编码当前版要点（不读 md）；比较纯函数 + 一次性展示
+export const HIGHLIGHT_LINES = [
+  "关闭按钮行为可记忆：托盘 / 退出，不再每次询问",
+  "应用内检查更新与一键升级（GitHub Releases）",
+  "主题新增「跟随系统」：随系统深浅色切换纸墨 / 墨夜",
+  "导入方式三选：复制入库 / 移动（源入回收站）/ 原地引用",
+  "书内媒体面板：EPUB 内嵌音视频可直接播放",
+  "阅读插图点击放大：滚轮缩放 + 拖拽平移",
+];
+
+/** 纯：上次见过版本存在且 ≠ 当前 → 展示亮点（首启 last_seen 不存在只落库不弹窗） */
+export function shouldShowHighlights(lastSeen: unknown, current: string): boolean {
+  const s = String(lastSeen ?? "").trim();
+  return s !== "" && current !== "" && s !== current;
+}
+
+// H-9 + U-3 启动一次性（AppShell 每页重挂，模块哨兵保证全会话只跑一次）
+let shellStartupDone = false;
+async function runShellStartupOnce(): Promise<void> {
+  if (shellStartupDone) return;
+  shellStartupDone = true;
+  startSilentUpdateCheck();
+  try {
+    const [map, version] = await Promise.all([getSettings(), getVersion()]);
+    if (shouldShowHighlights(map.last_seen_version, version)) {
+      await showAlert(`已更新到 v${version}`, `本版要点：\n${HIGHLIGHT_LINES.map((l) => `· ${l}`).join("\n")}`);
+    }
+    if (map.last_seen_version !== version) void setSetting("last_seen_version", version);
+  } catch {
+    // DB 不可达：下次启动再试
+  }
+}
+
 export default function AppShell(props: {
   active: "library" | "favorites" | "reader";
   title: string;
@@ -86,13 +148,15 @@ export default function AppShell(props: {
   children: ReactNode;
 }) {
   const navigate = useNavigate();
-  const theme = useTheme();
+  const themeSelection = useThemeSelection();
   // 首帧命中背景单槽缓存：路由切换重挂不再闪回无背景（DB 纠偏仍走下方 load）
   const [bgUrl, setBgUrl] = useState<string | null>(getCachedBackgroundUrl);
   // 壳纱浓度（bg_veil）：默认 88%，与主题/背景同一次 settings 读取顺带解析
   const [veil, setVeil] = useState(88);
   const [themeMenu, setThemeMenu] = useState<{ x: number; y: number } | null>(null);
   const shelves = useShellShelves();
+  const shelfCounts = useShelfCounts();
+  const updateAvailable = useSyncExternalStore(subscribeUpdateAvailable, getUpdateAvailable, () => null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [importProgress, setImportProgress] = useState<ImportProgress>(null);
@@ -115,6 +179,7 @@ export default function AppShell(props: {
         const map = await getSettings();
         if (cancelled) return;
         applyPersistedTheme(map.theme);
+        primeCloseAction(map.close_action); // C-1：✕ 行为记忆与主题共用这一次 settings 读
         setVeil(parseBgVeil(map.bg_veil));
         setBgUrl(await getBackgroundUrl(normalizeReaderBackground(map.reader_bg)));
       } catch {
@@ -127,6 +192,11 @@ export default function AppShell(props: {
       cancelled = true;
       off();
     };
+  }, []);
+
+  // v2.7.0 启动一次性：静默更新检查（U-3）+ 升级亮点（H-9）
+  useEffect(() => {
+    void runShellStartupOnce();
   }, []);
 
   // 批量/拖拽导入进度条（importRunner 模块单例广播）
@@ -266,6 +336,7 @@ export default function AppShell(props: {
                   onClick={() => navigate(`/?shelf=${row.id}`)}
                 >
                   {row.name}
+                  {shelfCounts.get(row.id) ? <span className="wr-nav-count">{shelfCounts.get(row.id)}</span> : null}
                 </button>
               ))}
             </div>
@@ -294,7 +365,12 @@ export default function AppShell(props: {
 
         <div className="wr-side-bottom">
           {props.sidebarFooter}
-          <button className="wr-small-btn" onClick={() => setSettingsOpen(true)}>
+          <button
+            className="wr-small-btn"
+            data-badge={updateAvailable ? "true" : undefined}
+            title={updateAvailable ? `发现新版本 v${updateAvailable.latest}，在设置中查看` : undefined}
+            onClick={() => setSettingsOpen(true)}
+          >
             <IconSettings />
             <span>设置</span>
           </button>
@@ -362,16 +438,16 @@ export default function AppShell(props: {
           className="wr-menu"
           role="group"
           aria-label="主题"
-          style={{ left: themeMenu.x, top: themeMenu.y, display: "grid", gridTemplateColumns: "repeat(8, 30px)", gap: 8 }}
+          style={{ left: themeMenu.x, top: themeMenu.y, display: "grid", gridTemplateColumns: `repeat(${THEME_SWATCHES.length}, 30px)`, gap: 8 }}
         >
           {THEME_SWATCHES.map((s) => (
             <button
               key={s.value}
               type="button"
               className="wr-swatch-btn"
-              data-selected={theme === s.value}
+              data-selected={themeSelection === s.value}
               aria-label={s.label}
-              aria-pressed={theme === s.value}
+              aria-pressed={themeSelection === s.value}
               title={s.label}
               onClick={() => {
                 setTheme(s.value);
@@ -396,12 +472,14 @@ export default function AppShell(props: {
             style={{ width: `${(importProgress.done / importProgress.total) * 100}%` }}
           />
           <span className="wr-import-bar-text">
-            导入 {importProgress.done}/{importProgress.total} · {importProgress.current}
+            导入 {importProgress.done}/{importProgress.total} · {importProgress.current}（大部头含插图优化可能需数分钟）
           </span>
         </div>
       ) : null}
 
       {settingsOpen ? <SettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
+
+      <ToastHost />
     </div>
   );
 }

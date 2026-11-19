@@ -2,12 +2,17 @@ import { describe, expect, test } from "vitest";
 
 import { formatReadingTime } from "./readingTime";
 
-describe("E3 formatReadingTime", () => {
-  test("不足 1 分钟返回 null（含 0/负数/小数截断）", () => {
+describe("E3/S-2 formatReadingTime", () => {
+  test("0 秒（含负数/小数截断到 0）返回 null（不显示）", () => {
     expect(formatReadingTime(0)).toBeNull();
-    expect(formatReadingTime(59)).toBeNull();
     expect(formatReadingTime(-30)).toBeNull();
-    expect(formatReadingTime(59.9)).toBeNull();
+    expect(formatReadingTime(0.9)).toBeNull();
+  });
+
+  test("不足 1 分钟显示“<1 分钟”", () => {
+    expect(formatReadingTime(1)).toBe("<1 分钟");
+    expect(formatReadingTime(59)).toBe("<1 分钟");
+    expect(formatReadingTime(59.9)).toBe("<1 分钟");
   });
 
   test("1 分钟起显示分钟", () => {

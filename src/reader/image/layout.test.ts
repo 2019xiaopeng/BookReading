@@ -8,6 +8,7 @@ import {
   defaultImageReaderSettings,
   displayOrder,
   imageCfi,
+  imageDefaultsFromEffective,
   imageSettingsKey,
   maxWidthForStage,
   normalizeImageReaderSettings,
@@ -308,5 +309,21 @@ describe("E2 按书记忆（imgset:<bookId> 覆盖键）", () => {
     expect(resolveImageSettings(defaultImageReaderSettings, { webtoonWidth: 5 }).webtoonWidth).toBe(40);
     expect(resolveImageSettings(defaultImageReaderSettings, { webtoonWidth: 400 }).webtoonWidth).toBe(100);
     expect(resolveImageSettings(defaultImageReaderSettings, { doubleOffset: 3 }).doubleOffset).toBe(0);
+  });
+
+  test("imageDefaultsFromEffective（G-1 设为默认）：书级字段写回全局，其余全局字段不动", () => {
+    const effective = resolveImageSettings(defaultImageReaderSettings, { rtl: true, layout: "double", fit: "width" });
+    const next = imageDefaultsFromEffective(defaultImageReaderSettings, effective);
+    expect(next.rtl).toBe(true);
+    expect(next.layout).toBe("double");
+    expect(next.fit).toBe("width");
+    // 全局字段保持全局原值（mode/pageAnimation/autoScrollSpeed 不因书内生效值被污染——此处本就相等）
+    expect(next).toEqual(effective);
+    // 全局字段与书级不同时不受影响：全局 autoScrollSpeed=120，生效值=全局值
+    const global2 = { ...defaultImageReaderSettings, autoScrollSpeed: 120 };
+    const eff2 = resolveImageSettings(global2, { webtoonWidth: 92 });
+    const next2 = imageDefaultsFromEffective(global2, eff2);
+    expect(next2.autoScrollSpeed).toBe(120);
+    expect(next2.webtoonWidth).toBe(92);
   });
 });

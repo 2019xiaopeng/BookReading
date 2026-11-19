@@ -1,10 +1,12 @@
 import {
   computeBookStats,
+  getSettings,
   importBook,
   listBooks,
   moveBooksToShelf,
   probePaths,
   type Book,
+  type ImportMode,
   type PathInfo,
 } from "../tauri/invoke";
 import { importImageFolder } from "../reader/image/api";
@@ -136,8 +138,17 @@ async function buildLiveDedupIndex(): Promise<DedupIndex> {
   return buildDedupIndex(books);
 }
 
+// M 前端半：全局导入方式（settings 键 import_mode：copy 缺省/move/reference），批内读一次；
+// txt 必须转换复制，后端本就忽略此参数——前端同样不下发
+async function resolveImportMode(): Promise<ImportMode | undefined> {
+  const raw = await getSettings()
+    .then((m) => m.import_mode)
+    .catch(() => undefined);
+  return raw === "move" || raw === "reference" ? raw : undefined;
+}
+
 // 返回新导入书的 id（importBook / importImageFolder 均返回完整 Book）
-async function importOne(info: PathInfo): Promise<string> {
+async function importOne(info: PathInfo, mode: ImportMode | undefined): Promise<string> {
   if (info.is_dir) {
     return (await importImageFolder(info.path, null)).id;
   }
@@ -151,6 +162,7 @@ async function importOne(info: PathInfo): Promise<string> {
     author: null,
     cover_bytes_base64: null,
     cover_ext: null,
+    mode: info.name.toLowerCase().endsWith(".txt") ? undefined : mode,
   });
   return book.id;
 }
@@ -172,6 +184,7 @@ async function runImportBatch(paths: string[], force: boolean, targetShelfId: nu
     }
 
     const index = force ? null : await buildLiveDedupIndex();
+    const importMode = await resolveImportMode();
 
     const list = infos;
     for (let i = 0; i < list.length; i++) {
@@ -199,7 +212,7 @@ async function runImportBatch(paths: string[], force: boolean, targetShelfId: nu
         }
       }
       try {
-        importedIds.push(await importOne(info));
+        importedIds.push(await importOne(info, importMode));
         // 批内索引同步：同批后续项的查重不漏刚导入的书
         if (index) {
           if (info.is_dir) index.folderPaths.add(normPath(info.path));

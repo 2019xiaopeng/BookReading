@@ -1,4 +1,5 @@
 import { setTheme, THEME_SWATCHES, useTheme } from "../../ui/theme";
+import { showToast } from "../../ui/toast";
 import type { ImageFit, ImagePageAnimation, ImagePageLayout, ImageReadMode, ImageReaderSettings } from "./layout";
 
 type Props = {
@@ -6,6 +7,10 @@ type Props = {
   onChange: (next: ImageReaderSettings) => void;
   /** 批次15：PDF 并轨漫画交互——共用本面板与 image_reader_settings；未实现项（单双页/RTL/翻页动画）置灰 */
   pdf?: boolean;
+  /** G-1/G-2：本书 imgset 覆盖存在 + 写全局默认/清本书覆盖（ReaderPage 提供） */
+  hasOverride: boolean;
+  onSetDefault: () => void;
+  onResetBook: () => void;
 };
 
 type SegOption<T extends string> = { value: T; text: string; disabled?: boolean };
@@ -33,7 +38,7 @@ function Seg<T extends string>(props: { label: string; value: T; options: SegOpt
   );
 }
 
-export default function ImageSettingsPanel({ value, onChange, pdf = false }: Props) {
+export default function ImageSettingsPanel({ value, onChange, pdf = false, hasOverride, onSetDefault, onResetBook }: Props) {
   const webtoon = value.mode === "webtoon";
   // 连续滚动（webtoon 枚举）下分页专属项本就置灰；pdf 再叠加 PDF 未实现项
   const off = webtoon || pdf;
@@ -179,6 +184,36 @@ export default function ImageSettingsPanel({ value, onChange, pdf = false }: Pro
             );
           })}
         </div>
+      </div>
+
+      {/* G-1/G-2 偏好默认：当前生效配置 → 新书默认；本书覆盖 → 回默认（与 EPUB SettingsPanel 同款心智；样式内联：weread.css 本批禁改） */}
+      <div
+        className="wr-pref-defaults"
+        style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", paddingTop: 10, borderTop: "1px solid var(--wr-hairline)" }}
+      >
+        {hasOverride ? (
+          <span
+            className="wr-pref-chip"
+            style={{ fontSize: 12, color: "var(--wr-muted)", border: "1px solid var(--wr-hairline)", borderRadius: 999, padding: "2px 8px" }}
+          >
+            本书已单独设置
+          </span>
+        ) : null}
+        <button
+          type="button"
+          className="wr-btn wr-btn-primary"
+          onClick={() => {
+            onSetDefault();
+            showToast("新书将使用此配置");
+          }}
+        >
+          设为我的默认
+        </button>
+        {hasOverride ? (
+          <button type="button" className="wr-btn" onClick={onResetBook}>
+            本书恢复默认
+          </button>
+        ) : null}
       </div>
     </div>
   );

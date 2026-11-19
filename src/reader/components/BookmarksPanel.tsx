@@ -7,12 +7,19 @@ export default function BookmarksPanel(props: {
   onAdd: () => void;
   onOpen: (cfi: string) => void;
   onDelete: (id: string) => void;
+  /** D-4：清空本书书签（一次确认由 ReaderPage 提供） */
+  onClear?: () => void;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <div style={{ fontWeight: 600 }}>书签</div>
         <div style={{ flex: 1 }} />
+        {props.onClear && props.items.length > 0 ? (
+          <button className="wr-btn wr-btn-danger" onClick={props.onClear}>
+            清空
+          </button>
+        ) : null}
         <button className="wr-btn wr-btn-primary" onClick={props.onAdd}>
           添加
         </button>

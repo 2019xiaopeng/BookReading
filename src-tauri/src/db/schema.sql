@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS books (
   deleted_at INTEGER NULL,
   description TEXT NULL,
   content_chars INTEGER NULL,
-  file_size INTEGER NULL
+  file_size INTEGER NULL,
+  manual_status TEXT NULL
 );
 
 CREATE TABLE IF NOT EXISTS reading_state (

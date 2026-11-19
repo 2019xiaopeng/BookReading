@@ -1,11 +1,11 @@
 import { useEffect } from "react";
 import { RouterProvider } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 
 import { router } from "./app/router";
-import { DialogHost, showChoice } from "./ui/dialog";
+import { DialogHost } from "./ui/dialog";
+import { handleCloseRequest } from "./ui/closeAction";
 import { logFrontend } from "./tauri/frontendLog";
 
 export default function App() {
@@ -28,27 +28,11 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // 批次19：✕ 拦截（Rust prevent_close 后 emit）→ 三选：最小化到托盘 / 退出 / 取消（Esc 或点遮罩）
+  // 批次19：✕ 拦截（Rust prevent_close 后 emit）；v2.7.0 C-1 起行为记忆/三选弹窗收敛到 ui/closeAction
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
-    void listen("wr:close-requested", () => {
-      void (async () => {
-        const action = await showChoice("关闭 BookReading", "要退出应用，还是最小化到系统托盘？", {
-          confirmText: "退出",
-          secondaryText: "最小化到托盘",
-        });
-        if (action === "primary") {
-          await invoke("quit_app");
-        } else if (action === "secondary") {
-          try {
-            await getCurrentWindow().hide();
-          } catch (e) {
-            logFrontend(`app: hide window failed ${String(e)}`);
-          }
-        }
-      })();
-    })
+    void listen("wr:close-requested", () => void handleCloseRequest())
       .then((f) => {
         if (disposed) f();
         else unlisten = f;

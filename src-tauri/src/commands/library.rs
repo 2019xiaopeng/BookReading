@@ -72,8 +72,8 @@ pub(crate) fn atomic_write_to(tmp: &Path, final_path: &Path, bytes: &[u8]) -> Re
 
 pub(crate) fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO books (id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite, format, page_count, shelf_id, sort_order, deleted_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        "INSERT INTO books (id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite, format, page_count, shelf_id, sort_order, deleted_at, file_size, manual_status)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             book.id,
             book.title,
@@ -87,7 +87,9 @@ pub(crate) fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite
             book.page_count,
             book.shelf_id,
             book.sort_order,
-            book.deleted_at
+            book.deleted_at,
+            book.file_size,
+            book.manual_status
         ],
     )?;
     Ok(())
@@ -97,7 +99,7 @@ pub(crate) fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Erro
     let mut stmt = conn.prepare(
         "SELECT b.id, b.title, b.author, b.cover_path, b.library_path, b.added_at, b.last_opened_at,
                b.is_favorite, b.note, b.pinned_at, b.format, b.page_count, b.shelf_id, b.sort_order, b.deleted_at, r.percent,
-               b.description, b.content_chars, b.file_size
+               b.description, b.content_chars, b.file_size, b.manual_status
          FROM books b LEFT JOIN reading_state r ON r.book_id = b.id
          WHERE b.deleted_at IS NULL
          ORDER BY (b.pinned_at IS NULL) ASC, COALESCE(b.pinned_at, 0) DESC, COALESCE(b.last_opened_at, b.added_at) DESC",
@@ -125,6 +127,7 @@ pub(crate) fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Erro
                 description: row.get(16)?,
                 content_chars: row.get(17)?,
                 file_size: row.get(18)?,
+                manual_status: row.get(19)?,
                 tags: Vec::new(),
             })
         })?
@@ -182,7 +185,7 @@ pub(crate) fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book,
     conn.query_row(
         "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at,
                is_favorite, note, pinned_at, format, page_count, shelf_id, sort_order, deleted_at,
-               description, content_chars, file_size
+               description, content_chars, file_size, manual_status
          FROM books
          WHERE id = ?1",
         [book_id],
@@ -207,6 +210,7 @@ pub(crate) fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book,
                 description: row.get(15)?,
                 content_chars: row.get(16)?,
                 file_size: row.get(17)?,
+                manual_status: row.get(18)?,
                 tags: Vec::new(),
             })
         },
@@ -302,6 +306,56 @@ pub fn get_book(app: tauri::AppHandle, book_id: String) -> Result<Option<Book>, 
     }
 }
 
+// v2.7 M-1/M-2 导入方式决策（纯函数便于单测）：txt 忽略 mode 必须转换复制；reference 仅 EPUB/PDF 允许
+#[derive(Debug, PartialEq, Eq)]
+enum ImportKind {
+    ConvertTxt,
+    Copy,
+    Move,
+    Reference,
+}
+
+fn import_kind(mode: Option<&str>, is_txt: bool, is_pdf: bool, ext: &str) -> Result<ImportKind, String> {
+    let mode = mode.unwrap_or("copy");
+    if !matches!(mode, "copy" | "move" | "reference") {
+        return Err(format!("未知导入方式: {mode}"));
+    }
+    if is_txt {
+        return Ok(ImportKind::ConvertTxt);
+    }
+    if !is_pdf && ext != "epub" {
+        return Err("暂不支持该格式".to_string());
+    }
+    Ok(match mode {
+        "move" => ImportKind::Move,
+        "reference" => ImportKind::Reference,
+        _ => ImportKind::Copy,
+    })
+}
+
+// 扩展名小写归一（审计 #3）：只动扩展名不动文件名其余部分；folder 漫画路径不经此函数。
+// Windows 路径大小写不敏感，归一后仍可解析，且与 .opt/格式探测的小写口径一致。
+fn lowercase_ext(p: &str) -> String {
+    match Path::new(p).extension().and_then(|e| e.to_str()) {
+        Some(e) if e.chars().any(|c| c.is_ascii_uppercase()) => {
+            format!("{}{}", p.strip_suffix(e).unwrap_or(p), e.to_lowercase())
+        }
+        _ => p.to_string(),
+    }
+}
+
+// M-1 move 的前置闸：复制后字节数与源一致才算入库成功（fs::copy 已保证写全，防半途截断）
+fn copy_verified(src: &str, tmp: &Path, final_path: &Path) -> Result<u64, String> {
+    let want = fs::metadata(src).map_err(|e| format!("failed to read source: {e}"))?.len();
+    atomic_copy_to(src, tmp, final_path)?;
+    let got = fs::metadata(final_path).map_err(|e| format!("failed to read copy: {e}"))?.len();
+    if got != want {
+        let _ = fs::remove_file(final_path);
+        return Err(format!("复制校验失败（源 {want}B ≠ 副本 {got}B）"));
+    }
+    Ok(got)
+}
+
 #[tauri::command(async)]
 pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book, String> {
     let book_id = Uuid::new_v4().to_string();
@@ -332,20 +386,27 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
     // PDF（魔数优先，扩展名兜底）：原样入库 format='pdf'，无封面（文字卡）、页数由前端 pdfjs 读取
     let is_pdf = head.starts_with(b"%PDF-") || ext.as_deref() == Some("pdf");
 
-    let final_book_abs: PathBuf;
-    let tmp_book_abs: PathBuf;
+    let kind =
+        import_kind(req.mode.as_deref(), is_txt, is_pdf, ext.as_deref().unwrap_or(""))
+            .map_err(|e| format!("{}: {e}", req.source_path))?;
+
+    let final_book_abs: PathBuf; // reference 模式下指向源文件（只读，绝不做删除清理）
     let mut book_format: Option<String> = None;
     let library_path: String;
-    if is_pdf {
-        final_book_abs = books_dir.join(format!("{book_id}.pdf"));
-        tmp_book_abs = books_dir.join(format!("{book_id}.pdf.part"));
-        atomic_copy_to(&req.source_path, &tmp_book_abs, &final_book_abs)
-            .map_err(|e| format!("failed to copy pdf into library: {e}"))?;
-        book_format = Some("pdf".to_string());
-        library_path = format!("library/books/{book_id}.pdf");
+    let file_size: i64;
+    if matches!(kind, ImportKind::Reference) {
+        // M-2 原地引用：不复制，library_path=源绝对路径（扩展名小写归一）
+        library_path = lowercase_ext(&req.source_path);
+        final_book_abs = PathBuf::from(&req.source_path);
+        if is_pdf {
+            book_format = Some("pdf".to_string());
+        }
+        file_size = fs::metadata(&req.source_path)
+            .map_err(|e| format!("failed to read {}: {e}", req.source_path))?
+            .len() as i64;
     } else if is_txt {
         final_book_abs = books_dir.join(format!("{book_id}.epub"));
-        tmp_book_abs = books_dir.join(format!("{book_id}.epub.part"));
+        let tmp_book_abs = books_dir.join(format!("{book_id}.epub.part"));
         let bytes = fs::read(&req.source_path)
             .map_err(|e| format!("failed to read {}: {e}", req.source_path))?;
         let text = txt::decode_txt(&bytes).map_err(|e| format!("{}: {e}", req.source_path))?;
@@ -354,14 +415,18 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         atomic_write_to(&tmp_book_abs, &final_book_abs, &epub_bytes)
             .map_err(|e| format!("failed to write book into library: {e}"))?;
         library_path = format!("library/books/{book_id}.epub");
-    } else if ext.as_deref() == Some("epub") {
-        final_book_abs = books_dir.join(format!("{book_id}.epub"));
-        tmp_book_abs = books_dir.join(format!("{book_id}.epub.part"));
-        atomic_copy_to(&req.source_path, &tmp_book_abs, &final_book_abs)
-            .map_err(|e| format!("failed to copy epub into library: {e}"))?;
-        library_path = format!("library/books/{book_id}.epub");
+        file_size = epub_bytes.len() as i64;
+    } else if is_pdf {
+        final_book_abs = books_dir.join(format!("{book_id}.pdf"));
+        let tmp_book_abs = books_dir.join(format!("{book_id}.pdf.part"));
+        file_size = copy_verified(&req.source_path, &tmp_book_abs, &final_book_abs)? as i64;
+        book_format = Some("pdf".to_string());
+        library_path = format!("library/books/{book_id}.pdf");
     } else {
-        return Err(format!("{}: 暂不支持该格式", req.source_path));
+        final_book_abs = books_dir.join(format!("{book_id}.epub"));
+        let tmp_book_abs = books_dir.join(format!("{book_id}.epub.part"));
+        file_size = copy_verified(&req.source_path, &tmp_book_abs, &final_book_abs)? as i64;
+        library_path = format!("library/books/{book_id}.epub");
     }
 
     let extracted = if is_txt || is_pdf {
@@ -387,7 +452,9 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
                 let final_cover_abs = covers_dir.join(format!("{book_id}.{ext}"));
                 let tmp_cover_abs = covers_dir.join(format!("{book_id}.{ext}.part"));
                 if let Err(e) = atomic_write_to(&tmp_cover_abs, &final_cover_abs, bytes) {
-                    let _ = fs::remove_file(&final_book_abs);
+                    if !matches!(kind, ImportKind::Reference) {
+                        let _ = fs::remove_file(&final_book_abs);
+                    }
                     return Err(format!("failed to write cover: {e}"));
                 }
                 Some(final_cover_abs)
@@ -400,7 +467,8 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         .as_ref()
         .and_then(|p| p.extension().and_then(|e| e.to_str()))
         .map(|ext| format!("library/covers/{book_id}.{ext}"));
-    let made_epub = library_path.ends_with(".epub");
+    // 引用书的 .opt 无处消费（前端按源路径探测且派生文件不得写用户目录），不做内联优化
+    let made_epub = !matches!(kind, ImportKind::Reference) && library_path.ends_with(".epub");
 
     let book = Book {
         id: book_id,
@@ -421,13 +489,16 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         deleted_at: None,
         description: None,
         content_chars: None,
-        file_size: None,
+        file_size: Some(file_size),
+        manual_status: None,
         tags: Vec::new(),
     };
 
     let conn = db::open_db(&app)?;
     if let Err(e) = insert_book(&conn, &book) {
-        let _ = fs::remove_file(&final_book_abs);
+        if !matches!(kind, ImportKind::Reference) {
+            let _ = fs::remove_file(&final_book_abs);
+        }
         if let Some(p) = cover_abs.as_ref() {
             let _ = fs::remove_file(p);
         }
@@ -443,6 +514,13 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
     if made_epub {
         if let Err(e) = super::epub_optimize::optimize_epub_file(&final_book_abs) {
             eprintln!("[epub-opt] {}: {e}", final_book_abs.display());
+        }
+    }
+
+    // M-1 move：入库全部成功后源文件送 Windows 回收站；失败只记日志（库内副本已完整，源残留无害）
+    if matches!(kind, ImportKind::Move) {
+        if let Err(e) = trash::delete(&req.source_path) {
+            eprintln!("[import] 移动导入删源失败 {}: {e}", req.source_path);
         }
     }
 
@@ -514,9 +592,34 @@ pub fn update_book_metadata(app: tauri::AppHandle, req: UpdateBookMetadataReques
     fetch_book_by_id(&conn, &req.book_id).map_err(|e| format!("failed to fetch book: {e}"))
 }
 
+/// S-4 手动阅读状态覆盖：None=恢复自动推导；枚举外的值拒绝
+fn validate_manual_status(status: &Option<String>) -> Result<(), String> {
+    match status.as_deref() {
+        None => Ok(()),
+        Some("unread" | "reading" | "finished") => Ok(()),
+        Some(s) => Err(format!("未知阅读状态: {s}")),
+    }
+}
+
 #[tauri::command(async)]
-pub fn delete_book(app: tauri::AppHandle, book_id: String) -> Result<(), String> {
+pub fn set_book_manual_status(
+    app: tauri::AppHandle,
+    book_id: String,
+    status: Option<String>,
+) -> Result<Book, String> {
+    validate_manual_status(&status)?;
     let conn = db::open_db(&app)?;
+    let n = conn
+        .execute("UPDATE books SET manual_status = ?2 WHERE id = ?1", params![book_id, status])
+        .map_err(|e| format!("failed to set manual status: {e}"))?;
+    if n == 0 {
+        return Err(format!("书 {book_id} 不存在"));
+    }
+    fetch_book_by_id(&conn, &book_id).map_err(|e| format!("failed to fetch book: {e}"))
+}
+
+#[tauri::command(async)]
+pub fn delete_book(app: tauri::AppHandle, book_id: String) -> Result<(), String> {    let conn = db::open_db(&app)?;
     let (library_path, cover_path) =
         delete_book_by_id(&conn, &book_id).map_err(|e| format!("failed to load book paths: {e}"))?;
 
@@ -935,8 +1038,8 @@ pub struct LibraryHealth {
 }
 
 /// P3 书库体检（只读）：重复导入 / 源失链 / 悬空封面，均只统计未删除书。
-/// 重复判定与前端 buildDedupIndex 同口径：文件夹漫画=小写全路径一组；
-/// 库内书=file_size 非空时按 basename 与标题两种键各挂一份（复制入库的 basename 是 uuid，标题更贴近源文件名）。
+/// 重复判定与前端 buildDedupIndex 同口径：文件夹漫画=小写全路径一组；库内书=标题+大小一组
+/// （复制入库的 basename 是 uuid，永不重复，不再按文件名分组）。
 // core takes library_root so tests can run against a tempdir instead of real library
 fn scan_health(conn: &Connection, library_root: &Path) -> Result<LibraryHealth, String> {
     let rows: Vec<(String, Option<String>, Option<String>, String, Option<i64>)> = conn
@@ -965,13 +1068,6 @@ fn scan_health(conn: &Connection, library_root: &Path) -> Result<LibraryHealth, 
                 });
             }
             if let Some(size) = file_size {
-                let base = lp.rsplit('/').next().unwrap_or_default();
-                if !base.is_empty() {
-                    dup.entry(format!("b|{}|{size}", base.to_lowercase()))
-                        .or_insert_with(|| (base.to_string(), Vec::new()))
-                        .1
-                        .push(id.clone());
-                }
                 let t = title.clone().unwrap_or_default().trim().to_lowercase();
                 if !t.is_empty() {
                     dup.entry(format!("t|{t}|{size}"))
@@ -1053,6 +1149,7 @@ mod tests {
             description: None,
             content_chars: None,
             file_size: None,
+            manual_status: None,
             tags: Vec::new(),
         };
 
@@ -1098,6 +1195,7 @@ mod tests {
             description: None,
             content_chars: None,
             file_size: None,
+            manual_status: None,
             tags: Vec::new(),
         };
 
@@ -1149,6 +1247,7 @@ mod tests {
             description: None,
             content_chars: None,
             file_size: None,
+            manual_status: None,
             tags: Vec::new(),
         }
     }
@@ -1604,5 +1703,84 @@ mod tests {
         assert_eq!(h.missing_covers[0].cover_path, "library/covers/gone.png");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // ---- v2.7 M-1/M-2 导入方式 ----
+
+    #[test]
+    fn import_kind_modes() {
+        use ImportKind::*;
+        // 缺省/显式 copy
+        assert_eq!(import_kind(None, false, false, "epub").unwrap(), Copy);
+        assert_eq!(import_kind(Some("copy"), false, true, "").unwrap(), Copy);
+        assert_eq!(import_kind(Some("move"), false, false, "epub").unwrap(), Move);
+        assert_eq!(import_kind(Some("reference"), false, true, "").unwrap(), Reference);
+        assert_eq!(import_kind(Some("reference"), false, false, "epub").unwrap(), Reference);
+        // txt 忽略 mode：必须转换复制
+        assert_eq!(import_kind(Some("move"), true, false, "txt").unwrap(), ConvertTxt);
+        assert_eq!(import_kind(Some("reference"), true, false, "txt").unwrap(), ConvertTxt);
+        // reference 不放行 txt/未知格式；未知 mode 拒绝
+        assert!(import_kind(Some("reference"), false, false, "txt").is_err());
+        assert!(import_kind(Some("copy"), false, false, "mobi").is_err());
+        assert!(import_kind(Some("fly"), false, false, "epub").is_err());
+    }
+
+    #[test]
+    fn lowercase_ext_only_touches_extension() {
+        assert_eq!(lowercase_ext(r"F:\小说\BOOK.EPUB"), r"F:\小说\BOOK.epub");
+        assert_eq!(lowercase_ext("a/b/c.epub"), "a/b/c.epub"); // 已小写不动
+        assert_eq!(lowercase_ext("noext"), "noext");
+    }
+
+    #[test]
+    fn copy_verified_matches_source_size() {
+        let dir = temp_bg_dir("move");
+        let src = dir.join("src.epub");
+        fs::write(&src, vec![7u8; 4096]).unwrap();
+        let tmp = dir.join("tmp.part");
+        let final_p = dir.join("out.epub");
+        assert_eq!(copy_verified(src.to_str().unwrap(), &tmp, &final_p).unwrap(), 4096);
+        assert_eq!(fs::metadata(&final_p).unwrap().len(), 4096);
+        // 源不存在 → 报错且不落副本
+        assert!(copy_verified(dir.join("gone.epub").to_str().unwrap(), &tmp, &dir.join("x.epub")).is_err());
+        assert!(!dir.join("x.epub").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reference_import_persists_absolute_path_and_size() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(db::SCHEMA_SQL).unwrap();
+        let mut book = test_book("r1", 1);
+        book.library_path = r"F:\仓库\极品家丁.epub".to_string();
+        book.file_size = Some(169_000_000);
+        insert_book(&conn, &book).unwrap();
+
+        let got = fetch_book_by_id(&conn, "r1").unwrap();
+        assert_eq!(got.library_path, r"F:\仓库\极品家丁.epub");
+        assert_eq!(got.file_size, Some(169_000_000));
+        assert_eq!(got.manual_status, None);
+    }
+
+    // ---- v2.7 S-4 手动状态 ----
+
+    #[test]
+    fn manual_status_column_roundtrip_and_validation() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(db::SCHEMA_SQL).unwrap();
+        insert_book(&conn, &test_book("m1", 1)).unwrap();
+        conn.execute(
+            "UPDATE books SET manual_status = 'finished' WHERE id = 'm1'",
+            [],
+        )
+        .unwrap();
+        let got = fetch_book_by_id(&conn, "m1").unwrap();
+        assert_eq!(got.manual_status.as_deref(), Some("finished"));
+        // 枚举外值在命令层拒绝
+        assert!(validate_manual_status(&Some("done".to_string())).is_err());
+        assert!(validate_manual_status(&Some("READING".to_string())).is_err());
+        assert!(validate_manual_status(&Some(String::new())).is_err());
+        assert_eq!(validate_manual_status(&Some("reading".to_string())), Ok(()));
+        assert_eq!(validate_manual_status(&None), Ok(()));
     }
 }

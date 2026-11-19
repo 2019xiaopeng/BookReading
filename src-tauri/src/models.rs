@@ -21,6 +21,9 @@ pub struct Book {
     pub description: Option<String>,
     pub content_chars: Option<i64>,
     pub file_size: Option<i64>,
+    // S-4 手动阅读状态覆盖：NULL=自动推导（unread/reading/finished）
+    #[serde(default)]
+    pub manual_status: Option<String>,
     // 仅 list_books（fetch_books）填充；其余构造点为空
     #[serde(default)]
     pub tags: Vec<BookTagBrief>,
@@ -58,6 +61,9 @@ pub struct ImportBookRequest {
     pub author: Option<String>,
     pub cover_bytes_base64: Option<String>,
     pub cover_ext: Option<String>,
+    // v2.7 M-1/M-2 导入方式：copy（默认）/move（复制校验后源送回收站）/reference（原地引用，仅 EPUB/PDF）；txt 忽略
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -4,7 +4,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerE
 import type { Book } from "../tauri/invoke";
 import { useCoverPriority } from "./useCoverUrls";
 import { formatAuthor, formatTitle, progressText } from "./bookFormat";
-import { IconMore } from "../ui/icons";
+import { IconHeart, IconMore } from "../ui/icons";
 
 /**
  * 书卡（原 LibraryPage 内联 map 抽出 + React.memo）：
@@ -17,6 +17,10 @@ export type BookCardProps = {
   coverUrl?: string;
   /** E3 阅读时长 chip 文案（如“已读 3 小时 20 分”）；null/缺省不显示 */
   readingTimeText?: string | null;
+  /** F-1 收藏页快捷取消收藏（hover 心形钮）；缺省不显示 */
+  favoriteQuickToggle?: (book: Book) => void;
+  /** W-2 搜索态书架路径小字（如“漫画 / yuuhui玉汇”）；缺省不显示 */
+  shelfPathText?: string;
   selectMode: boolean;
   selected: boolean;
   dragging: boolean;
@@ -30,7 +34,7 @@ export type BookCardProps = {
 };
 
 function BookCardImpl(props: BookCardProps) {
-  const { book, coverUrl, readingTimeText, selectMode, selected, dragging, pop, loading } = props;
+  const { book, coverUrl, readingTimeText, favoriteQuickToggle, shelfPathText, selectMode, selected, dragging, pop, loading } = props;
   const { onCardPointerDown, onCardActivate, onCardSelectToggle, onCardMenu } = props;
   const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
   // 图片就绪标记：url 变化（换封面）后自动回到未就绪态，重新走淡入
@@ -114,6 +118,11 @@ function BookCardImpl(props: BookCardProps) {
       <div className="wr-meta">
         <div className="wr-title" title={formatTitle(book)}>{formatTitle(book)}</div>
         <div className="wr-author" title={`${formatAuthor(book)} · ${progressText(book)}`}>{formatAuthor(book)}</div>
+        {shelfPathText ? (
+          <div className="wr-shelf-path" title={shelfPathText} style={{ fontSize: 12, color: "var(--wr-muted)" }}>
+            {shelfPathText}
+          </div>
+        ) : null}
         {readingTimeText ? (
           <div className="wr-chip-row">
             <div className="wr-chip">
@@ -126,6 +135,20 @@ function BookCardImpl(props: BookCardProps) {
       {/* §11.6：置顶/详情/移出收进 ⋯ 菜单；置顶卡常显 ⋯ 保留可发现性 */}
       {!selectMode ? (
         <div className="wr-card-tools" data-show={!!book.pinned_at}>
+          {favoriteQuickToggle ? (
+            <button
+              className="wr-mini-btn"
+              aria-label="取消收藏"
+              title="取消收藏"
+              disabled={loading}
+              onClick={(e) => {
+                e.stopPropagation();
+                favoriteQuickToggle(book);
+              }}
+            >
+              <IconHeart width={16} height={16} fill="currentColor" />
+            </button>
+          ) : null}
           <button
             className="wr-mini-btn"
             aria-label="更多操作"

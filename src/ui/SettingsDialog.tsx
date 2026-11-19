@@ -1,16 +1,35 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
-import { clearCache, getSettings, migrateLibraryRoot, reextractAllCovers, removeOldLibrary, storageStats, type StorageStats } from "../tauri/invoke";
+import { clearCache, getSettings, migrateLibraryRoot, reextractAllCovers, removeOldLibrary, setSetting, storageStats, type ImportMode, type StorageStats, type UpdateInfo } from "../tauri/invoke";
 import { formatFileSize } from "../library/tags";
 import { BOOKS_CHANGED_EVENT } from "../library/importRunner";
 import HealthScanDialog from "../library/HealthScanDialog";
 import { invalidateAllCoverUrls } from "../library/useCoverUrls";
 import { notifyBackgroundChanged, resetBackgroundCache } from "./appBackground";
-import { showAlert, showConfirm } from "./dialog";
+import { showAlert, showChoice, showConfirm } from "./dialog";
+import { IconUpdate } from "./icons";
+import { resolveCloseAction, setCloseBehavior, type CloseBehavior } from "./closeAction";
+import {
+  checkForUpdateManually,
+  downloadUpdateWithProgress,
+  installUpdateAndQuit,
+  releasePageFromAssetUrl,
+  RELEASES_URL,
+} from "./updater";
+import { showToast } from "./toast";
 
 const RETENTION_LABELS: Record<string, string> = { "7": "7 天", "30": "30 天", "0": "永不" };
+
+// M-3 导入方式：写 settings 键 import_mode（导入管线读）；小字说明各语义
+const IMPORT_MODE_OPTIONS: { value: ImportMode; label: string; hint: string }[] = [
+  { value: "copy", label: "复制入库（默认）", hint: "复制一份入库，源文件保留原处" },
+  { value: "move", label: "移动（源文件入回收站）", hint: "复制校验通过后把源文件移入系统回收站" },
+  { value: "reference", label: "原地引用（EPUB/PDF）", hint: "不复制，直接引用原路径；移动或删除源文件会失链（体检可重链接）" },
+];
 
 // 快捷键静态表（与 ReaderPage.onKeyDown / LibraryPage 键盘导航对齐）
 const READER_KEYS: [string, string][] = [
@@ -40,16 +59,36 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
+  // v2.7.0：导入方式（M-3）/ 关闭按钮行为（C-2）/ 自动检查更新（U-3）
+  const [importMode, setImportMode] = useState<ImportMode>("copy");
+  const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>("ask");
+  const [autoUpdateCheck, setAutoUpdateCheck] = useState(true);
+  // U-1/U-2 手动检查更新：idle → checking →（弹窗确认后）downloading
+  const [updatePhase, setUpdatePhase] = useState<"idle" | "checking" | "downloading">("idle");
+  const [dlProgress, setDlProgress] = useState<{ downloaded: number; total: number } | null>(null);
+  // H-5 后台插图优化进度：事件仅在优化进行中持续发，无事件/已完成时隐藏
+  const [optProgress, setOptProgress] = useState<{ done: number; total: number } | null>(null);
 
   const reload = async () => {
     const [s, settings] = await Promise.all([storageStats(), getSettings()]);
     setStats(s);
     setRetention(RETENTION_LABELS[settings.trash_retention_days ?? "30"] ?? `${settings.trash_retention_days} 天`);
+    setImportMode(settings.import_mode === "move" || settings.import_mode === "reference" ? settings.import_mode : "copy");
+    setCloseBehaviorState(resolveCloseAction(settings.close_action));
+    setAutoUpdateCheck(settings.update_check !== "off");
   };
 
   useEffect(() => {
     reload().catch((e) => showAlert("读取存储信息失败", String(e)));
     getVersion().then(setVersion).catch(() => setVersion("未知"));
+  }, []);
+
+  // H-5：epub-opt-progress {done,total}——存储组小字显示后台优化副本进度
+  useEffect(() => {
+    const un = listen<{ done: number; total: number }>("epub-opt-progress", (e) => setOptProgress(e.payload));
+    return () => {
+      void un.then((f) => f());
+    };
   }, []);
 
   async function clearCats(cats: string[]) {
@@ -108,6 +147,68 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
       await showAlert("迁移失败", String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  // U-1/U-2：打开发布页（opener 插件；失败退复制链接）
+  async function openReleasePage(info: UpdateInfo): Promise<void> {
+    const url = info.assetUrl ? releasePageFromAssetUrl(info.assetUrl) : RELEASES_URL;
+    try {
+      await openUrl(url);
+    } catch {
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast("已复制发布页链接");
+      } catch {
+        await showAlert("打开发布页失败", url);
+      }
+    }
+  }
+
+  // U-1/U-2：手动检查 → 已是最新 toast / 新版弹窗（下载并安装 · 打开发布页）；下载带进度，完成后确认重启安装
+  async function onUpdateCheck() {
+    if (busy || updatePhase !== "idle") return;
+    setUpdatePhase("checking");
+    try {
+      const info = await checkForUpdateManually();
+      if (!info.hasUpdate) {
+        showToast("当前已是最新版本");
+        return;
+      }
+      const notes = info.notes.trim().split("\n").slice(0, 8).join("\n");
+      const size = info.assetSize != null ? `（安装包约 ${formatFileSize(info.assetSize)}）` : "";
+      const act = await showChoice(`发现新版本 v${info.latest}`, `当前 ${info.current} → v${info.latest}${size}\n\n${notes}`, {
+        confirmText: "下载并安装",
+        secondaryText: "打开发布页",
+      });
+      if (act === "secondary") {
+        await openReleasePage(info);
+        return;
+      }
+      if (act !== "primary") return;
+      if (!info.assetUrl) {
+        await openReleasePage(info); // 无安装包资产（如仅源码发布）：只能去发布页
+        return;
+      }
+      setUpdatePhase("downloading");
+      setDlProgress(null);
+      const installerPath = await downloadUpdateWithProgress(info.assetUrl, setDlProgress);
+      const ok = await showConfirm("下载完成", `v${info.latest} 安装包已就绪，立即重启并安装？`, { confirmText: "立即重启安装" });
+      if (ok) {
+        setUpdatePhase("idle");
+        try {
+          await installUpdateAndQuit(installerPath); // 成功路径应用退出，弹窗无需回显
+        } catch (e) {
+          await showAlert("启动安装器失败", `${String(e)}\n\n可从发布页手动下载安装。`);
+        }
+        return;
+      }
+      showToast("安装包已下载，可稍后重新检查更新安装");
+    } catch (e) {
+      await showAlert("检查更新失败", String(e));
+    } finally {
+      setUpdatePhase("idle");
+      setDlProgress(null);
     }
   }
 
@@ -217,6 +318,32 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
+        <div className="wr-settings-row">
+          <span className="wr-settings-label">导入方式</span>
+          <span
+            className="wr-settings-value"
+            style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4, whiteSpace: "normal" }}
+          >
+            <select
+              className="wr-select"
+              value={importMode}
+              aria-label="导入方式"
+              onChange={(e) => {
+                const v = e.currentTarget.value as ImportMode;
+                setImportMode(v);
+                void setSetting("import_mode", v);
+              }}
+            >
+              {IMPORT_MODE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <span className="wr-settings-hint">{IMPORT_MODE_OPTIONS.find((o) => o.value === importMode)?.hint}</span>
+          </span>
+        </div>
+
         {rows.map((r) => (
           <div className="wr-settings-row" key={r.key}>
             <span className="wr-settings-label">
@@ -235,6 +362,16 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
             </button>
           </div>
         ))}
+
+        {/* H-5 后台插图优化进度：事件进行中才显示（无事件/已完成隐藏） */}
+        {optProgress && optProgress.done < optProgress.total ? (
+          <div className="wr-settings-row" aria-live="polite">
+            <span className="wr-settings-label">后台任务</span>
+            <span className="wr-settings-value">
+              插图优化副本 {optProgress.done}/{optProgress.total}
+            </span>
+          </div>
+        ) : null}
 
         <div className="wr-settings-row wr-settings-sweep">
           <span className="wr-settings-label">
@@ -280,10 +417,61 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           <span className="wr-settings-value">{retention}（在回收站页修改）</span>
         </div>
 
+        <div className="wr-settings-group">窗口</div>
+        <div className="wr-settings-row">
+          <span className="wr-settings-label">关闭按钮行为</span>
+          <span className="wr-settings-value">
+            <select
+              className="wr-select"
+              value={closeBehavior}
+              aria-label="关闭按钮行为"
+              onChange={(e) => {
+                const v = e.currentTarget.value as CloseBehavior;
+                setCloseBehaviorState(v);
+                setCloseBehavior(v);
+              }}
+            >
+              <option value="ask">每次询问</option>
+              <option value="tray">最小化到托盘</option>
+              <option value="exit">退出</option>
+            </select>
+          </span>
+        </div>
+
         <div className="wr-settings-group">关于</div>
         <div className="wr-settings-row">
           <span className="wr-settings-label">版本</span>
           <span className="wr-settings-value">{version || "…"}</span>
+        </div>
+        <div className="wr-settings-row">
+          <span className="wr-settings-label">检查更新</span>
+          <span className="wr-settings-value">
+            {updatePhase === "downloading" && dlProgress
+              ? `下载中 ${(dlProgress.downloaded / 1048576).toFixed(1)}/${(dlProgress.total / 1048576).toFixed(1)} MB`
+              : updatePhase === "checking"
+                ? "正在检查…"
+                : "GitHub Releases"}
+          </span>
+          <button className="wr-btn wr-btn-primary" disabled={busy || updatePhase !== "idle"} onClick={() => void onUpdateCheck()}>
+            <IconUpdate />
+            {updatePhase === "idle" ? "检查更新" : updatePhase === "checking" ? "检查中…" : "下载中…"}
+          </button>
+        </div>
+        <div className="wr-settings-row">
+          <span className="wr-settings-label">自动检查</span>
+          <label className="wr-settings-check">
+            <input
+              type="checkbox"
+              checked={autoUpdateCheck}
+              aria-label="启动时自动检查更新"
+              onChange={(e) => {
+                const on = e.currentTarget.checked;
+                setAutoUpdateCheck(on);
+                void setSetting("update_check", on ? "on" : "off");
+              }}
+            />
+            启动时静默检查，发现新版在设置入口提示
+          </label>
         </div>
         <div className="wr-settings-row">
           <span className="wr-settings-label">数据库</span>

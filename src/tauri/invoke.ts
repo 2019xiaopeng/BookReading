@@ -164,6 +164,12 @@ export async function optimizeEpubNow(bookId: string): Promise<boolean> {
   return invoke<boolean>("optimize_epub_now", { bookId });
 }
 
+// M-2 引用书读取桥：按 book_id 读整本书字节（库内相对或绝对路径引用均支持）
+export async function readBookFile(bookId: string): Promise<Uint8Array> {
+  const res = await invoke<ArrayBuffer | number[]>("read_book_file", { bookId });
+  return new Uint8Array(res);
+}
+
 // 应用内更新（U-1/U-2）：GitHub Releases 检查/下载/运行安装器
 export type UpdateInfo = {
   current: string;

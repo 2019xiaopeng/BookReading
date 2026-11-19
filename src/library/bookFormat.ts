@@ -12,3 +12,9 @@ export function formatAuthor(book: Book): string {
 export function progressText(book: Book): string {
   return typeof book.reading_percent === "number" ? `读到 ${Math.round(book.reading_percent * 100)}%` : "未读";
 }
+
+/** W-1 搜索命中判定：书名 + 作者 + 文件名（library_path basename）。q 需已 lowercase（与调用方口径一致）。 */
+export function bookMatchesQuery(book: Book, q: string): boolean {
+  const file = book.library_path.split(/[\\/]/).pop() ?? "";
+  return `${formatTitle(book)} ${formatAuthor(book)} ${file}`.toLowerCase().includes(q);
+}

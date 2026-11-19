@@ -38,7 +38,7 @@ pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
         fs::create_dir_all(dir).map_err(|e| format!("failed to create db dir: {e}"))?;
     }
 
-    let conn = Connection::open(db_path).map_err(|e| format!("failed to open sqlite: {e}"))?;
+    let conn = Connection::open(&db_path).map_err(|e| format!("failed to open sqlite: {e}"))?;
     // WAL：迁移复制 db 文件前会先 checkpoint，主文件始终自洽；busy_timeout 容忍后台线程的短暂并发
     conn.execute_batch(
         "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;",
@@ -52,6 +52,10 @@ pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
     migrations::ensure_highlight_text(&conn)?;
     migrations::migrate_book_paths_to_appdata_relative(&conn, app)?;
     migrations::migrate_groups_to_shelves(&conn)?;
+    // H-7 启动滚动备份（db 有变更才复制，保留最近 3 份）；失败静默不阻断启动
+    if let Err(e) = rolling_backup(&conn, &db_path) {
+        eprintln!("[backup] {e}");
+    }
     // 回收站到期自动清理（保留期 0 = 永不）；启动失败不阻断应用
     if let Ok(library_dir) = app_paths::library_dir(app) {
         let _ = commands::shelves::purge_expired_trash(
@@ -87,6 +91,60 @@ pub fn open_db_bg(app: &tauri::AppHandle) -> Result<Connection, String> {
     Ok(conn)
 }
 
+/// H-7 启动滚动备份：db 文件 mtime 与 backup/last-backup-marker 不一致（即上次备份后有写入）时
+/// 复制一份 app-YYYYMMDD.sqlite 并更新 marker；同日重复启动覆盖当日那份；保留最近 3 份。
+/// 先 wal_checkpoint 让主文件自洽再复制。core takes db_path so tests can run against a tempdir.
+pub(crate) fn rolling_backup(conn: &Connection, db_path: &std::path::Path) -> Result<(), String> {
+    let backup_dir = db_path
+        .parent()
+        .ok_or_else(|| "db path has no parent dir".to_string())?
+        .join("backup");
+    fs::create_dir_all(&backup_dir).map_err(|e| format!("failed to create backup dir: {e}"))?;
+    // checkpoint 在读 mtime 前：有 WAL 帧落盘才算真变更，否则 mtime 不动、不重复备份
+    let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+    let mtime = fs::metadata(db_path)
+        .and_then(|m| m.modified())
+        .map_err(|e| format!("failed to read db mtime: {e}"))?;
+    let mtime_s = mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("bad mtime: {e}"))?
+        .as_secs()
+        .to_string();
+    let marker = backup_dir.join("last-backup-marker");
+    if fs::read_to_string(&marker).ok().as_deref() == Some(mtime_s.as_str()) {
+        return Ok(()); // 自上次备份后无变更
+    }
+
+    let now = OffsetDateTime::now_utc();
+    let dest = backup_dir.join(format!(
+        "app-{:04}{:02}{:02}.sqlite",
+        now.year(),
+        u8::from(now.month()),
+        now.day()
+    ));
+    fs::copy(db_path, &dest).map_err(|e| format!("failed to copy db: {e}"))?;
+    fs::write(&marker, &mtime_s).map_err(|e| format!("failed to write marker: {e}"))?;
+
+    // 保留最近 3 份（app-YYYYMMDD 字典序 = 时间序）
+    let mut backups: Vec<std::path::PathBuf> = fs::read_dir(&backup_dir)
+        .map_err(|e| format!("failed to list backups: {e}"))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().and_then(|e| e.to_str()) == Some("sqlite")
+                && p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map_or(false, |s| s.starts_with("app-"))
+        })
+        .collect();
+    backups.sort();
+    while backups.len() > 3 {
+        let oldest = backups.remove(0);
+        let _ = fs::remove_file(&oldest);
+    }
+    Ok(())
+}
+
 fn ensure_books_is_favorite_column(conn: &Connection) -> Result<(), String> {
     let mut stmt = conn
         .prepare("PRAGMA table_info(books)")
@@ -113,6 +171,8 @@ fn ensure_books_is_favorite_column(conn: &Connection) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn creates_required_tables() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -161,5 +221,74 @@ mod tests {
         ] {
             assert!(names.contains(&name.to_string()), "missing index {name}");
         }
+    }
+
+    // ---- H-7 启动滚动备份 ----
+
+    fn temp_db_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("bookreading-bk-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(dir.join("db")).unwrap();
+        dir.join("db")
+    }
+
+    #[test]
+    fn rolling_backup_copies_once_and_skips_unchanged() {
+        let db_dir = temp_db_dir();
+        let db_path = db_dir.join("app.sqlite");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(SCHEMA_SQL).unwrap();
+        } // 落盘后 mtime 固定
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            rolling_backup(&conn, &db_path).unwrap();
+        }
+        let backup_dir = db_dir.join("backup");
+        let count = |dir: &std::path::Path| -> usize {
+            fs::read_dir(dir)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("sqlite"))
+                .count()
+        };
+        assert_eq!(count(&backup_dir), 1);
+        assert!(backup_dir.join("last-backup-marker").is_file());
+        // 无变更再跑：不新增备份
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            rolling_backup(&conn, &db_path).unwrap();
+        }
+        assert_eq!(count(&backup_dir), 1);
+        let _ = fs::remove_dir_all(db_dir.parent().unwrap());
+    }
+
+    #[test]
+    fn rolling_backup_keeps_only_three_newest() {
+        let db_dir = temp_db_dir();
+        let db_path = db_dir.join("app.sqlite");
+        fs::write(&db_path, b"db").unwrap();
+        let backup_dir = db_dir.join("backup");
+        fs::create_dir_all(&backup_dir).unwrap();
+        for d in ["20260101", "20260202", "20260303", "20260404", "20260505"] {
+            fs::write(backup_dir.join(format!("app-{d}.sqlite")), d.as_bytes()).unwrap();
+        }
+        fs::write(backup_dir.join("last-backup-marker"), "0").unwrap(); // 强制视为有变更
+
+        let conn = Connection::open(&db_path).unwrap();
+        rolling_backup(&conn, &db_path).unwrap();
+
+        let mut left: Vec<String> = fs::read_dir(&backup_dir)
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.path().file_stem().and_then(|s| s.to_str()).map(String::from))
+            .filter(|s| s.starts_with("app-"))
+            .collect();
+        left.sort();
+        // 今日新备份 + 最新的两份历史（20260404/20260505），旧三份删除
+        assert_eq!(left.len(), 3);
+        assert!(left.contains(&"app-20260404".to_string()));
+        assert!(left.contains(&"app-20260505".to_string()));
+        let _ = fs::remove_dir_all(db_dir.parent().unwrap());
     }
 }

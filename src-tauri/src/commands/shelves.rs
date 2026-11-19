@@ -121,7 +121,7 @@ fn restore_books_db(conn: &Connection, ids: &[String]) -> Result<usize, rusqlite
 fn list_trash_db(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at,
-                is_favorite, note, pinned_at, format, page_count, shelf_id, sort_order, deleted_at
+                is_favorite, note, pinned_at, format, page_count, shelf_id, sort_order, deleted_at, manual_status
          FROM books WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -145,6 +145,7 @@ fn list_trash_db(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
             description: None,
             content_chars: None,
             file_size: None,
+            manual_status: row.get(15)?,
             tags: Vec::new(),
         })
     })?;

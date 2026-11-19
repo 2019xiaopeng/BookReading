@@ -92,6 +92,15 @@ export function resolveImageSettings(global: ImageReaderSettings, perBook: unkno
   return { ...global, ...parseImageSettingsOverride(perBook) };
 }
 
+/** G-1「设为我的默认」：把当前生效值中的书级字段（rtl/layout/fit/webtoonWidth/doubleOffset）写回全局；其余全局字段不动 */
+export function imageDefaultsFromEffective(global: ImageReaderSettings, effective: ImageReaderSettings): ImageReaderSettings {
+  const out = { ...global };
+  for (const k of Object.keys(parseImageSettingsOverride(effective)) as (keyof ImageSettingsOverride)[]) {
+    (out as Record<keyof ImageSettingsOverride, unknown>)[k] = effective[k];
+  }
+  return out;
+}
+
 /** 宽页预判：有页元数据时按宽/高 > WIDE_PAGE_RATIO 直接判 wide（spreads 构建不再等解码后探测换组）；元数据缺失/非法的页回 false（解码探测兜底）。 */
 export function widePagesFromMeta(meta: { width: number; height: number }[] | null, pageCount: number): boolean[] {
   const out: boolean[] = [];

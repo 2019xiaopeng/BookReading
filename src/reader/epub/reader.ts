@@ -4,7 +4,7 @@ import type { FontFamily, ReadingMode, Theme } from "../settings/types";
 import { readAppDataFile } from "../../tauri/appDataPaths";
 import type { SpreadMode } from "../settings/layoutMode";
 import { logFrontend } from "../../tauri/frontendLog";
-import { loadBookLocations, saveBookLocations } from "../../tauri/invoke";
+import { loadBookLocations, readBookFile, saveBookLocations } from "../../tauri/invoke";
 
 const loggedKeys = new Set<string>();
 
@@ -181,6 +181,11 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+/** E-4：iframe 图片懒加载仅滚动模式（纵向滚动 lazy 语义正确；分页横向分栏下永不清算→破图） */
+export function lazyImagesForFlow(flow: string): boolean {
+  return flow === "scrolled";
+}
+
 /**
  * spread 切换只改列度量不重绘当前内容，会留下按旧度量裁切的残影；
  * 统一路径：spread(mode) → clear() → display(target)。无 target（尚未渲染）时退回 resize。
@@ -287,11 +292,19 @@ export async function createReader(opts: {
   onLocationsReady?: () => void;
   onContentsPress?: () => void;
   onError?: (message: string) => void;
+  /** P-1：iframe 内 img 点击（payload=当前 blob src 与 alt；src 已是 epubjs 替换后的 blob） */
+  onImageClick?: (payload: { src: string; alt: string }) => void;
 }): Promise<ReaderController> {
   // A 的前端半：优先开导入侧生成的 .opt.epub 阅读优化副本（插图缩放重打包），不存在回落原书。
   // 导入侧扩展名固定小写 .epub，大写 .EPUB 不探测。
+  // v2.7.0 M-2：引用书（绝对路径）走 read_book_file 桥（readAppDataFile 的 isSafeRelPath 拒盘符）；
+  // 引用书不生成 .opt（禁止写用户目录），直读原书。
   let bytes: Uint8Array;
-  if (/\.epub$/.test(opts.libraryPath)) {
+  const isReference = /^[a-zA-Z]:[\\/]/.test(opts.libraryPath);
+  if (isReference) {
+    if (!opts.bookId) throw new Error("引用书缺少 bookId");
+    bytes = await readBookFile(opts.bookId);
+  } else if (/\.epub$/.test(opts.libraryPath)) {
     try {
       bytes = await readAppDataFile(opts.libraryPath.replace(/\.epub$/, ".opt.epub"));
     } catch {
@@ -425,17 +438,31 @@ export async function createReader(opts: {
     ".epubjs-hl": { fill: "rgba(255, 230, 0, 0.35)", "fill-opacity": "0.35", "mix-blend-mode": "multiply" },
   });
 
-  // B2 图片惰性解码（一·八 B）：每节内容挂载后给 iframe 内 img 补 loading/decoding（滚到视口才解码，
-  // 插图多的书开章不再全幅解码卡顿）。DOM 属性幂等，clear 后重 display 每节重跑一遍。
+  // B2 图片惰性解码 + E-4 回归修复：loading=lazy/decoding=async 仅滚动模式注入——
+  // 分页模式是横向分栏容器，lazy 判定认为图不在视口 → 永不加载 → 章节装饰图/logo 全破（v2.6.0 回归，
+  // 极品家丁第一章实锤）。currentFlow 闭包可读：applyFlow 先改值再重渲染，hook 每节内容挂载时取当前值。
+  // P-1：img 点击 → 宿主 Lightbox（stopPropagation 防 epubjs 选区/链接处理；hook 时机 src 已是 blob，
+  // 原始条目名不可反查——Lightbox 放大显示 .opt 当前 blob）。
   // 注意挂 rendition.hooks.content（参数=Contents 对象，与 themes 注入同管线，已验证触发）；
   // book.spine.hooks.content 的参数是裸 document——v2.6.0 验收发现原先挂错位置导致静默空转（字体注入同病，见下）。
   rendition.hooks.content.register((contents: any) => {
     try {
       const imgs = contents?.document?.querySelectorAll?.("img");
       if (!imgs) return;
+      const lazy = lazyImagesForFlow(currentFlow);
       for (const img of Array.from(imgs) as HTMLImageElement[]) {
-        img.loading = "lazy";
-        img.decoding = "async";
+        if (lazy) {
+          img.loading = "lazy";
+          img.decoding = "async";
+        } else {
+          img.loading = "eager";
+        }
+        img.addEventListener("click", (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          const src = img.currentSrc || img.src;
+          if (src) opts.onImageClick?.({ src, alt: img.alt });
+        });
       }
     } catch {
       // 属性赋值在老 WebView 被忽略，无害

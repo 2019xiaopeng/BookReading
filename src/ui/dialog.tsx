@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 /**
  * 统一对话框（批次7）：替代全部 window.alert / window.confirm。
@@ -12,7 +12,9 @@ type DialogRequest = {
   danger?: boolean;
   confirmText?: string;
   secondaryText?: string;
-  resolve: (action: "primary" | "secondary" | "dismiss") => void;
+  // C-1：三选 + 「记住我的选择」复选框（关闭按钮行为记忆）
+  rememberLabel?: string;
+  resolve: (action: "primary" | "secondary" | "dismiss", remember?: boolean) => void;
 };
 
 let current: DialogRequest | null = null;
@@ -55,6 +57,26 @@ export function showChoice(
   });
 }
 
+/** C-1：三选 + 「记住我的选择」复选框；取消/点遮罩（dismiss）时 remember 恒为 false */
+export function showChoiceRemember(
+  title: string,
+  body?: string,
+  opts?: { confirmText?: string; secondaryText?: string; rememberLabel?: string },
+): Promise<{ action: "primary" | "secondary" | "dismiss"; remember: boolean }> {
+  return new Promise((resolve) => {
+    current = {
+      kind: "choice",
+      title,
+      body,
+      confirmText: opts?.confirmText,
+      secondaryText: opts?.secondaryText,
+      rememberLabel: opts?.rememberLabel,
+      resolve: (action, remember) => resolve({ action, remember: remember === true }),
+    };
+    emit();
+  });
+}
+
 export function DialogHost() {
   const req = useSyncExternalStore(
     (cb) => {
@@ -64,12 +86,14 @@ export function DialogHost() {
     () => current,
     () => null,
   );
+  const [remember, setRemember] = useState(false);
+  useEffect(() => setRemember(false), [req]);
   if (!req) return null;
 
   const finish = (action: "primary" | "secondary" | "dismiss") => {
     current = null;
     emit();
-    req.resolve(action);
+    req.resolve(action, remember);
   };
 
   return (
@@ -90,6 +114,16 @@ export function DialogHost() {
       >
         <div className="wr-prompt-title">{req.title}</div>
         {req.body ? <div className="wr-prompt-body">{req.body}</div> : null}
+        {req.rememberLabel ? (
+          <label className="wr-prompt-remember">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => setRemember(e.currentTarget.checked)}
+            />
+            {req.rememberLabel}
+          </label>
+        ) : null}
         <div className="wr-prompt-actions">
           {req.kind === "confirm" ? (
             <button className="wr-btn" autoFocus onClick={() => finish("dismiss")}>
