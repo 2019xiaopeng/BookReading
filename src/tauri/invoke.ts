@@ -20,6 +20,7 @@ export type Book = {
   description: string | null;
   content_chars: number | null;
   file_size: number | null;
+  manual_status: "unread" | "reading" | "finished" | null;
   tags: BookTagBrief[];
 };
 
@@ -51,6 +52,8 @@ export type ImportBookRequest = {
   author: string | null;
   cover_bytes_base64: string | null;
   cover_ext: string | null;
+  /** v2.7 导入方式；缺省 copy。txt 忽略此参数（必须转换复制） */
+  mode?: "copy" | "move" | "reference";
 };
 
 export type UpdateBookMetadataRequest = {
@@ -128,6 +131,60 @@ export async function revealBookLocation(bookId: string): Promise<void> {
 }
 
 export type DuplicateGroup = { label: string; bookIds: string[] };
+
+// ---- v2.7.0 ----
+
+// 手动阅读状态（S-4）：null=自动推导（按打开记录+进度）；设置后过滤与统计一律优先
+export type ManualStatus = "unread" | "reading" | "finished";
+export async function setBookManualStatus(bookId: string, status: ManualStatus | null): Promise<Book> {
+  return invoke<Book>("set_book_manual_status", { bookId, status });
+}
+
+// 导入方式（M-1/M-2）：copy=复制入库（默认）；move=复制校验后源文件送回收站；reference=原地引用（EPUB/PDF）
+export type ImportMode = "copy" | "move" | "reference";
+
+// 书内媒体（V-1）：原书 zip 内的音视频条目清单与单条读取
+export type MediaEntry = { name: string; size: number; ext: string };
+export async function listBookMedia(bookId: string): Promise<MediaEntry[]> {
+  return invoke<MediaEntry[]>("list_book_media", { bookId });
+}
+export async function readBookMedia(bookId: string, name: string): Promise<Uint8Array> {
+  const res = await invoke<ArrayBuffer | number[]>("read_book_media", { bookId, name });
+  return new Uint8Array(res);
+}
+
+// 原书内插图原图（P-1 lightbox）：从原书 zip 按条目名取原图字节
+export async function readEpubImage(bookId: string, entryName: string): Promise<Uint8Array> {
+  const res = await invoke<ArrayBuffer | number[]>("read_epub_image", { bookId, entryName });
+  return new Uint8Array(res);
+}
+
+// 单本立即生成 .opt（B-2 大书守卫用）：返回是否启动（已有则 false）
+export async function optimizeEpubNow(bookId: string): Promise<boolean> {
+  return invoke<boolean>("optimize_epub_now", { bookId });
+}
+
+// 应用内更新（U-1/U-2）：GitHub Releases 检查/下载/运行安装器
+export type UpdateInfo = {
+  current: string;
+  latest: string;
+  hasUpdate: boolean;
+  notes: string;
+  assetName: string | null;
+  assetUrl: string | null;
+  assetSize: number | null;
+};
+export async function checkAppUpdate(): Promise<UpdateInfo> {
+  return invoke<UpdateInfo>("check_app_update");
+}
+// 下载安装包到临时目录；进度事件 "update-download-progress" {downloaded,total}；完成后 resolve 出文件路径
+export async function downloadAppUpdate(assetUrl: string): Promise<string> {
+  return invoke<string>("download_app_update", { assetUrl });
+}
+export async function runUpdateInstaller(installerPath: string): Promise<void> {
+  return invoke<void>("run_update_installer", { installerPath });
+}
+
 export type MissingSource = {
   bookId: string;
   title: string | null;

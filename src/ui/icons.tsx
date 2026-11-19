@@ -481,3 +481,47 @@ export function IconReveal(props: P) {
   );
 }
 
+/** 媒体（v2.7.0 音视频面板） */
+export function IconVideo(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <rect x="3.5" y="6" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="1.75" />
+      <path d="m15.5 10.6 4.1-2.3v7.4l-4.1-2.3" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 应用内更新（v2.7.0） */
+export function IconUpdate(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M12 4.5a7.5 7.5 0 0 1 7.5 7.5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+      <path
+        d="M12 4.5A7.5 7.5 0 0 0 4.5 12"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeDasharray="0.5 3.4"
+      />
+      <path d="M12 8.2v5l3.2 1.9" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m14.6 4.9-2.6-.4-.4 2.6" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 放大查看（v2.7.0 lightbox） */
+export function IconZoom(props: P) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...props}>
+      <circle cx="10.8" cy="10.8" r="6.3" stroke="currentColor" strokeWidth="1.75" />
+      <path d="m15.6 15.6 4 4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <path d="M8.3 10.8h5M10.8 8.3v5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
