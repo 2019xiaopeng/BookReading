@@ -21,6 +21,10 @@ export type Book = {
   content_chars: number | null;
   file_size: number | null;
   manual_status?: "unread" | "reading" | "finished" | null;
+  /** v2.9 清洗字段：subtitle=中文段；sourceTags=剥离的发布标签（JSON 数组字符串，消费方 parse）；title_source='manual' 表示用户手改不覆盖 */
+  subtitle?: string | null;
+  source_tags?: string | null;
+  title_source?: string | null;
   tags: BookTagBrief[];
 };
 
@@ -168,6 +172,34 @@ export async function optimizeEpubNow(bookId: string): Promise<boolean> {
 export async function readBookFile(bookId: string): Promise<Uint8Array> {
   const res = await invoke<ArrayBuffer | number[]>("read_book_file", { bookId });
   return new Uint8Array(res);
+}
+
+// ---- v2.9.0 元数据清洗 ----
+
+export type CleanPreviewItem = {
+  bookId: string;
+  titleOld: string;
+  titleNew: string;
+  subtitle: string | null;
+  authorOld: string | null;
+  authorNew: string | null;
+  sourceTags: string[];
+};
+export type CleanApplyItem = {
+  bookId: string;
+  title: string;
+  subtitle: string | null;
+  author: string | null;
+  sourceTags: string[];
+};
+
+// 清洗预览：只列将变更的条目（title_source='manual' 自动跳过）
+export async function cleanTitlePreview(): Promise<CleanPreviewItem[]> {
+  return invoke<CleanPreviewItem[]>("clean_title_preview");
+}
+// 批量应用清洗结果
+export async function cleanTitleApply(updates: CleanApplyItem[]): Promise<number> {
+  return invoke<number>("clean_title_apply", { updates });
 }
 
 // 应用内更新（U-1/U-2）：GitHub Releases 检查/下载/运行安装器
