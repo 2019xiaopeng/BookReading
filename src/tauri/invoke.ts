@@ -20,7 +20,7 @@ export type Book = {
   description: string | null;
   content_chars: number | null;
   file_size: number | null;
-  manual_status: "unread" | "reading" | "finished" | null;
+  manual_status?: "unread" | "reading" | "finished" | null;
   tags: BookTagBrief[];
 };
 
