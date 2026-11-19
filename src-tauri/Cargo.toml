@@ -1,6 +1,6 @@
 [package]
 name = "bookreading"
-version = "2.7.0"
+version = "2.8.0"
 license = "MIT"
 description = "A Tauri App"
 authors = ["you"]
