@@ -1814,25 +1814,33 @@ export default function ReaderPage() {
                   </div>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {toc.map((item) => (
-                      <button
-                        key={item.href}
-                        className="wr-toc-item"
-                        data-active={item.href === chapterHref ? "true" : undefined}
-                        aria-current={item.href === chapterHref ? "true" : undefined}
-                        ref={
-                          item.href === chapterHref
-                            ? (el) => {
-                                // R-3 打开目录滚到当前章（居中），仅挂载时执行一次
-                                if (el) requestAnimationFrame(() => el.scrollIntoView({ block: "center" }));
-                              }
-                            : undefined
-                        }
-                        onClick={() => locate(item.href)}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
+                    {toc.map((item) => {
+                      // R-3 当前章判定：先剥 hash 再按末段比对（toc 常带 #anchor，relocated 已剥）
+                      const stripHash = (h: string) => h.split("#")[0];
+                      const isActive =
+                        chapterHref !== "" &&
+                        (stripHash(item.href) === chapterHref ||
+                          stripHash(item.href).split("/").pop() === chapterHref.split("/").pop());
+                      return (
+                        <button
+                          key={item.href}
+                          className="wr-toc-item"
+                          data-active={isActive ? "true" : undefined}
+                          aria-current={isActive ? "true" : undefined}
+                          ref={
+                            isActive
+                              ? (el) => {
+                                  // R-3 打开目录滚到当前章（居中），仅挂载时执行一次
+                                  if (el) requestAnimationFrame(() => el.scrollIntoView({ block: "center" }));
+                                }
+                              : undefined
+                          }
+                          onClick={() => locate(item.href)}
+                        >
+                          {item.label}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
