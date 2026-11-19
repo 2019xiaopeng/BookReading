@@ -1,0 +1,49 @@
+name: release
+
+# v2.7.0：tag 推送 → 云端 Windows 构建 NSIS → 自动挂到 GitHub Release
+# 本地零磁盘占用；发布流程 = git tag vRust.X && git push origin vX.Y.Z
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build NSIS installer
+        run: npm run tauri build
+        env:
+          # GitHub Actions 的 runner 直连 GitHub 无需镜像；CSP/其余配置与本地一致
+          CARGO_INCREMENTAL: "0"
+
+      - name: Upload installer to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/release/bundle/nsis/bookreading_*_x64-setup.exe
+          generate_release_notes: false
