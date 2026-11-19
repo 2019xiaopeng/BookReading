@@ -38,18 +38,23 @@ struct GhRelease {
 }
 
 fn client(proxy: Option<&str>, timeout: Duration) -> Result<reqwest::blocking::Client, String> {
+    // 系统代理探测在 Tauri 环境下可能死锁（winhttp 挂起——实测本应用进程内 build() 永不返回，
+    // 同代码 cargo run 独立进程 1.5s 完成）。禁用系统代理探测，只用手动指定的代理。
     let mut b = reqwest::blocking::Client::builder()
         .timeout(timeout)
-        .user_agent(concat!("BookReading/", env!("CARGO_PKG_VERSION"))); // GitHub API 必须带 UA
+        .connect_timeout(timeout)
+        .no_proxy();
     if let Some(port) = proxy {
         b = b.proxy(
             reqwest::Proxy::all(format!("http://127.0.0.1:{port}")).map_err(|e| e.to_string())?,
         );
     }
+    let b = b.user_agent(concat!("BookReading/", env!("CARGO_PKG_VERSION"))); // GitHub API 必须带 UA
     b.build().map_err(|e| e.to_string())
 }
 
-// 直连与两个本地代理依次尝试；任一成功即用
+// 直连与两个本地代理依次尝试；任一成功即用。
+// 代理 403=出口 IP 被 GitHub 限流也算失败，继续尝试（f 回调校验 status）。
 fn with_fallback<T>(mut f: impl FnMut(&reqwest::blocking::Client) -> Result<T, String>) -> Result<T, String> {
     let attempts: Vec<Result<reqwest::blocking::Client, String>> = vec![
         client(None, DIRECT_TIMEOUT),
@@ -79,18 +84,45 @@ fn version_newer(latest: &str, current: &str) -> bool {
 
 #[tauri::command(async)]
 pub fn check_app_update() -> Result<UpdateInfo, String> {
-    let release: GhRelease = with_fallback(|c| {
-        let resp = c
-            .get(RELEASES_API)
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("HTTP {}", resp.status()));
+    // reqwest::blocking 的 Client build 在 Tauri async 命令线程（tokio 上下文）内死锁——
+    // 同代码独立进程 1.5s 完成、app 内永不返回（实测）。解法：专用 std::thread 跑全部网络。
+    let (tx, rx) = std::sync::mpsc::channel::<Result<UpdateInfo, String>>();
+    std::thread::spawn(move || {
+        let r = check_app_update_inner();
+        let _ = tx.send(r);
+    });
+    rx.recv().map_err(|_| "更新检查线程异常退出".to_string())?
+}
+
+fn check_app_update_inner() -> Result<UpdateInfo, String> {
+    let attempts: Vec<Result<reqwest::blocking::Client, String>> = vec![
+        client(None, DIRECT_TIMEOUT),
+        client(Some(PROXY_PORTS[0]), PROXY_TIMEOUT),
+        client(Some(PROXY_PORTS[1]), PROXY_TIMEOUT),
+    ];
+    let mut last_err = String::new();
+    let mut release: Option<GhRelease> = None;
+    for c in attempts.into_iter().flatten() {
+        match (|| -> Result<GhRelease, String> {
+            let resp = c
+                .get(RELEASES_API)
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("HTTP {}", resp.status()));
+            }
+            let body = resp.text().map_err(|e| e.to_string())?;
+            serde_json::from_str(&body).map_err(|e| format!("bad release json: {e}"))
+        })() {
+            Ok(r) => {
+                release = Some(r);
+                break;
+            }
+            Err(e) => last_err = e,
         }
-        let body = resp.text().map_err(|e| e.to_string())?;
-        serde_json::from_str(&body).map_err(|e| format!("bad release json: {e}"))
-    })?;
+    }
+    let release = release.ok_or_else(|| format!("无法连接 GitHub（直连与本地代理均失败）：{last_err}"))?;
 
     let current = env!("CARGO_PKG_VERSION").to_string();
     let latest = release.tag_name.trim().trim_start_matches('v').trim().to_string();
@@ -122,6 +154,17 @@ fn update_dir() -> PathBuf {
 
 #[tauri::command(async)]
 pub fn download_app_update(app: tauri::AppHandle, asset_url: String) -> Result<String, String> {
+    // 同 check_app_update：阻塞客户端必须在专用线程跑（Tauri async 线程内 build 死锁）
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        let r = download_app_update_inner(app2, asset_url);
+        let _ = tx.send(r);
+    });
+    rx.recv().map_err(|_| "下载线程异常退出".to_string())?
+}
+
+fn download_app_update_inner(app: tauri::AppHandle, asset_url: String) -> Result<String, String> {
     let dir = update_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     let name = asset_url
@@ -225,5 +268,21 @@ mod tests {
     fn installer_path_must_be_exe_inside_update_dir() {
         assert!(run_update_installer(update_dir().join("x.exe").to_string_lossy().into_owned()).is_err());
         assert!(run_update_installer("C:\\Windows\\notepad.exe".into()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod net_probe_tests {
+    use super::*;
+
+    #[test]
+    fn probe_direct_client_reaches_github() {
+        // 只在有网络时跑：直连 6s + 系统代理回退。CI/离线环境跳过。
+        if std::env::var("BOOKREADING_NET_PROBE").is_err() {
+            return;
+        }
+        let c = client(None, DIRECT_TIMEOUT).unwrap();
+        let r = c.get(RELEASES_API).send();
+        assert!(r.is_ok(), "direct github api failed: {:?}", r.err());
     }
 }

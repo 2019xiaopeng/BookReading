@@ -46,12 +46,15 @@ export default function ImageLightbox(props: { src: string; alt?: string; onClos
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        e.stopPropagation();
+        e.preventDefault();
+        e.stopImmediatePropagation();
         props.onClose();
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // capture 阶段 + stopImmediatePropagation：ReaderPage 的 window keydown（bubble 阶段，
+    // Esc 语义=关抽屉>解锁>唤醒栏）不能抢走 Lightbox 的 Esc
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, [props.onClose]);
 
   // 滚轮=缩放（preventDefault+stopPropagation：防背后 epub 滚动/翻页滚轮）
