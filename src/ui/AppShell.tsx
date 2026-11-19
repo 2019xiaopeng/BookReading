@@ -275,37 +275,44 @@ export default function AppShell(props: {
           </div>
         </div>
 
-        {props.quickFilter ? (
-          <div className="wr-quick-row" role="group" aria-label="快捷筛选">
-            <button
-              type="button"
-              className="wr-quick-chip"
-              data-active={props.quickFilter.value === "all"}
-              aria-pressed={props.quickFilter.value === "all"}
-              onClick={() => props.quickFilter?.onChange("all")}
-            >
-              全部藏书
-            </button>
-            <button
-              type="button"
-              className="wr-quick-chip"
-              data-active={props.quickFilter.value === "reading"}
-              aria-pressed={props.quickFilter.value === "reading"}
-              onClick={() => props.quickFilter?.onChange("reading")}
-            >
-              在读
-            </button>
-            <button
-              type="button"
-              className="wr-quick-chip"
-              data-active={props.quickFilter.value === "unread"}
-              aria-pressed={props.quickFilter.value === "unread"}
-              onClick={() => props.quickFilter?.onChange("unread")}
-            >
-              未读
-            </button>
-          </div>
-        ) : null}
+        {/* M-2：行常驻占位——收藏/回收站视图无快捷筛选时隐藏内容但保高度，消灭切页布局跳动 */}
+        <div
+          className="wr-quick-row"
+          role="group"
+          aria-label="快捷筛选"
+          style={props.quickFilter ? undefined : { visibility: "hidden" }}
+        >
+          <button
+            type="button"
+            className="wr-quick-chip"
+            data-active={props.quickFilter?.value === "all"}
+            aria-pressed={props.quickFilter?.value === "all"}
+            tabIndex={props.quickFilter ? 0 : -1}
+            onClick={() => props.quickFilter?.onChange("all")}
+          >
+            全部藏书
+          </button>
+          <button
+            type="button"
+            className="wr-quick-chip"
+            data-active={props.quickFilter?.value === "reading"}
+            aria-pressed={props.quickFilter?.value === "reading"}
+            tabIndex={props.quickFilter ? 0 : -1}
+            onClick={() => props.quickFilter?.onChange("reading")}
+          >
+            在读
+          </button>
+          <button
+            type="button"
+            className="wr-quick-chip"
+            data-active={props.quickFilter?.value === "unread"}
+            aria-pressed={props.quickFilter?.value === "unread"}
+            tabIndex={props.quickFilter ? 0 : -1}
+            onClick={() => props.quickFilter?.onChange("unread")}
+          >
+            未读
+          </button>
+        </div>
 
         <div className="wr-nav" role="navigation">
           <button

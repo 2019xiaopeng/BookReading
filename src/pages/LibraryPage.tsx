@@ -36,7 +36,7 @@ import {
 import { needsMetadataRepair } from "../library/metadataRepair";
 import { effectiveStatus, READING_STATUS_LABELS, type ReadingStatus } from "../library/readingStatus";
 import { formatReadingTime } from "../library/readingTime";
-import { bookMatchesQuery, formatAuthor, formatTitle } from "../library/bookFormat";
+import { bookMatchesQuery, formatAuthor, formatTitle, progressText } from "../library/bookFormat";
 import BookDetailsDialog from "../library/BookDetailsDialog";
 import BookCard from "../library/BookCard";
 import { BatchTagDialog, ManageTagsDialog, TagFilterMenu } from "../library/TagDialogs";
@@ -61,13 +61,14 @@ import { logFrontend } from "../tauri/frontendLog";
 import AppShell, { setShelvesCache, useShellShelves } from "../ui/AppShell";
 import { showAlert, showConfirm } from "../ui/dialog";
 import { showToast } from "../ui/toast";
-import { IconBook, IconCheckSquare, IconDensity, IconFolder, IconImage, IconRefresh, IconReveal, IconShelf, IconSort, IconTrash } from "../ui/icons";
+import { IconBook, IconCheckSquare, IconClose, IconDensity, IconFolder, IconImage, IconRefresh, IconReveal, IconShelf, IconSort, IconTrash } from "../ui/icons";
 
-type SortKey = "recent" | "title" | "added" | "custom";
+type SortKey = "recent" | "title" | "author" | "added" | "custom";
 
 const SORT_LABELS: Record<SortKey, string> = {
   recent: "最近阅读",
   title: "书名",
+  author: "作者",
   added: "导入时间",
   custom: "自定义",
 };
@@ -138,6 +139,8 @@ export default function LibraryPage() {
   // "导入中…"只显示在实际触发的那颗上；删除/收藏等其它 loading 操作不再误显导入中
   const [importing, setImporting] = useState<"books" | "images" | null>(null);
   const [query, setQuery] = useState("");
+  // R-1 继续阅读卡：会话内手动隐藏标记（sessionStorage 常驻 + state 触发即时重渲）
+  const [continueDismissed, setContinueDismissed] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("recent");
   const [sortAsc, setSortAsc] = useState(false);
   const [folderSort, setFolderSort] = useState<FolderSortKey>("default");
@@ -232,6 +235,7 @@ export default function LibraryPage() {
       // custom：无序值（从未排过）的沉底
       if (sortKey === "custom") return (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER);
       if (sortKey === "title") return dir * formatTitle(a).localeCompare(formatTitle(b), "zh");
+      if (sortKey === "author") return dir * formatAuthor(a).localeCompare(formatAuthor(b), "zh");
       if (sortKey === "added") return dir * (a.added_at - b.added_at);
       return dir * ((a.last_opened_at ?? a.added_at) - (b.last_opened_at ?? b.added_at));
     });
@@ -395,6 +399,19 @@ export default function LibraryPage() {
     },
     [navigate, currentShelfId],
   );
+
+  // R-1 继续阅读：全库 last_opened_at 最新且未读完的书（根视图快捷卡；✕ 本次会话不再显示）
+  const continueBook = useMemo(() => {
+    if (continueDismissed || currentShelfId != null || query.trim()) return null;
+    try {
+      if (sessionStorage.getItem("wr-continue-dismissed") === "1") return null;
+    } catch {}
+    return (
+      [...books]
+        .filter((b) => b.last_opened_at != null && (b.reading_percent ?? 0) < 0.95)
+        .sort((a, b) => (b.last_opened_at ?? 0) - (a.last_opened_at ?? 0))[0] ?? null
+    );
+  }, [books, currentShelfId, query, continueDismissed]);
 
   // 元数据自愈批处理：一轮只发起修复并收集结果，全部完成后 refresh 一次
   // （此前每修一本 await refresh() 全量重拉，N 本待修 = N 次整页重渲）
@@ -1319,6 +1336,38 @@ export default function LibraryPage() {
           {trashView ? `共 ${trash.length} 本` : `藏书 ${mastheadScope.length} · 在读 ${mastheadReading}`}
         </div>
       </div>
+
+      {/* R-1 继续阅读快捷卡（仅根视图无搜索时） */}
+      {continueBook ? (
+        <div className="wr-continue-card" role="button" tabIndex={0} onClick={() => openBook(continueBook.id)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBook(continueBook.id); } }}>
+          <span className="wr-continue-label">继续阅读</span>
+          <div className="wr-cover" aria-hidden="true">
+            {continueBook.cover_path && coverUrls[continueBook.cover_path] ? (
+              <img src={coverUrls[continueBook.cover_path]} alt="" />
+            ) : null}
+          </div>
+          <div className="wr-continue-meta">
+            <div className="wr-continue-title">{formatTitle(continueBook)}</div>
+            <div className="wr-continue-sub">
+              {progressText(continueBook)}
+              {continueBook.author?.trim() ? ` · ${continueBook.author.trim()}` : ""}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="wr-mini-btn"
+            aria-label="隐藏继续阅读"
+            onClick={(e) => {
+              e.stopPropagation();
+              try { sessionStorage.setItem("wr-continue-dismissed", "1"); } catch {}
+              setContinueDismissed(true);
+            }}
+          >
+            <IconClose />
+          </button>
+        </div>
+      ) : null}
 
       {trashView ? (
         <div className="wr-toolbar-row">

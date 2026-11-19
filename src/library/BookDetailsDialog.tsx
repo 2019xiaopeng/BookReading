@@ -5,6 +5,7 @@ import type { Book, Shelf, Tag } from "../tauri/invoke";
 import {
   computeBookStats,
   createTag,
+  deleteBook,
   exportAnnotations,
   listReadingTimes,
   revealBookLocation,
@@ -13,7 +14,7 @@ import {
   setBookTags,
   updateBookMetadata,
 } from "../tauri/invoke";
-import { showAlert } from "../ui/dialog";
+import { showAlert, showConfirm } from "../ui/dialog";
 import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "./useCoverUrls";
 import { DEFAULT_TAG_COLOR, formatFileSize, tagDotColor } from "./tags";
 import { shelfPath } from "./shelves";
@@ -414,6 +415,26 @@ export default function BookDetailsDialog({
           </button>
           <button className="wr-btn wr-btn-primary" disabled={saving || !title.trim() || !dirty} onClick={() => void onSave()}>
             {saving ? "保存中…" : "保存"}
+          </button>
+          {/* N-2 详情页删除：与 ⋯ 菜单同款软删入回收站 */}
+          <button
+            className="wr-btn wr-btn-danger"
+            disabled={saving}
+            onClick={() => {
+              void (async () => {
+                const ok = await showConfirm("删除", `把《${b.title ?? "未命名"}》移入回收站？`, { danger: true, confirmText: "移入回收站" });
+                if (!ok) return;
+                try {
+                  await deleteBook(b.id);
+                  onChanged();
+                  onClose();
+                } catch (e) {
+                  await showAlert("删除失败", String(e));
+                }
+              })();
+            }}
+          >
+            删除
           </button>
         </div>
       </div>

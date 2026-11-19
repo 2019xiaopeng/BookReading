@@ -1815,7 +1815,21 @@ export default function ReaderPage() {
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {toc.map((item) => (
-                      <button key={item.href} className="wr-toc-item" onClick={() => locate(item.href)}>
+                      <button
+                        key={item.href}
+                        className="wr-toc-item"
+                        data-active={item.href === chapterHref ? "true" : undefined}
+                        aria-current={item.href === chapterHref ? "true" : undefined}
+                        ref={
+                          item.href === chapterHref
+                            ? (el) => {
+                                // R-3 打开目录滚到当前章（居中），仅挂载时执行一次
+                                if (el) requestAnimationFrame(() => el.scrollIntoView({ block: "center" }));
+                              }
+                            : undefined
+                        }
+                        onClick={() => locate(item.href)}
+                      >
                         {item.label}
                       </button>
                     ))}
