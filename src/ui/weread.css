@@ -3248,3 +3248,144 @@ body::after {
   font-size: 13px;
   color: var(--wr-muted);
 }
+
+/* ---- v2.7.0 shell ---- */
+
+/* K-4 侧栏书架计数：书架名后 muted 小数字（父架含后代上卷） */
+.wr-nav-count {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--wr-muted);
+  opacity: 0.85;
+}
+
+/* U-3 设置入口红点：静默检查发现新版 */
+.wr-small-btn[data-badge="true"] {
+  position: relative;
+}
+
+.wr-small-btn[data-badge="true"]::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--wr-danger);
+  border: 2px solid var(--panel-solid);
+}
+
+/* H-3 Toast：fixed 底部居中，实底墨条 + 淡入上浮 */
+.wr-toast-host {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  z-index: 1200;
+  pointer-events: none;
+}
+
+.wr-toast-item {
+  max-width: min(480px, calc(100vw - 48px));
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: var(--wr-ink);
+  color: var(--wr-paper);
+  font-size: 13px;
+  line-height: 1.5;
+  box-shadow: var(--wr-shadow-soft);
+  animation: wr-toast-in 180ms ease both;
+}
+
+@keyframes wr-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wr-toast-item {
+    animation: none;
+  }
+}
+
+/* C-1 三选弹窗「记住我的选择」复选行 */
+.wr-prompt-remember {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--wr-muted);
+  cursor: pointer;
+}
+
+.wr-prompt-remember input {
+  accent-color: var(--wr-accent);
+}
+
+/* ---- v2.7.0 library（F1 需求，主控统一落） ---- */
+
+/* 菜单小节标题（「状态」「文件夹」段） */
+.wr-menu .wr-menu-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--wr-muted);
+  padding: 6px 10px 2px;
+  border-top: 1px solid var(--wr-hairline);
+  margin-top: 4px;
+}
+.wr-menu .wr-menu-label:first-child {
+  border-top: none;
+  margin-top: 0;
+}
+
+/* 回收站行选择态：复选框包含块 + 选中视觉（同书卡选中） */
+.wr-trash-row {
+  position: relative;
+}
+.wr-trash-row[data-selected="true"] {
+  outline: 2px solid rgb(var(--wr-accent-rgb));
+  outline-offset: -2px;
+}
+
+/* 搜索命中角标：文件夹卡 data-hits="N" */
+.wr-shelf-card[data-hits]::after {
+  content: attr(data-hits) " 命中";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--m2-ink);
+  color: var(--m2-paper);
+  z-index: 2;
+}
+
+/* 书卡搜索态路径小字 */
+.wr-shelf-path {
+  font-size: 12px;
+  color: var(--m2-ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 菜单项禁用态 */
+.wr-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.wr-menu-item:disabled:hover {
+  background: transparent;
+}
