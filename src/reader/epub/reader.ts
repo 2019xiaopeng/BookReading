@@ -1,4 +1,5 @@
 import ePub, { EpubCFI } from "epubjs";
+import { patchEpubjsBook } from "./epubjsPatch"; // 上游 replacementUrls 索引错位补丁
 
 import type { FontFamily, ReadingMode, Theme } from "../settings/types";
 import { readAppDataFile } from "../../tauri/appDataPaths";
@@ -329,6 +330,7 @@ export async function createReader(opts: {
     book.destroy?.();
     throw new Error(msg);
   });
+  patchEpubjsBook(book); // book.ready 后 resources/archive 已建：在实际运行类上打对齐补丁
 
   let lastLocation: any = null;
 
