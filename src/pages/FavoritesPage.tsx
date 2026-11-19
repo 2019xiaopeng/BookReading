@@ -26,6 +26,7 @@ import BookDetailsDialog from "../library/BookDetailsDialog";
 import { formatAuthor, formatTitle } from "../library/bookFormat";
 import { shelfTreeRows } from "../library/shelves";
 import { DENSITY_PRESETS, normalizeLibraryDensity, type LibraryDensity } from "../library/density";
+import { applyRangeSelect } from "../library/rangeSelect";
 import { BOOKS_CHANGED_EVENT } from "../library/importRunner";
 import { formatReadingTime } from "../library/readingTime";
 import AppShell, { useShellShelves } from "../ui/AppShell";
@@ -78,6 +79,8 @@ export default function FavoritesPage() {
   const [density, setDensity] = useState<LibraryDensity>("standard");
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // R-2 Shift 范围多选锚点（退出选择即重置）
+  const [lastClickedId, setLastClickedId] = useState<string | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [moveBookIds, setMoveBookIds] = useState<string[] | null>(null);
   const [detailsBook, setDetailsBook] = useState<Book | null>(null);
@@ -321,18 +324,23 @@ export default function FavoritesPage() {
 
   // ---- 批量（F-2：只保留有意义的三个动作）----
 
-  const toggleSelected = (id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  // R-2 Shift 范围多选：范围=当前过滤排序后的可见列表闭区间
+  const toggleSelected = (id: string, shift?: boolean) => {
+    const r = applyRangeSelect(
+      sortedBooks.map((b) => b.id),
+      id,
+      selected,
+      !!shift,
+      lastClickedId,
+    );
+    setSelected(r.selected);
+    setLastClickedId(r.lastId);
   };
 
   function exitSelect() {
     setSelectMode(false);
     setSelected(new Set());
+    setLastClickedId(null);
   }
 
   const allSelected = sortedBooks.length > 0 && sortedBooks.every((b) => selected.has(b.id));

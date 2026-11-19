@@ -24,6 +24,11 @@ pub struct Book {
     // S-4 手动阅读状态覆盖：NULL=自动推导（unread/reading/finished）
     #[serde(default)]
     pub manual_status: Option<String>,
+    // N-1 智能清洗：双语副标题；来源标签（JSON 数组字符串，前端 parse）
+    #[serde(default)]
+    pub subtitle: Option<String>,
+    #[serde(default)]
+    pub source_tags: Option<String>,
     // 仅 list_books（fetch_books）填充；其余构造点为空
     #[serde(default)]
     pub tags: Vec<BookTagBrief>,

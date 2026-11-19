@@ -81,6 +81,9 @@ pub fn ensure_book_columns(conn: &Connection) -> Result<(), String> {
         "ALTER TABLE books ADD COLUMN content_chars INTEGER",
         "ALTER TABLE books ADD COLUMN file_size INTEGER",
         "ALTER TABLE books ADD COLUMN manual_status TEXT",
+        "ALTER TABLE books ADD COLUMN subtitle TEXT",
+        "ALTER TABLE books ADD COLUMN source_tags TEXT",
+        "ALTER TABLE books ADD COLUMN title_source TEXT NULL DEFAULT 'import'",
     ] {
         if let Err(e) = conn.execute(ddl, []) {
             if !e.to_string().contains("duplicate column name") {
@@ -276,6 +279,9 @@ mod tests {
         assert!(cols.contains(&"content_chars".to_string()));
         assert!(cols.contains(&"file_size".to_string()));
         assert!(cols.contains(&"manual_status".to_string()));
+        assert!(cols.contains(&"subtitle".to_string()));
+        assert!(cols.contains(&"source_tags".to_string()));
+        assert!(cols.contains(&"title_source".to_string()));
 
         ensure_book_columns(&conn).unwrap();
     }

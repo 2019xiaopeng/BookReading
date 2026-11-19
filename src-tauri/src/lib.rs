@@ -18,6 +18,7 @@ use commands::library::{
     save_reader_font, scan_library_health, set_book_cover, set_book_manual_status,
     update_book_metadata,
 };
+use commands::metadata_clean::{clean_title_apply, clean_title_preview};
 use commands::images::{
     import_image_folder, list_image_page_meta, list_image_pages, list_image_subdirs,
     read_image_page, relink_image_book, AppState as ImageState,
@@ -174,6 +175,8 @@ pub fn run() {
             download_app_update,
             run_update_installer,
             update_book_metadata,
+            clean_title_preview,
+            clean_title_apply,
             delete_book,
             list_shelves,
             create_shelf,

@@ -8,6 +8,7 @@ import { clearCache, getSettings, migrateLibraryRoot, reextractAllCovers, remove
 import { formatFileSize } from "../library/tags";
 import { BOOKS_CHANGED_EVENT } from "../library/importRunner";
 import HealthScanDialog from "../library/HealthScanDialog";
+import CleanTitleDialog from "../library/CleanTitleDialog";
 import { invalidateAllCoverUrls } from "../library/useCoverUrls";
 import { notifyBackgroundChanged, resetBackgroundCache } from "./appBackground";
 import { showAlert, showChoice, showConfirm } from "./dialog";
@@ -59,6 +60,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
+  const [cleanOpen, setCleanOpen] = useState(false);
   // v2.7.0：导入方式（M-3）/ 关闭按钮行为（C-2）/ 自动检查更新（U-3）
   const [importMode, setImportMode] = useState<ImportMode>("copy");
   const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>("ask");
@@ -319,6 +321,14 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="wr-settings-row">
+          <span className="wr-settings-label">智能清洗标题</span>
+          <span className="wr-settings-value">剥离实体码/水印/发布标签，拆分双语标题</span>
+          <button className="wr-btn" onClick={() => setCleanOpen(true)}>
+            重新清洗全部标题
+          </button>
+        </div>
+
+        <div className="wr-settings-row">
           <span className="wr-settings-label">导入方式</span>
           <span
             className="wr-settings-value"
@@ -514,6 +524,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
       </div>
 
       {healthOpen ? <HealthScanDialog onClose={() => setHealthOpen(false)} /> : null}
+      {cleanOpen ? <CleanTitleDialog onClose={() => setCleanOpen(false)} onChanged={() => {}} /> : null}
     </div>
   );
 }

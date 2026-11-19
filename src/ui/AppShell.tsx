@@ -7,7 +7,7 @@ import { getCachedBackgroundUrl, getBackgroundUrl, subscribeBackground } from ".
 import { applyPersistedTheme, setTheme, THEME_SWATCHES, useThemeSelection } from "./theme";
 import { getSettings, listBooks, listShelves, setSetting, type Book, type Shelf } from "../tauri/invoke";
 import { normalizeBgVeil, normalizeReaderBackground } from "../reader/settings/normalize";
-import { countByShelf, descendantIds, shelfTreeRows } from "../library/shelves";
+import { countByShelf, descendantIds, shelfTreeRows, type ShelfTreeRow } from "../library/shelves";
 import type { ReadingStatus } from "../library/readingStatus";
 import { BOOKS_CHANGED_EVENT, runImports, subscribeImportProgress, type ImportProgress } from "../library/importRunner";
 import { primeCloseAction } from "./closeAction";
@@ -38,6 +38,39 @@ export function setShelvesCache(list: Shelf[]): void {
   shelvesCache = list;
   shelvesLoaded = true;
   for (const l of shelvesListeners) l();
+}
+
+/** M-3 侧键逻辑回溯要用 shelves 树（事件时刻取值，非渲染期） */
+export function getShelvesCache(): Shelf[] {
+  return shelvesCache;
+}
+
+// ---- S-1 侧栏书架树折叠：模块级缓存（会话内跨页立即生效）+ settings 键 shelf_collapsed（JSON 数字数组）跨会话 ----
+let shelfCollapsedCache = new Set<number>();
+let shelfCollapsedLoaded = false;
+let shelfCollapsedTouched = false; // settings 恢复晚到时不覆盖用户刚点的折叠
+let shelfCollapsedPersistTimer = 0;
+
+function persistShelfCollapsed(ids: Set<number>): void {
+  window.clearTimeout(shelfCollapsedPersistTimer);
+  shelfCollapsedPersistTimer = window.setTimeout(() => {
+    void setSetting("shelf_collapsed", JSON.stringify([...ids])).catch(() => {});
+  }, 500);
+}
+
+/** 纯：祖先链上任一书架折叠则隐藏该行（顺序无关，环由深度守卫兜底——与 shelfPath 同口径） */
+export function filterCollapsedRows(rows: ShelfTreeRow[], collapsed: Set<number>): ShelfTreeRow[] {
+  if (collapsed.size === 0) return rows;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return rows.filter((r) => {
+    let cur = r.parent_id ?? null;
+    let guard = 0;
+    while (cur != null && guard++ < 100) {
+      if (collapsed.has(cur)) return false;
+      cur = byId.get(cur)?.parent_id ?? null;
+    }
+    return true;
+  });
 }
 
 /** 纯：books 按直接归属计数后上卷到祖先书架（父架计数含全部后代的书） */
@@ -156,6 +189,8 @@ export default function AppShell(props: {
   const [themeMenu, setThemeMenu] = useState<{ x: number; y: number } | null>(null);
   const shelves = useShellShelves();
   const shelfCounts = useShelfCounts();
+  // S-1 树折叠：state 驱动重渲，模块缓存保证路由切换（重挂）不丢
+  const [collapsed, setCollapsed] = useState(() => new Set(shelfCollapsedCache));
   const updateAvailable = useSyncExternalStore(subscribeUpdateAvailable, getUpdateAvailable, () => null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -197,6 +232,26 @@ export default function AppShell(props: {
   // v2.7.0 启动一次性：静默更新检查（U-3）+ 升级亮点（H-9）
   useEffect(() => {
     void runShellStartupOnce();
+  }, []);
+
+  // S-1 折叠态跨会话恢复（全会话一次；用户已手点则不覆盖）
+  useEffect(() => {
+    if (shelfCollapsedLoaded) return;
+    shelfCollapsedLoaded = true;
+    getSettings()
+      .then((m) => {
+        if (shelfCollapsedTouched) return;
+        try {
+          const ids = JSON.parse(m.shelf_collapsed ?? "[]") as unknown;
+          if (Array.isArray(ids)) {
+            shelfCollapsedCache = new Set(ids.filter((n): n is number => typeof n === "number"));
+            setCollapsed(new Set(shelfCollapsedCache));
+          }
+        } catch {
+          // 非法存量：当未设置处理
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // 批量/拖拽导入进度条（importRunner 模块单例广播）
@@ -251,6 +306,19 @@ export default function AppShell(props: {
         ? { x: Math.max(8, r.right - THEME_MENU_WIDTH), y: r.bottom + 6 }
         : { x: 8, y: 8 },
     );
+  }
+
+  // ---- S-1/S-2 树折叠 ----
+  // 有子书架的节点（= 某书的 parent_id 出现过）才给折叠箭头
+  const parentIds = new Set<number>();
+  for (const s of shelves) if (s.parent_id != null) parentIds.add(s.parent_id);
+  const anyCollapsed = [...collapsed].some((id) => parentIds.has(id));
+
+  function applyCollapsed(next: Set<number>) {
+    shelfCollapsedTouched = true;
+    shelfCollapsedCache = next;
+    setCollapsed(new Set(next));
+    persistShelfCollapsed(next);
   }
 
   // 全局背景：cover 居中铺满 + 半透明主题色纱保证八主题下内容对比度（底色 var(--wr-bg) 仍兜底）；
@@ -330,23 +398,52 @@ export default function AppShell(props: {
             <div className="wr-nav-sub">层级书架、导入与管理</div>
           </button>
           {shelves.length > 0 ? (
-            <div className="wr-nav-groups" role="group" aria-label="书架">
-              {shelfTreeRows(shelves).map((row) => (
+            <>
+              {/* S-2 全部收起/展开：有折叠 → 全部展开；否则全部收起（收起=折叠全部有子架的节点） */}
+              <div className="wr-nav-tree-tools">
                 <button
-                  key={row.id}
-                  className="wr-nav-group-btn"
-                  data-drop="shelf"
-                  data-shelf-id={row.id}
-                  title={row.name}
-                  aria-current={activeShelf === String(row.id) ? "page" : undefined}
-                  style={{ paddingLeft: 10 + row.depth * 12 }}
-                  onClick={() => navigate(`/?shelf=${row.id}`)}
+                  type="button"
+                  className="wr-nav-tree-tool"
+                  onClick={() => applyCollapsed(anyCollapsed ? new Set() : new Set(parentIds))}
                 >
-                  {row.name}
-                  {shelfCounts.get(row.id) ? <span className="wr-nav-count">{shelfCounts.get(row.id)}</span> : null}
+                  {anyCollapsed ? "全部展开" : "全部收起"}
                 </button>
-              ))}
-            </div>
+              </div>
+              <div className="wr-nav-groups" role="group" aria-label="书架">
+                {filterCollapsedRows(shelfTreeRows(shelves), collapsed).map((row) => (
+                  <button
+                    key={row.id}
+                    className="wr-nav-group-btn"
+                    data-drop="shelf"
+                    data-shelf-id={row.id}
+                    title={row.name}
+                    aria-current={activeShelf === String(row.id) ? "page" : undefined}
+                    style={{ paddingLeft: 10 + row.depth * 12 }}
+                    onClick={() => navigate(`/?shelf=${row.id}`)}
+                  >
+                    {row.name}
+                    {shelfCounts.get(row.id) ? <span className="wr-nav-count">{shelfCounts.get(row.id)}</span> : null}
+                    {parentIds.has(row.id) ? (
+                      // span 而非 button：行本身是 button，嵌套交互元素非法；stopPropagation 防触发进入书架
+                      // shortcut: 折叠箭头仅鼠标可达，键盘折叠需求出现时再升级为独立 focusable 控件
+                      <span
+                        className="wr-nav-toggle"
+                        aria-hidden="true"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const next = new Set(collapsed);
+                          if (next.has(row.id)) next.delete(row.id);
+                          else next.add(row.id);
+                          applyCollapsed(next);
+                        }}
+                      >
+                        {collapsed.has(row.id) ? "▸" : "▾"}
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            </>
           ) : null}
           <button className="wr-nav-btn" data-active={props.active === "favorites"} aria-current={props.active === "favorites" ? "page" : undefined} onClick={() => navigate("/favorites")}>
             <div className="wr-nav-title">

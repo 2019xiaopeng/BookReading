@@ -28,7 +28,10 @@ CREATE TABLE IF NOT EXISTS books (
   description TEXT NULL,
   content_chars INTEGER NULL,
   file_size INTEGER NULL,
-  manual_status TEXT NULL
+  manual_status TEXT NULL,
+  subtitle TEXT NULL,
+  source_tags TEXT NULL,
+  title_source TEXT NULL DEFAULT 'import'
 );
 
 CREATE TABLE IF NOT EXISTS reading_state (

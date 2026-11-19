@@ -72,8 +72,8 @@ pub(crate) fn atomic_write_to(tmp: &Path, final_path: &Path, bytes: &[u8]) -> Re
 
 pub(crate) fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO books (id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite, format, page_count, shelf_id, sort_order, deleted_at, file_size, manual_status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        "INSERT INTO books (id, title, author, cover_path, library_path, added_at, last_opened_at, is_favorite, format, page_count, shelf_id, sort_order, deleted_at, file_size, manual_status, subtitle, source_tags)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             book.id,
             book.title,
@@ -89,7 +89,9 @@ pub(crate) fn insert_book(conn: &Connection, book: &Book) -> Result<(), rusqlite
             book.sort_order,
             book.deleted_at,
             book.file_size,
-            book.manual_status
+            book.manual_status,
+            book.subtitle,
+            book.source_tags
         ],
     )?;
     Ok(())
@@ -99,7 +101,7 @@ pub(crate) fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Erro
     let mut stmt = conn.prepare(
         "SELECT b.id, b.title, b.author, b.cover_path, b.library_path, b.added_at, b.last_opened_at,
                b.is_favorite, b.note, b.pinned_at, b.format, b.page_count, b.shelf_id, b.sort_order, b.deleted_at, r.percent,
-               b.description, b.content_chars, b.file_size, b.manual_status
+               b.description, b.content_chars, b.file_size, b.manual_status, b.subtitle, b.source_tags
          FROM books b LEFT JOIN reading_state r ON r.book_id = b.id
          WHERE b.deleted_at IS NULL
          ORDER BY (b.pinned_at IS NULL) ASC, COALESCE(b.pinned_at, 0) DESC, COALESCE(b.last_opened_at, b.added_at) DESC",
@@ -128,6 +130,8 @@ pub(crate) fn fetch_books(conn: &Connection) -> Result<Vec<Book>, rusqlite::Erro
                 content_chars: row.get(17)?,
                 file_size: row.get(18)?,
                 manual_status: row.get(19)?,
+                subtitle: row.get(20)?,
+                source_tags: row.get(21)?,
                 tags: Vec::new(),
             })
         })?
@@ -185,7 +189,7 @@ pub(crate) fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book,
     conn.query_row(
         "SELECT id, title, author, cover_path, library_path, added_at, last_opened_at,
                is_favorite, note, pinned_at, format, page_count, shelf_id, sort_order, deleted_at,
-               description, content_chars, file_size, manual_status
+               description, content_chars, file_size, manual_status, subtitle, source_tags
          FROM books
          WHERE id = ?1",
         [book_id],
@@ -211,6 +215,8 @@ pub(crate) fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book,
                 content_chars: row.get(16)?,
                 file_size: row.get(17)?,
                 manual_status: row.get(18)?,
+                subtitle: row.get(19)?,
+                source_tags: row.get(20)?,
                 tags: Vec::new(),
             })
         },
@@ -435,11 +441,14 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         epub::extract_epub_metadata(&final_book_abs).ok()
     };
 
-    let title = merge_optional_text(
-        req.title.clone().or_else(|| extracted.as_ref().and_then(|m| m.title.clone())),
-        fallback_title,
+    // N-1 导入即清洗（存量书走 clean_title_preview/apply 一键修复）
+    let (title, subtitle, source_tags, author) = super::metadata_clean::clean_import_meta(
+        merge_optional_text(
+            req.title.clone().or_else(|| extracted.as_ref().and_then(|m| m.title.clone())),
+            fallback_title,
+        ),
+        merge_optional_text(req.author.clone(), extracted.as_ref().and_then(|m| m.author.clone())),
     );
-    let author = merge_optional_text(req.author.clone(), extracted.as_ref().and_then(|m| m.author.clone()));
 
     let cover_ext = extracted.as_ref().and_then(|m| m.cover_ext.clone());
     let cover_abs: Option<PathBuf> = match (extracted.as_ref().and_then(|m| m.cover_bytes.as_deref()), cover_ext.as_deref()) {
@@ -473,6 +482,8 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
     let book = Book {
         id: book_id,
         title,
+        subtitle,
+        source_tags,
         author,
         cover_path,
         library_path,
@@ -584,8 +595,18 @@ pub fn update_book_metadata(app: tauri::AppHandle, req: UpdateBookMetadataReques
     let merged = merge_metadata(&existing, &req, now_ts());
 
     conn.execute(
-        "UPDATE books SET note = ?2, pinned_at = ?3, title = ?4, author = ?5, description = ?6 WHERE id = ?1",
-        params![req.book_id, merged.note, merged.pinned_at, merged.title, merged.author, merged.description],
+        "UPDATE books SET note = ?2, pinned_at = ?3, title = ?4, author = ?5, description = ?6,
+                title_source = CASE WHEN ?7 THEN 'manual' ELSE title_source END
+         WHERE id = ?1",
+        params![
+            req.book_id,
+            merged.note,
+            merged.pinned_at,
+            merged.title,
+            merged.author,
+            merged.description,
+            req.title.is_some()
+        ],
     )
     .map_err(|e| format!("failed to update book: {e}"))?;
 
@@ -1150,6 +1171,8 @@ mod tests {
             content_chars: None,
             file_size: None,
             manual_status: None,
+            subtitle: None,
+            source_tags: None,
             tags: Vec::new(),
         };
 
@@ -1196,6 +1219,8 @@ mod tests {
             content_chars: None,
             file_size: None,
             manual_status: None,
+            subtitle: None,
+            source_tags: None,
             tags: Vec::new(),
         };
 
@@ -1248,6 +1273,8 @@ mod tests {
             content_chars: None,
             file_size: None,
             manual_status: None,
+            subtitle: None,
+            source_tags: None,
             tags: Vec::new(),
         }
     }

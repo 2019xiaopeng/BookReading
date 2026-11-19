@@ -48,6 +48,8 @@ fn list_favorite_books_db(conn: &Connection) -> Result<Vec<Book>, rusqlite::Erro
             content_chars: None,
             file_size: None,
             manual_status: row.get(13)?,
+            subtitle: None,
+            source_tags: None,
             tags: Vec::new(),
         })
     })?;

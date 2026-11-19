@@ -146,6 +146,8 @@ fn list_trash_db(conn: &Connection) -> Result<Vec<Book>, rusqlite::Error> {
             content_chars: None,
             file_size: None,
             manual_status: row.get(15)?,
+            subtitle: None,
+            source_tags: None,
             tags: Vec::new(),
         })
     })?;

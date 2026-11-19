@@ -53,6 +53,7 @@ import {
   trashRemainingDays,
 } from "../library/shelves";
 import { DENSITY_PRESETS, normalizeLibraryDensity, type LibraryDensity } from "../library/density";
+import { applyRangeSelect } from "../library/rangeSelect";
 import { BOOKS_CHANGED_EVENT, importSingle, runImports } from "../library/importRunner";
 import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "../library/useCoverUrls";
 import { notifyBackgroundChanged, resetBackgroundCache } from "../ui/appBackground";
@@ -155,6 +156,8 @@ export default function LibraryPage() {
   const [moveDialog, setMoveDialog] = useState<MoveDialog | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // R-2 Shift 范围多选锚点（各视图重置，见 view 切换 effect / exitSelect）
+  const [lastClickedId, setLastClickedId] = useState<string | null>(null);
   // DnD 载荷（HTML5 dataTransfer 在 dragover 里读不到自定义类型，拖拽中用 state 旁路）
   const [dragBookId, setDragBookId] = useState<string | null>(null);
   const [dragShelfId, setDragShelfId] = useState<number | null>(null);
@@ -320,6 +323,7 @@ export default function LibraryPage() {
   useEffect(() => {
     setSelectMode(false);
     setSelected(new Set());
+    setLastClickedId(null);
   }, [currentShelfId, trashView]);
 
   // 当前书架被删（含在别的窗口删）→ 回根，避免渲染悬空路径
@@ -1052,23 +1056,25 @@ export default function LibraryPage() {
 
   // ---- 批量选择 ----
 
-  const toggleSelected = useCallback((id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
-
   function exitSelect() {
     setSelectMode(false);
     setSelected(new Set());
+    setLastClickedId(null);
   }
 
   // 全选口径 = 当前视图的过滤集（主视图 booksFiltered / 回收站 trashFiltered），T-4
   const selectAllList = trashView ? trashFiltered : booksFiltered;
   const allSelected = selectAllList.length > 0 && selectAllList.every((b) => selected.has(b.id));
+
+  // R-2 Shift 范围多选：范围=可见过滤列表闭区间；上下文经 ref 转发让回调引用恒定（BookCard memo 不失效）
+  const rangeSelectRef = useRef({ ids: [] as string[], selected, lastId: null as string | null });
+  rangeSelectRef.current = { ids: selectAllList.map((b) => b.id), selected, lastId: lastClickedId };
+  const toggleSelected = useCallback((id: string, shift?: boolean) => {
+    const { ids, selected: sel, lastId } = rangeSelectRef.current;
+    const r = applyRangeSelect(ids, id, sel, !!shift, lastId);
+    setSelected(r.selected);
+    setLastClickedId(r.lastId);
+  }, []);
 
   function toggleSelectAll() {
     setSelected(allSelected ? new Set() : new Set(selectAllList.map((b) => b.id)));
@@ -1523,7 +1529,7 @@ export default function LibraryPage() {
                     role="checkbox"
                     aria-checked={selected.has(b.id)}
                     aria-label={`选择《${formatTitle(b)}》`}
-                    onClick={() => toggleSelected(b.id)}
+                    onClick={(e) => toggleSelected(b.id, e.shiftKey)}
                   >
                     {selected.has(b.id) ? "✓" : ""}
                   </button>

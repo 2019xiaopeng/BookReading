@@ -355,10 +355,14 @@ fn import_folder(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) 
         src.file_name().and_then(|s| s.to_str()),
         title_opt,
     );
+    // N-1 导入即清洗（存量书走 clean_title_preview/apply 一键修复）
+    let (title, subtitle, source_tags, author) = super::metadata_clean::clean_import_meta(title, author);
 
     let book = Book {
         id: book_id.clone(),
         title,
+        subtitle,
+        source_tags,
         author,
         cover_path: Some(format!("library/covers/{book_id}.{ext}")),
         // 原地引用：存源目录绝对路径，删除书时不碰源目录
@@ -431,10 +435,14 @@ fn import_cbz(app: &tauri::AppHandle, src: &Path, title_opt: Option<String>) -> 
         src.file_stem().and_then(|s| s.to_str()),
         title_opt,
     );
+    // N-1 导入即清洗（存量书走 clean_title_preview/apply 一键修复）
+    let (title, subtitle, source_tags, author) = super::metadata_clean::clean_import_meta(title, author);
 
     let book = Book {
         id: book_id.clone(),
         title,
+        subtitle,
+        source_tags,
         author,
         cover_path: Some(format!("library/covers/{book_id}.{ext}")),
         library_path: format!("library/books/{book_id}.cbz"),
@@ -817,6 +825,8 @@ mod tests {
             content_chars: None,
             file_size: None,
             manual_status: None,
+            subtitle: None,
+            source_tags: None,
             tags: Vec::new(),
         }
     }

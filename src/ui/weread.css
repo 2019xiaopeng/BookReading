@@ -3454,3 +3454,75 @@ body::after {
 .wr-continue-card .wr-mini-btn {
   flex: none;
 }
+
+/* ---- v2.9.0 S-1~S-3 侧栏书架树折叠 ---- */
+
+/* S-1 折叠箭头：绝对定位行尾；行内文本让位（:has 命中带箭头的行） */
+.wr-nav-group-btn {
+  position: relative;
+}
+
+.wr-nav-group-btn:has(.wr-nav-toggle) {
+  padding-right: 26px;
+}
+
+.wr-nav-toggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--wr-muted);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: var(--wr-radius-xs);
+}
+
+.wr-nav-toggle:hover {
+  color: var(--wr-ink);
+  background: rgba(var(--wr-ink-rgb), 0.08);
+}
+
+/* S-2 全部收起/展开小字钮（树上方一行） */
+.wr-nav-tree-tools {
+  display: flex;
+  justify-content: flex-end;
+  padding-right: 2px;
+}
+
+.wr-nav-tree-tool {
+  border: none;
+  background: transparent;
+  padding: 0 2px;
+  font-size: 11px;
+  color: var(--wr-muted);
+  cursor: pointer;
+}
+
+.wr-nav-tree-tool:hover {
+  color: var(--wr-ink);
+}
+
+.wr-nav-tree-tool:focus-visible {
+  outline: 2px solid var(--wr-ink);
+  outline-offset: 1px;
+}
+
+/* S-3 长树滚动：侧栏其余件（刊头/快捷 chips/三个导航大钮/底部按钮列）实测约 600px，
+   树超高在本层滚（壳层 overflow:hidden 本不滚）；窄窗 140px 保底可见 */
+.wr-nav-groups {
+  max-height: max(140px, calc(100vh - 600px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* N-1 清洗预览弹窗（v2.9.0） */
+.wr-clean-dialog { max-width: 640px; }
+.wr-clean-list { max-height: 56vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.wr-clean-row { display: grid; grid-template-columns: 1fr 16px 1fr; gap: 6px; font-size: 13px; align-items: start; }
+.wr-clean-old { color: var(--wr-muted); text-decoration: line-through; word-break: break-all; }
+.wr-clean-arrow { color: var(--wr-muted); }
+.wr-clean-new-title { color: var(--m2-ink); font-weight: 600; word-break: break-all; }
+.wr-clean-new-sub { color: var(--m2-ink-soft); font-size: 12px; }
+.wr-clean-tags { color: var(--wr-muted); font-size: 11px; font-family: var(--wr-mono); }

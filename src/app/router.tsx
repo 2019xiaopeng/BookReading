@@ -1,11 +1,23 @@
-import { createBrowserRouter } from "react-router-dom";
+import { createBrowserRouter, Outlet } from "react-router-dom";
 
 import LibraryPage from "../pages/LibraryPage";
 import ReaderPage from "../pages/ReaderPage";
 import FavoritesPage from "../pages/FavoritesPage";
+import useLogicalBack from "../ui/useLogicalBack";
+
+// M-3：无布局层挂 useLogicalBack（useNavigate 需要 router context，须在 RouterProvider 内层）
+function LogicalBackLayer() {
+  useLogicalBack();
+  return <Outlet />;
+}
 
 export const router = createBrowserRouter([
-  { path: "/", element: <LibraryPage /> },
-  { path: "/read/:bookId", element: <ReaderPage /> },
-  { path: "/favorites", element: <FavoritesPage /> },
+  {
+    element: <LogicalBackLayer />,
+    children: [
+      { path: "/", element: <LibraryPage /> },
+      { path: "/read/:bookId", element: <ReaderPage /> },
+      { path: "/favorites", element: <FavoritesPage /> },
+    ],
+  },
 ]);

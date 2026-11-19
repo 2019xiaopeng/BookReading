@@ -28,7 +28,8 @@ export type BookCardProps = {
   loading: boolean;
   onCardPointerDown: (e: ReactPointerEvent<HTMLElement>, book: Book, coverUrl?: string) => void;
   onCardActivate: (bookId: string) => void;
-  onCardSelectToggle: (bookId: string) => void;
+  /** 选择模式点击/复选框激活；shiftKey=R-2 范围多选（键盘激活不带） */
+  onCardSelectToggle: (bookId: string, shiftKey?: boolean) => void;
   /** ⋯ 按钮传 anchor（菜单贴按钮）；右键传 pos（菜单贴光标），二选一 */
   onCardMenu: (book: Book, anchor: HTMLElement | null, pos?: { x: number; y: number }) => void;
 };
@@ -69,7 +70,7 @@ function BookCardImpl(props: BookCardProps) {
       }}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest("button")) return;
-        if (selectMode) onCardSelectToggle(book.id);
+        if (selectMode) onCardSelectToggle(book.id, e.shiftKey);
         else onCardActivate(book.id);
       }}
     >
@@ -81,7 +82,7 @@ function BookCardImpl(props: BookCardProps) {
           aria-label={`选择《${formatTitle(book)}》`}
           onClick={(e) => {
             e.stopPropagation();
-            onCardSelectToggle(book.id);
+            onCardSelectToggle(book.id, e.shiftKey);
           }}
         >
           {selected ? "✓" : ""}
