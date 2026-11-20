@@ -26,6 +26,10 @@ v2.5.0 起全新「碳墨刊头」界面：默认**纸墨**主题（米白纸底
 | --- | --- |
 | ![](./docs/design/shots/readme/reader-epub-settings.png) | ![](./docs/design/shots/readme/reader-epub-inkdark.png) |
 
+| 云书架 · wenku8 同步【v3.0.1】 | 书籍详情 · 选书架拉取入库 |
+| --- | --- |
+| ![](./docs/design/shots/readme/cloud-shelf.png) | ![](./docs/design/shots/readme/cloud-detail.png) |
+
 > 截图为运行中的真实应用（为保护演示书库隐私，正文使用合成测试书）。
 
 ## v3.0.1 更新
@@ -160,7 +164,7 @@ v2.5.0 起全新「碳墨刊头」界面：默认**纸墨**主题（米白纸底
 
 ## 安装
 
-从 [Releases](../../releases/latest) 下载 NSIS 安装包（`bookreading_2.6.0_x64-setup.exe`），双击安装即可。安装包内置 WebView2 离线安装器，无需额外环境。升级安装保留书库与全部数据（升级前建议备份 `%APPDATA%\com.root.bookreading`）。
+从 [Releases](../../releases/latest) 下载 NSIS 安装包（如 `bookreading_3.0.1_x64-setup.exe`，以 Releases 最新为准），双击安装即可。安装包内置 WebView2 离线安装器，无需额外环境。升级安装保留书库与全部数据（升级前建议备份 `%APPDATA%\com.root.bookreading`）。
 
 ## 从源码构建
 
@@ -181,7 +185,7 @@ npm run tauri build  # 产出 NSIS 安装包
 CARGO_TARGET_DIR=D:/cargo-target/bookreading npm run tauri build
 ```
 
-- 跑测试：`npm test`（前端 Vitest，27 文件 188 用例）与 `cd src-tauri && cargo test`（后端 101 用例）。
+- 跑测试：`npm test`（前端 Vitest，37 文件 259 用例）与 `cd src-tauri && cargo test`（后端 147 用例）。
 
 ## 项目结构
 
@@ -189,7 +193,7 @@ CARGO_TARGET_DIR=D:/cargo-target/bookreading npm run tauri build
 bookreading/
 ├── src/                # React 前端
 │   ├── app/            #   路由
-│   ├── pages/          #   书库 / 收藏 / 阅读器页面
+│   ├── pages/          #   书库 / 收藏 / 云书架 / 阅读器页面
 │   ├── library/        #   书架、标签、导入、封面、密度
 │   ├── reader/         #   epub / image / pdf 三类阅读器与设置
 │   ├── tauri/          #   invoke 封装与前端日志
