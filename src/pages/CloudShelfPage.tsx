@@ -177,7 +177,7 @@ function ShelfPicker({
       left: r.left,
       top: useAbove ? Math.max(8, r.top - maxHeight - 4) : r.bottom + 4,
       maxHeight,
-      width: Math.max(r.width, 180),
+      width: Math.max(r.width, 220),
     });
     setOpen(true);
   }
@@ -199,7 +199,9 @@ function ShelfPicker({
         setCreating(false);
       }
     };
-    const onScroll = () => {
+    const onScroll = (e: Event) => {
+      // 菜单自身滚动不收（否则列表一滚就关）；只在外层（详情对话框）滚动时收——弹层是 fixed 不随滚，留着会错位
+      if (menuRef.current?.contains(e.target as Node)) return;
       setOpen(false);
     };
     window.addEventListener("pointerdown", onPointerDown, true);

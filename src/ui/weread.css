@@ -3702,7 +3702,16 @@ body::after {
 /* 批次13 F-3+发布前补：弹层由组件 Portal 到 body + fixed 内联定位（视口坐标，上下自适应），
    详情对话框 overflow/圆角再也裁不到；此处只留尺寸与视觉 */
 .wr-cloud-picker-menu {
-  min-width: 170px;
+  min-width: 220px;
+  max-width: 340px;
+  font-size: 13px;
+  overflow-x: hidden; /* 书架名超长走省略，不出横向滚动条 */
+}
+.wr-cloud-picker-menu .wr-menu-item {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 批次13 F-3：书架过多时「＋ 新建书架…」钉在弹层可视底缘常驻可点（底 padding 6px 一并盖住），
