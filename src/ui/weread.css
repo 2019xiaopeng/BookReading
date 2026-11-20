@@ -2844,10 +2844,11 @@ input[type="range"]:focus-visible {
 .wr-quick-row {
   display: flex;
   gap: 6px;
-  padding: 10px 12px 0;
+  padding: 0 12px;
   flex-wrap: wrap;
   align-items: center;
-  min-height: 32px;
+  /* 定高：chips 按钮与文本行内容高度差 2px（30/28），min-height 压不住——四视图恒 40px */
+  height: 40px;
 }
 
 .wr-quick-chip {
