@@ -342,6 +342,33 @@ describe("云书架页（v3.0）", () => {
     expect(downloadMock).toHaveBeenCalledWith(900, "12");
   });
 
+  test("批次13 F-3 书架过多：目标书架下拉定高可滚（maxHeight 300 + overflowY auto），「＋ 新建书架…」常驻列表底项", async () => {
+    statusMock.mockResolvedValue({ has_saved: true, username: "u" });
+    shelfMock.mockResolvedValue([{ aid: 900, name: "新书", date: null, book_id: null, last_cid: 0 }]);
+    infoMock.mockResolvedValue(bookInfo(900, "新书"));
+    catalogMock.mockResolvedValue([]);
+    // 30 个书架：旧弹层无界长高被详情弹窗裁顶，看不全也滚不了
+    shelvesMock.mockResolvedValue(
+      Array.from({ length: 30 }, (_, i) => ({ id: i + 1, name: `书架${i + 1}`, parent_id: null, sort_order: i, created_at: 0 })),
+    );
+    getSettingsMock.mockResolvedValue({});
+
+    renderCloudShelf();
+    fireEvent.click(await screen.findByText("新书"));
+    const dialog = await screen.findByRole("dialog", { name: "书籍详情 新书" });
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "目标书架" }));
+    const menu = document.querySelector(".wr-cloud-picker-menu") as HTMLElement | null;
+    expect(menu).toBeTruthy();
+    // 定高 + 纵向滚动（内联样式，jsdom 可断言；滚条主题样式在全局 ::-webkit-scrollbar）
+    expect(menu?.style.maxHeight).toBe("300px");
+    expect(menu?.style.overflowY).toBe("auto");
+    // 新建入口是滚动列表最后一项（CSS sticky 钉在可视底缘，不随长列表被顶走）
+    const options = within(menu as HTMLElement).getAllByRole("option");
+    expect(options[options.length - 1].textContent).toBe("＋ 新建书架…");
+    expect(options.length).toBe(32); // 默认（根） + 30 书架 + 新建
+  });
+
   test("F2 有新章：imported 书错峰比对 latest_cid > last_cid 亮「有新章」徽标", async () => {
     statusMock.mockResolvedValue({ has_saved: true, username: "u" });
     shelfMock.mockResolvedValue([

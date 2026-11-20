@@ -233,7 +233,13 @@ function ShelfPicker({
             <span aria-hidden="true" style={{ marginLeft: 4, fontSize: 10, opacity: 0.7 }}>▾</span>
           </button>
           {open ? (
-            <div className="wr-menu wr-cloud-picker-menu" role="listbox" aria-label="目标书架选项">
+            /* 批次13 F-3：书架过多弹层定高可滚（内联便于 jsdom 断言；「＋ 新建书架…」sticky 常驻在 CSS） */
+            <div
+              className="wr-menu wr-cloud-picker-menu"
+              role="listbox"
+              aria-label="目标书架选项"
+              style={{ maxHeight: 300, overflowY: "auto" }}
+            >
               <button
                 type="button"
                 className="wr-menu-item"
