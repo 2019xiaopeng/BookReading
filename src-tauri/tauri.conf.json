@@ -30,6 +30,9 @@
     "windows": {
       "webviewInstallMode": {
         "type": "offlineInstaller"
+      },
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
       }
     },
     "icon": [
