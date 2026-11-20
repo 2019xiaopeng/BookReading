@@ -60,6 +60,7 @@ import { notifyBackgroundChanged, resetBackgroundCache } from "../ui/appBackgrou
 import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
 import AppShell, { setShelvesCache, useShellShelves } from "../ui/AppShell";
+import { useSidebarActions } from "../ui/sidebarActions";
 import { showAlert, showConfirm } from "../ui/dialog";
 import { showToast } from "../ui/toast";
 import { IconBook, IconCheckSquare, IconClose, IconDensity, IconFolder, IconImage, IconRefresh, IconReveal, IconShelf, IconSort, IconTrash } from "../ui/icons";
@@ -416,6 +417,27 @@ export default function LibraryPage() {
         .sort((a, b) => (b.last_opened_at ?? 0) - (a.last_opened_at ?? 0))[0] ?? null
     );
   }, [books, currentShelfId, query, continueDismissed]);
+
+  // B5 侧栏底部动作注册：刷新=页面槽（云书架等视图各自替换）；导入两钮=全局槽（handlers 含当前书架落架逻辑）
+  useSidebarActions("page", [
+    { label: "刷新", icon: <IconRefresh />, disabled: loading, onClick: () => void refresh() },
+  ]);
+  useSidebarActions("global", [
+    {
+      label: importing === "images" ? "导入中…" : "导入漫画",
+      icon: <IconImage />,
+      primary: true,
+      disabled: loading,
+      onClick: onImportImages,
+    },
+    {
+      label: importing === "books" ? "导入中…" : "导入图书",
+      icon: <IconBook />,
+      primary: true,
+      disabled: loading,
+      onClick: onImport,
+    },
+  ]);
 
   // 元数据自愈批处理：一轮只发起修复并收集结果，全部完成后 refresh 一次
   // （此前每修一本 await refresh() 全量重拉，N 本待修 = N 次整页重渲）
@@ -1319,21 +1341,12 @@ export default function LibraryPage() {
       title={trashView ? "回收站" : "书架"}
       search={{ value: query, placeholder: trashView ? "搜索书名 / 作者" : "搜索书名 / 作者", onChange: setQuery }}
       quickFilter={trashView ? undefined : { value: statusFilter, onChange: setStatusFilter }}
-      sidebarFooter={
-        <>
-          <button className="wr-small-btn" disabled={loading} onClick={() => void refresh()}>
-            <IconRefresh />
-            <span>刷新</span>
-          </button>
-          <button className="wr-small-btn wr-primary" onClick={onImportImages} disabled={loading}>
-            <IconImage />
-            <span>{importing === "images" ? "导入中…" : "导入漫画"}</span>
-          </button>
-          <button className="wr-small-btn wr-primary" onClick={onImport} disabled={loading}>
-            <IconBook />
-            <span>{importing === "books" ? "导入中…" : "导入图书"}</span>
-          </button>
-        </>
+      contextRow={
+        trashView ? (
+          <span className="wr-quick-context">
+            {retentionDays === 0 ? "永久保留" : `保留 ${retentionDays} 天`} · {trash.length} 本可恢复
+          </span>
+        ) : undefined
       }
     >
       <div className="wr-masthead">
@@ -1343,7 +1356,7 @@ export default function LibraryPage() {
         </div>
       </div>
 
-      {/* R-1 继续阅读快捷卡（仅根视图无搜索时） */}
+      {/* R-1 继续阅读紧凑条（v3.0 D2：48px 工具行，仅根视图无搜索时；整条可点，✕ 本次会话隐藏） */}
       {continueBook ? (
         <div className="wr-continue-card" role="button" tabIndex={0} onClick={() => openBook(continueBook.id)}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBook(continueBook.id); } }}>
@@ -1356,10 +1369,15 @@ export default function LibraryPage() {
           <div className="wr-continue-meta">
             <div className="wr-continue-title">{formatTitle(continueBook)}</div>
             <div className="wr-continue-sub">
-              {progressText(continueBook)}
-              {continueBook.author?.trim() ? ` · ${continueBook.author.trim()}` : ""}
+              {continueBook.author?.trim() || progressText(continueBook)}
             </div>
           </div>
+          <div className="wr-continue-progress" aria-hidden="true">
+            <i style={{ width: `${Math.round((continueBook.reading_percent ?? 0) * 100)}%` }} />
+          </div>
+          <span className="wr-continue-pct">
+            {typeof continueBook.reading_percent === "number" ? `${Math.round(continueBook.reading_percent * 100)}%` : "0%"}
+          </span>
           <button
             type="button"
             className="wr-mini-btn"

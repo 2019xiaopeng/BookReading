@@ -80,7 +80,7 @@ pub struct Wenku8ProgressEvent {
 // ---- 基础编解码（无 base64/percent-encoding 依赖，按需 20 行）----
 
 /// 标准 base64（带填充）
-fn b64_encode(data: &[u8]) -> String {
+pub(crate) fn b64_encode(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
@@ -92,6 +92,34 @@ fn b64_encode(data: &[u8]) -> String {
         out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
     }
     out
+}
+
+/// 标准 base64 解码（容忍缺省/多余填充；非法字符返回 None）
+pub(crate) fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Some((c - b'0' + 52) as u32),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let s = s.trim().trim_end_matches('=');
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    for chunk in s.as_bytes().chunks(4) {
+        if chunk.len() == 1 {
+            return None;
+        }
+        let n = chunk.iter().try_fold(0u32, |acc, &c| val(c).map(|v| (acc << 6) | v))?;
+        match chunk.len() {
+            4 => out.extend_from_slice(&[(n >> 16) as u8, (n >> 8) as u8, n as u8]),
+            3 => out.extend_from_slice(&[(n >> 10) as u8, (n >> 2) as u8]),
+            _ => out.push((n >> 4) as u8),
+        }
+    }
+    Some(out)
 }
 
 /// UTF-8 percent-encode（登录 action 里的用户名/密码用）
@@ -261,7 +289,8 @@ fn wenku8_action(app: &tauri::AppHandle, action: &str) -> Result<String, String>
         return Ok(body);
     }
     let (user, pass) = match (setting_get(app, KEY_USER)?, setting_get(app, KEY_PASS)?) {
-        (Some(u), Some(p)) => (u, p),
+        // 登出后键值为空串：空串视同未保存，不拿空账密去撞登录接口
+        (Some(u), Some(p)) if !u.is_empty() && !p.is_empty() => (u, p),
         _ => return Err("wenku8 会话已失效，请重新登录".into()),
     };
     let re = do_login(app, &user, &pass)?;
@@ -401,9 +430,27 @@ pub fn wenku8_status(app: tauri::AppHandle) -> Result<Wenku8Status, String> {
 }
 
 fn status_inner(app: &tauri::AppHandle) -> Result<Wenku8Status, String> {
-    let user = setting_get(app, KEY_USER)?;
-    let pass = setting_get(app, KEY_PASS)?;
+    // 登出后键值为空串：user/pass 任一为空串即视为未保存
+    let user = setting_get(app, KEY_USER)?.filter(|u| !u.is_empty());
+    let pass = setting_get(app, KEY_PASS)?.filter(|p| !p.is_empty());
     Ok(Wenku8Status { has_saved: user.is_some() && pass.is_some(), username: user })
+}
+
+/// B4 登出：三键置空串（status_inner / wenku8_action 均把空串当未保存/未登录）
+#[tauri::command(async)]
+pub fn wenku8_logout(app: tauri::AppHandle) -> Result<(), String> {
+    let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+    std::thread::spawn(move || {
+        let _ = tx.send(logout_inner(&app));
+    });
+    rx.recv().map_err(|_| "登出线程异常退出".to_string())?
+}
+
+fn logout_inner(app: &tauri::AppHandle) -> Result<(), String> {
+    setting_set(app, KEY_COOKIE, "")?;
+    setting_set(app, KEY_USER, "")?;
+    setting_set(app, KEY_PASS, "")?;
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -569,6 +616,14 @@ mod tests {
         assert_eq!(b64_encode(b"ab"), "YWI=");
         assert_eq!(b64_encode(b"a"), "YQ==");
         assert_eq!(pct_encode("user一"), "user%E4%B8%80");
+        // decode 往返（B1 请求封面用）
+        assert_eq!(b64_decode("YWJj").unwrap(), b"abc");
+        assert_eq!(b64_decode("YWI=").unwrap(), b"ab");
+        assert_eq!(b64_decode("YQ====").unwrap(), b"a"); // 多余填充容忍
+        let data = vec![0u8, 1, 2, 254, 255, 7];
+        assert_eq!(b64_decode(&b64_encode(&data)).unwrap(), data);
+        assert!(b64_decode("!!!").is_none());
+        assert!(b64_decode("A").is_none());
     }
 
     #[test]

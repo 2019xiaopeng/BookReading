@@ -2,8 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getVersion } from "@tauri-apps/api/app";
-import { IconBook, IconCloud, IconPalette, IconSearch, IconSettings, IconStar, IconTrash } from "./icons";
+import { IconBook, IconCloud, IconImage, IconPalette, IconSearch, IconSettings, IconStar, IconTrash } from "./icons";
 import { getCachedBackgroundUrl, getBackgroundUrl, subscribeBackground } from "./appBackground";
+import { useSidebarActionSlots, type SidebarAction } from "./sidebarActions";
 import { applyPersistedTheme, setTheme, THEME_SWATCHES, useThemeSelection } from "./theme";
 import { getSettings, listBooks, listShelves, setSetting, type Book, type Shelf } from "../tauri/invoke";
 import { normalizeBgVeil, normalizeReaderBackground } from "../reader/settings/normalize";
@@ -158,6 +159,28 @@ async function runShellStartupOnce(): Promise<void> {
   }
 }
 
+// B5 兜底：LibraryPage 未挂载的视图（收藏/云书架登录前）导入两钮常驻禁用，title 提示回书库
+const IMPORT_ACTIONS_FALLBACK: SidebarAction[] = [
+  { label: "导入漫画", icon: <IconImage />, disabled: true, title: "回书库导入" },
+  { label: "导入图书", icon: <IconBook />, disabled: true, title: "回书库导入" },
+];
+
+function sidebarActionBtn(a: SidebarAction) {
+  return (
+    <button
+      key={a.label}
+      type="button"
+      className={`wr-small-btn${a.primary ? " wr-primary" : ""}`}
+      disabled={a.disabled}
+      title={a.title}
+      onClick={a.onClick}
+    >
+      {a.icon}
+      <span>{a.label}</span>
+    </button>
+  );
+}
+
 export default function AppShell(props: {
   active: "library" | "favorites" | "cloud" | "reader";
   title: string;
@@ -177,7 +200,8 @@ export default function AppShell(props: {
     value: "all" | ReadingStatus;
     onChange: (v: "all" | ReadingStatus) => void;
   };
-  sidebarFooter?: ReactNode;
+  /** v3.0 D3：非书库视图的上下文信息行（quickFilter 缺席时渲染于同一常驻行容器） */
+  contextRow?: ReactNode;
   children: ReactNode;
 }) {
   const navigate = useNavigate();
@@ -189,6 +213,8 @@ export default function AppShell(props: {
   const [themeMenu, setThemeMenu] = useState<{ x: number; y: number } | null>(null);
   const shelves = useShellShelves();
   const shelfCounts = useShelfCounts();
+  // B5 底部动作区：page 槽（刷新）+ global 槽（导入）由当前挂载页注册
+  const sideActions = useSidebarActionSlots();
   // S-1 树折叠：state 驱动重渲，模块缓存保证路由切换（重挂）不丢
   const [collapsed, setCollapsed] = useState(() => new Set(shelfCollapsedCache));
   const updateAvailable = useSyncExternalStore(subscribeUpdateAvailable, getUpdateAvailable, () => null);
@@ -343,43 +369,47 @@ export default function AppShell(props: {
           </div>
         </div>
 
-        {/* M-2：行常驻占位——收藏/回收站视图无快捷筛选时隐藏内容但保高度，消灭切页布局跳动 */}
+        {/* M-2 + D3：行常驻——书库视图渲染快捷筛选 chips；其它视图渲染各自 contextRow（收藏/云书架/回收站）；
+            两者皆无才隐藏占位，保高度消灭切页布局跳动 */}
         <div
           className="wr-quick-row"
           role="group"
-          aria-label="快捷筛选"
-          style={props.quickFilter ? undefined : { visibility: "hidden" }}
+          aria-label={props.quickFilter ? "快捷筛选" : undefined}
+          style={props.quickFilter || props.contextRow ? undefined : { visibility: "hidden" }}
         >
-          <button
-            type="button"
-            className="wr-quick-chip"
-            data-active={props.quickFilter?.value === "all"}
-            aria-pressed={props.quickFilter?.value === "all"}
-            tabIndex={props.quickFilter ? 0 : -1}
-            onClick={() => props.quickFilter?.onChange("all")}
-          >
-            全部藏书
-          </button>
-          <button
-            type="button"
-            className="wr-quick-chip"
-            data-active={props.quickFilter?.value === "reading"}
-            aria-pressed={props.quickFilter?.value === "reading"}
-            tabIndex={props.quickFilter ? 0 : -1}
-            onClick={() => props.quickFilter?.onChange("reading")}
-          >
-            在读
-          </button>
-          <button
-            type="button"
-            className="wr-quick-chip"
-            data-active={props.quickFilter?.value === "unread"}
-            aria-pressed={props.quickFilter?.value === "unread"}
-            tabIndex={props.quickFilter ? 0 : -1}
-            onClick={() => props.quickFilter?.onChange("unread")}
-          >
-            未读
-          </button>
+          {props.quickFilter ? (
+            <>
+              <button
+                type="button"
+                className="wr-quick-chip"
+                data-active={props.quickFilter.value === "all"}
+                aria-pressed={props.quickFilter.value === "all"}
+                onClick={() => props.quickFilter?.onChange("all")}
+              >
+                全部藏书
+              </button>
+              <button
+                type="button"
+                className="wr-quick-chip"
+                data-active={props.quickFilter.value === "reading"}
+                aria-pressed={props.quickFilter.value === "reading"}
+                onClick={() => props.quickFilter?.onChange("reading")}
+              >
+                在读
+              </button>
+              <button
+                type="button"
+                className="wr-quick-chip"
+                data-active={props.quickFilter.value === "unread"}
+                aria-pressed={props.quickFilter.value === "unread"}
+                onClick={() => props.quickFilter?.onChange("unread")}
+              >
+                未读
+              </button>
+            </>
+          ) : (
+            props.contextRow
+          )}
         </div>
 
         <div className="wr-nav" role="navigation">
@@ -475,7 +505,8 @@ export default function AppShell(props: {
         </div>
 
         <div className="wr-side-bottom">
-          {props.sidebarFooter}
+          {sideActions.page?.map((a) => sidebarActionBtn(a))}
+          {(sideActions.global ?? IMPORT_ACTIONS_FALLBACK).map((a) => sidebarActionBtn(a))}
           <button
             className="wr-small-btn"
             data-badge={updateAvailable ? "true" : undefined}

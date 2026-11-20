@@ -9,6 +9,7 @@ vi.mock("../tauri/wenku8", async (importOriginal) => {
   return {
     ...actual,
     wenku8Login: vi.fn(),
+    wenku8Logout: vi.fn(),
     wenku8Status: vi.fn(),
     wenku8Bookshelf: vi.fn(),
     wenku8BookInfo: vi.fn(),
@@ -20,10 +21,11 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-// 壳渲染透传：页面行为测试不背 AppShell 的 Tauri 面（设置/托盘/拖拽导入）
+// 壳渲染透传：页面行为测试不背 AppShell 的 Tauri 面（设置/托盘/拖拽导入）；contextRow 透传出来便于断言（D3）
 vi.mock("../ui/AppShell", () => ({
-  default: (props: { sidebarFooter?: unknown; children?: React.ReactNode }) => (
+  default: (props: { children?: React.ReactNode; contextRow?: React.ReactNode }) => (
     <div>
+      {props.contextRow}
       {props.children}
     </div>
   ),
@@ -34,6 +36,7 @@ import {
   wenku8Bookshelf,
   wenku8Download,
   wenku8Login,
+  wenku8Logout,
   wenku8Status,
   type Wenku8DownloadResult,
   type Wenku8ProgressEvent,
@@ -43,6 +46,7 @@ import CloudShelfPage from "./CloudShelfPage";
 
 const statusMock = vi.mocked(wenku8Status);
 const loginMock = vi.mocked(wenku8Login);
+const logoutMock = vi.mocked(wenku8Logout);
 const shelfMock = vi.mocked(wenku8Bookshelf);
 const infoMock = vi.mocked(wenku8BookInfo);
 const downloadMock = vi.mocked(wenku8Download);
@@ -52,7 +56,6 @@ function renderCloudShelf() {
   return render(
     <MemoryRouter initialEntries={["/cloud-shelf"]}>
       <Routes>
-        <Route path="/" element={<div data-testid="library-home" />} />
         <Route path="/cloud-shelf" element={<CloudShelfPage />} />
       </Routes>
     </MemoryRouter>,
@@ -82,7 +85,7 @@ describe("云书架页（v3.0）", () => {
     expect(loginMock).toHaveBeenCalledWith("someone", "wrong");
   });
 
-  test("has_saved 渲染书卡列表；name 为 null 的书懒取 bookInfo 补书名", async () => {
+  test("has_saved 渲染书卡列表；书名只在 meta 区渲染一处（D1），name 为 null 的书懒取 bookInfo 补书名", async () => {
     statusMock.mockResolvedValue({ has_saved: true, username: "u" });
     shelfMock.mockResolvedValue([
       { aid: 101, name: "绑架游戏", date: "2024-01-02" },
@@ -100,14 +103,16 @@ describe("云书架页（v3.0）", () => {
 
     renderCloudShelf();
 
-    // 书名在封面占位与 meta 两处渲染，取多匹配
-    expect((await screen.findAllByText("绑架游戏")).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText("白夜行")).length).toBeGreaterThan(0);
+    // D1：封面 overlay 仅在封面拉挂时显示书名（jsdom 里 img 不加载也不报错 → 只有 meta 一处）
+    expect((await screen.findAllByText("绑架游戏")).length).toBe(1);
     await waitFor(() => expect(infoMock).toHaveBeenCalledWith(202));
+    expect((await screen.findAllByText("白夜行")).length).toBe(1);
     expect(screen.getByTitle("2024-01-02").textContent).toBe("2024-01-02");
+    // D1 刊头：书库同款大版统计（wenku8 · 用户名 · 共 n 本）
+    expect(screen.getByText("wenku8 · u · 共 2 本")).toBeTruthy();
   });
 
-  test("点击拉取 → 进度事件驱动进度条 → download resolve 后成功态并可去书库", async () => {
+  test("点击拉取 → 悬浮层进度墨线随进度事件更新 → download resolve 后 ✓ 已入库", async () => {
     statusMock.mockResolvedValue({ has_saved: true, username: "u" });
     shelfMock.mockResolvedValue([{ aid: 101, name: "绑架游戏", date: "2024-01-02" }]);
     let resolveDownload!: (v: Wenku8DownloadResult) => void;
@@ -118,7 +123,6 @@ describe("云书架页（v3.0）", () => {
     renderCloudShelf();
 
     fireEvent.click(await screen.findByRole("button", { name: "拉取到书库" }));
-    expect(await screen.findByText(/拉取中/)).toBeTruthy();
 
     // listen 注册的进度回调按 aid 过滤后更新进度条
     const handler = listenMock.mock.calls[0]?.[1] as (e: { payload: Wenku8ProgressEvent }) => void;
@@ -127,14 +131,30 @@ describe("云书架页（v3.0）", () => {
     const bar = screen.getByRole("progressbar");
     expect(bar.getAttribute("aria-valuenow")).toBe("2");
     expect(bar.getAttribute("aria-valuemax")).toBe("5");
-    expect(within(bar.parentElement!).getByText("拉取中 2/5")).toBeTruthy();
+    expect(within(bar).getByText("40%")).toBeTruthy();
 
     await act(async () => {
       resolveDownload({ book_id: "b1", title: "绑架游戏", chapters: 12 });
     });
     expect(await screen.findByText("✓ 已入库")).toBeTruthy();
+    // D1：完成后不再给「去书库」次按钮（点卡片/侧栏回书库即可）
+    expect(screen.queryByRole("button", { name: "去书库" })).toBeNull();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "去书库" }));
-    expect(await screen.findByTestId("library-home")).toBeTruthy();
+  test("D3 上下文行显示账号与上次同步时间；退出登录调 wenku8Logout 清账密回登录卡", async () => {
+    statusMock.mockResolvedValue({ has_saved: true, username: "u" });
+    shelfMock.mockResolvedValue([{ aid: 101, name: "绑架游戏", date: null }]);
+    logoutMock.mockResolvedValue(undefined);
+
+    renderCloudShelf();
+
+    expect(await screen.findByText(/u · 上次同步 \d{2}:\d{2}/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
+
+    expect(await screen.findByPlaceholderText("用户名")).toBeTruthy();
+    expect(logoutMock).toHaveBeenCalledTimes(1);
+    // 上下文行随登录卡消失
+    expect(screen.queryByText(/上次同步/)).toBeNull();
   });
 });

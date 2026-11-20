@@ -84,3 +84,8 @@ export function wenku8BookInfo(aid: number): Promise<Wenku8BookInfo> {
 export function wenku8Download(aid: number): Promise<Wenku8DownloadResult> {
   return invoke<Wenku8DownloadResult>("wenku8_download", { aid });
 }
+
+/** 退出登录：清掉本机保存的账密与会话 cookie（页面侧随后回登录卡） */
+export function wenku8Logout(): Promise<void> {
+  return invoke<void>("wenku8_logout");
+}

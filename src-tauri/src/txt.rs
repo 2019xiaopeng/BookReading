@@ -246,7 +246,7 @@ fn chapter_xhtml(title: &str, paragraphs: &[String]) -> String {
     body
 }
 
-fn content_opf(title_xml: &str, uuid: &str, modified: &str, chapter_count: usize) -> String {
+fn content_opf(title_xml: &str, author_xml: Option<&str>, uuid: &str, modified: &str, chapter_count: usize) -> String {
     let mut manifest = String::new();
     let mut spine = String::new();
     for i in 1..=chapter_count {
@@ -256,13 +256,17 @@ fn content_opf(title_xml: &str, uuid: &str, modified: &str, chapter_count: usize
         ));
         spine.push_str(&format!("    <itemref idref=\"c{}\"/>\n", i));
     }
+    // B2：作者可缺（无作者信息时不输出空 dc:creator）
+    let creator = author_xml
+        .map(|a| format!("    <dc:creator>{a}</dc:creator>\n"))
+        .unwrap_or_default();
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="book-id">urn:uuid:{uuid}</dc:identifier>
     <dc:title>{title_xml}</dc:title>
-    <dc:language>zh</dc:language>
+{creator}    <dc:language>zh</dc:language>
     <meta property="dcterms:modified">{modified}</meta>
   </metadata>
   <manifest>
@@ -316,7 +320,7 @@ fn add_entry<W: Write + Seek>(
     Ok(())
 }
 
-pub fn txt_to_epub(title: &str, text: &str) -> Result<Vec<u8>, String> {
+pub fn txt_to_epub(title: &str, author: Option<&str>, text: &str) -> Result<Vec<u8>, String> {
     if text.trim().is_empty() {
         return Err("TXT 内容为空".to_string());
     }
@@ -326,6 +330,9 @@ pub fn txt_to_epub(title: &str, text: &str) -> Result<Vec<u8>, String> {
     }
 
     let title_xml = escape_xml(title);
+    let author_xml = author
+        .filter(|a| !a.trim().is_empty())
+        .map(escape_xml);
     let uuid = Uuid::new_v4().to_string();
     let modified = OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -342,7 +349,7 @@ pub fn txt_to_epub(title: &str, text: &str) -> Result<Vec<u8>, String> {
         &mut zip,
         "OEBPS/content.opf",
         deflated,
-        &content_opf(&title_xml, &uuid, &modified, chapters.len()),
+        &content_opf(&title_xml, author_xml.as_deref(), &uuid, &modified, chapters.len()),
     )?;
     add_entry(&mut zip, "OEBPS/nav.xhtml", deflated, &nav_xhtml(&title_xml, &chapters))?;
     for (i, ch) in chapters.iter().enumerate() {
@@ -430,7 +437,7 @@ mod tests {
     #[test]
     fn txt_to_epub_builds_valid_zip() {
         let text = "第一章 开始\n段落甲。\n第二章 继续\n段落乙。\n";
-        let bytes = txt_to_epub("测试&书", text).unwrap();
+        let bytes = txt_to_epub("测试&书", None, text).unwrap();
 
         let mut zip = ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
         let mut first = zip.by_index(0).unwrap();
@@ -462,6 +469,34 @@ mod tests {
 
     #[test]
     fn txt_to_epub_rejects_empty() {
-        assert!(txt_to_epub("t", "  \n  ").is_err());
+        assert!(txt_to_epub("t", None, "  \n  ").is_err());
+    }
+
+    // ---- B2：内嵌标题/作者（import_book 传入清洗后的最终值） ----
+
+    #[test]
+    fn txt_to_epub_embeds_title_and_author() {
+        let bytes = txt_to_epub("wenku8 清洗后书名", Some("作者&甲"), "第一章 开始\n段落。\n").unwrap();
+        let mut zip = ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut opf = String::new();
+        zip.by_name("OEBPS/content.opf")
+            .unwrap()
+            .read_to_string(&mut opf)
+            .unwrap();
+        assert!(opf.contains("<dc:title>wenku8 清洗后书名</dc:title>"));
+        assert!(opf.contains("<dc:creator>作者&amp;甲</dc:creator>"));
+
+        // 无作者：不输出空 dc:creator；空白作者等同无作者
+        for author in [None, Some("   ")] {
+            let bytes = txt_to_epub("无作者", author, "第一章 x\ny\n").unwrap();
+            let mut zip = ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+            let mut opf = String::new();
+            zip.by_name("OEBPS/content.opf")
+                .unwrap()
+                .read_to_string(&mut opf)
+                .unwrap();
+            assert!(opf.contains("<dc:title>无作者</dc:title>"));
+            assert!(!opf.contains("dc:creator"), "{opf}");
+        }
     }
 }

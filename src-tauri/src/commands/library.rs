@@ -362,6 +362,23 @@ fn copy_verified(src: &str, tmp: &Path, final_path: &Path) -> Result<u64, String
     Ok(got)
 }
 
+// B1 请求封面兜底：base64 解码 + 扩展名白名单 + 原子落盘；任一步失败 → None（无封面，不阻断导入）
+// core takes covers_dir so tests can run against a tempdir instead of real appdata
+fn store_request_cover(covers_dir: &Path, book_id: &str, b64: &str, ext: &str) -> Option<PathBuf> {
+    let ext = ext.trim().trim_start_matches('.').to_lowercase();
+    if !["png", "jpg", "jpeg", "webp"].contains(&ext.as_str()) {
+        return None;
+    }
+    let bytes = crate::commands::wenku8::b64_decode(b64)?;
+    if bytes.is_empty() {
+        return None;
+    }
+    let final_cover = covers_dir.join(format!("{book_id}.{ext}"));
+    let tmp_cover = covers_dir.join(format!("{book_id}.{ext}.part"));
+    atomic_write_to(&tmp_cover, &final_cover, &bytes).ok()?;
+    Some(final_cover)
+}
+
 #[tauri::command(async)]
 pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book, String> {
     let book_id = Uuid::new_v4().to_string();
@@ -396,6 +413,16 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         import_kind(req.mode.as_deref(), is_txt, is_pdf, ext.as_deref().unwrap_or(""))
             .map_err(|e| format!("{}: {e}", req.source_path))?;
 
+    // B2：txt/pdf 无 extracted，提前定稿清洗后元数据——txt→epub 的内嵌标题/作者与 DB 落库同源
+    let txt_meta = if is_txt || is_pdf {
+        Some(super::metadata_clean::clean_import_meta(
+            merge_optional_text(req.title.clone(), fallback_title.clone()),
+            merge_optional_text(req.author.clone(), None),
+        ))
+    } else {
+        None
+    };
+
     let final_book_abs: PathBuf; // reference 模式下指向源文件（只读，绝不做删除清理）
     let mut book_format: Option<String> = None;
     let library_path: String;
@@ -416,7 +443,9 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         let bytes = fs::read(&req.source_path)
             .map_err(|e| format!("failed to read {}: {e}", req.source_path))?;
         let text = txt::decode_txt(&bytes).map_err(|e| format!("{}: {e}", req.source_path))?;
-        let epub_bytes = txt::txt_to_epub(fallback_title.as_deref().unwrap_or("未命名"), &text)
+        // B2：内嵌清洗后的最终标题/作者（此处 txt_meta 必为 Some），文件名 stem 不再进 epub
+        let (t, _, _, a) = txt_meta.clone().unwrap_or_default();
+        let epub_bytes = txt::txt_to_epub(t.as_deref().unwrap_or("未命名"), a.as_deref(), &text)
             .map_err(|e| format!("{}: {e}", req.source_path))?;
         atomic_write_to(&tmp_book_abs, &final_book_abs, &epub_bytes)
             .map_err(|e| format!("failed to write book into library: {e}"))?;
@@ -441,14 +470,17 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
         epub::extract_epub_metadata(&final_book_abs).ok()
     };
 
-    // N-1 导入即清洗（存量书走 clean_title_preview/apply 一键修复）
-    let (title, subtitle, source_tags, author) = super::metadata_clean::clean_import_meta(
-        merge_optional_text(
-            req.title.clone().or_else(|| extracted.as_ref().and_then(|m| m.title.clone())),
-            fallback_title,
+    // N-1 导入即清洗（存量书走 clean_title_preview/apply 一键修复）；txt/pdf 用 B2 提前算好的结果
+    let (title, subtitle, source_tags, author) = match txt_meta {
+        Some(m) => m,
+        None => super::metadata_clean::clean_import_meta(
+            merge_optional_text(
+                req.title.clone().or_else(|| extracted.as_ref().and_then(|m| m.title.clone())),
+                fallback_title,
+            ),
+            merge_optional_text(req.author.clone(), extracted.as_ref().and_then(|m| m.author.clone())),
         ),
-        merge_optional_text(req.author.clone(), extracted.as_ref().and_then(|m| m.author.clone())),
-    );
+    };
 
     let cover_ext = extracted.as_ref().and_then(|m| m.cover_ext.clone());
     let cover_abs: Option<PathBuf> = match (extracted.as_ref().and_then(|m| m.cover_bytes.as_deref()), cover_ext.as_deref()) {
@@ -470,6 +502,17 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
             }
         }
         _ => None,
+    };
+    // B1：extracted 无封面（txt/pdf，或 EPUB 不带封面）时消费请求传入的封面（wenku8 拉书）；
+    // 解码/扩展名/写盘任一失败都只是无封面，不阻断导入
+    let cover_abs = match cover_abs {
+        Some(p) => Some(p),
+        None => req
+            .cover_bytes_base64
+            .as_deref()
+            .filter(|b| !b.trim().is_empty())
+            .zip(req.cover_ext.as_deref())
+            .and_then(|(b64, ext)| store_request_cover(&covers_dir, &book_id, b64, ext)),
     };
 
     let cover_path = cover_abs
@@ -1730,6 +1773,27 @@ mod tests {
         assert_eq!(h.missing_covers[0].cover_path, "library/covers/gone.png");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // ---- B1 请求封面兜底 ----
+
+    #[test]
+    fn request_cover_decodes_and_writes_whitelisted_ext() {
+        let dir = temp_bg_dir("reqcover");
+        let png = png_head(600, 800);
+        let b64 = crate::commands::wenku8::b64_encode(&png);
+        let p = store_request_cover(&dir, "b1", &b64, "png").unwrap();
+        assert_eq!(p, dir.join("b1.png"));
+        assert_eq!(fs::read(&p).unwrap(), png);
+        // 大写/带点扩展名归一后也过
+        assert_eq!(store_request_cover(&dir, "b2", &b64, ".JPG").unwrap(), dir.join("b2.jpg"));
+        // 白名单外 / 非法 base64 / 空数据 → 无封面，不落盘不报错
+        assert!(store_request_cover(&dir, "b3", &b64, "gif").is_none());
+        assert!(store_request_cover(&dir, "b4", "!!!", "png").is_none());
+        assert!(store_request_cover(&dir, "b5", "", "png").is_none());
+        assert!(!dir.join("b3.gif").exists());
+        assert!(!dir.join("b4.png").exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     // ---- v2.7 M-1/M-2 导入方式 ----

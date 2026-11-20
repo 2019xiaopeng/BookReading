@@ -495,6 +495,11 @@ export default function FavoritesPage() {
           if (k === "books" || k === "quotes") changeTab(k);
         },
       }}
+      contextRow={
+        <span className="wr-quick-context">
+          收藏 {favoriteBooks.length} 本 · 句子 {quotes.length} 条
+        </span>
+      }
     >
       {/* M2 U5：小型刊头（书架刊头 60% 缩档）+ 统计列 */}
       <div className="wr-masthead wr-masthead--sm">

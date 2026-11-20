@@ -528,6 +528,17 @@ export function IconCloud(props: P) {
   );
 }
 
+/** 下载/拉取入库（v3.0 云书架卡悬浮钮） */
+export function IconDownload(props: P) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" {...props}>
+      <path d="M12 4.5v10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="m7.5 10.5 4.5 4.5 4.5-4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 19.5h14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** 放大查看（v2.7.0 lightbox） */
 export function IconZoom(props: P) {
   return (

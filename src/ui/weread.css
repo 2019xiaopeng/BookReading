@@ -3397,21 +3397,22 @@ body::after {
   background: rgba(var(--wr-accent-rgb), 0.08);
 }
 
-/* R-1 继续阅读快捷卡（v2.8.0）：根视图刊头下单卡横排 */
+/* R-1 继续阅读（v3.0 D2 紧凑化）：根视图刊头下 48px 工具行——细墨线边 + 纸色底，非"卡" */
 .wr-continue-card {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   margin: 4px 0 12px;
-  padding: 10px 14px;
+  padding: 7px 8px 7px 14px;
+  min-height: 48px;
   border: 1px solid var(--m2-line);
   border-radius: var(--wr-radius-md);
   background: var(--wr-panel-bg);
   cursor: pointer;
-  transition: transform 150ms ease, box-shadow 150ms ease;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 .wr-continue-card:hover {
-  transform: translateY(-1px);
+  border-color: rgba(var(--wr-accent-rgb), 0.4);
   box-shadow: 0 8px 20px -14px var(--m2-shadow);
 }
 .wr-continue-card:focus-visible {
@@ -3419,25 +3420,25 @@ body::after {
   outline-offset: -2px;
 }
 .wr-continue-label {
-  font-size: 12px;
+  flex: none;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.2em;
   color: var(--m2-ink-soft);
-  writing-mode: vertical-rl;
-  text-orientation: upright;
 }
 .wr-continue-card .wr-cover {
-  width: 36px;
+  width: 32px;
   flex: none;
 }
 .wr-continue-meta {
   min-width: 0;
-  flex: 1;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 .wr-continue-title {
+  font-size: 13px;
   font-weight: 650;
   color: var(--m2-ink);
   overflow: hidden;
@@ -3445,14 +3446,38 @@ body::after {
   white-space: nowrap;
 }
 .wr-continue-sub {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--m2-ink-soft);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.wr-continue-progress {
+  flex: none;
+  width: 72px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--wr-hairline);
+  overflow: hidden;
+}
+.wr-continue-progress i {
+  display: block;
+  height: 100%;
+  background: var(--m2-ink);
+}
+.wr-continue-pct {
+  flex: none;
+  width: 40px;
+  text-align: right;
+  font-family: var(--wr-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--m2-ink-soft);
+}
 .wr-continue-card .wr-mini-btn {
   flex: none;
+  width: 24px;
+  height: 24px;
 }
 
 /* ---- v2.9.0 S-1~S-3 侧栏书架树折叠 ---- */
@@ -3526,3 +3551,66 @@ body::after {
 .wr-clean-new-title { color: var(--m2-ink); font-weight: 600; word-break: break-all; }
 .wr-clean-new-sub { color: var(--m2-ink-soft); font-size: 12px; }
 .wr-clean-tags { color: var(--wr-muted); font-size: 11px; font-family: var(--wr-mono); }
+
+/* ---- v3.0 验收修复批次 ---- */
+
+/* D3 上下文行：非书库视图在快捷筛选行容器内渲染的信息行（收藏/云书架/回收站） */
+.wr-quick-context {
+  flex: 1 1 0;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--m2-ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 上下文行尾的小动作钮（退出登录）：同容器 chip 样式，不占满行 */
+.wr-quick-chip--act {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  color: var(--m2-ink-soft);
+}
+
+/* D1 云书架卡悬浮动作层：拉取进度=细墨线+百分比，完成=✓ 微标（与 wr-mini-btn 同高） */
+.wr-dl-progress {
+  position: relative;
+  width: 88px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--wr-hairline);
+  border-radius: var(--wr-radius-xs);
+  background: var(--panel-solid);
+  font-family: var(--wr-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--m2-ink);
+  overflow: hidden;
+}
+.wr-dl-progress i {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--wr-accent);
+  transition: width 200ms ease;
+}
+.wr-dl-done {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(var(--wr-accent-rgb), 0.5);
+  border-radius: var(--wr-radius-xs);
+  background: var(--panel-solid);
+  color: var(--wr-accent);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
