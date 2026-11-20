@@ -30,6 +30,7 @@ import { applyRangeSelect } from "../library/rangeSelect";
 import { BOOKS_CHANGED_EVENT } from "../library/importRunner";
 import { formatReadingTime } from "../library/readingTime";
 import AppShell, { useShellShelves } from "../ui/AppShell";
+import { subscribeAppRefresh } from "../ui/appActions";
 import { showAlert, showConfirm } from "../ui/dialog";
 import { showToast } from "../ui/toast";
 import { IconBook, IconCheckSquare, IconDensity, IconQuote, IconStar, IconTrash } from "../ui/icons";
@@ -144,6 +145,12 @@ export default function FavoritesPage() {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [tab, filterBookId, query]);
+
+  // P-1 侧栏固定「刷新」钮：本视图订阅（当前 tab 对应的数据源重拉）
+  useEffect(() => subscribeAppRefresh(() => {
+    if (tab === "books") void refreshBooks();
+    else void refreshQuotes();
+  }), [tab, filterBookId, query]);
 
   // F1-7/H-1：Ctrl+F 聚焦搜索框（与书库页同款）
   useEffect(() => {

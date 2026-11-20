@@ -65,6 +65,8 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [importMode, setImportMode] = useState<ImportMode>("copy");
   const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>("ask");
   const [autoUpdateCheck, setAutoUpdateCheck] = useState(true);
+  // P-4 继续阅读卡开关（settings 键 continue_card.enabled，'0'=关，缺省开）
+  const [continueCard, setContinueCard] = useState(true);
   // U-1/U-2 手动检查更新：idle → checking →（弹窗确认后）downloading
   const [updatePhase, setUpdatePhase] = useState<"idle" | "checking" | "downloading">("idle");
   const [dlProgress, setDlProgress] = useState<{ downloaded: number; total: number } | null>(null);
@@ -78,6 +80,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
     setImportMode(settings.import_mode === "move" || settings.import_mode === "reference" ? settings.import_mode : "copy");
     setCloseBehaviorState(resolveCloseAction(settings.close_action));
     setAutoUpdateCheck(settings.update_check !== "off");
+    setContinueCard(settings["continue_card.enabled"] !== "0");
   };
 
   useEffect(() => {
@@ -446,6 +449,23 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
               <option value="exit">退出</option>
             </select>
           </span>
+        </div>
+
+        <div className="wr-settings-row">
+          <span className="wr-settings-label">继续阅读卡</span>
+          <label className="wr-settings-check">
+            <input
+              type="checkbox"
+              checked={continueCard}
+              aria-label="显示继续阅读卡"
+              onChange={(e) => {
+                const on = e.currentTarget.checked;
+                setContinueCard(on);
+                void setSetting("continue_card.enabled", on ? "1" : "0");
+              }}
+            />
+            在书架刊头下显示最近在读的书（切回书库页生效）
+          </label>
         </div>
 
         <div className="wr-settings-group">关于</div>

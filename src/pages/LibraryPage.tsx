@@ -54,16 +54,17 @@ import {
 } from "../library/shelves";
 import { DENSITY_PRESETS, normalizeLibraryDensity, type LibraryDensity } from "../library/density";
 import { applyRangeSelect } from "../library/rangeSelect";
-import { BOOKS_CHANGED_EVENT, importSingle, runImports } from "../library/importRunner";
+import { BOOKS_CHANGED_EVENT, runImports } from "../library/importRunner";
 import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "../library/useCoverUrls";
 import { notifyBackgroundChanged, resetBackgroundCache } from "../ui/appBackground";
+import { subscribeAppRefresh } from "../ui/appActions";
+import { importBooks, importImages, setImportTargetShelf } from "../ui/importService";
 import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
 import AppShell, { setShelvesCache, useShellShelves } from "../ui/AppShell";
-import { useSidebarActions } from "../ui/sidebarActions";
 import { showAlert, showConfirm } from "../ui/dialog";
 import { showToast } from "../ui/toast";
-import { IconBook, IconCheckSquare, IconClose, IconDensity, IconFolder, IconImage, IconRefresh, IconReveal, IconShelf, IconSort, IconTrash } from "../ui/icons";
+import { IconBook, IconCheckSquare, IconClose, IconDensity, IconFolder, IconReveal, IconShelf, IconSort, IconTrash } from "../ui/icons";
 
 type SortKey = "recent" | "title" | "author" | "added" | "custom";
 
@@ -95,6 +96,9 @@ const MANUAL_STATUS_OPTIONS: { value: ManualStatus | null; label: string }[] = [
 
 // F1-5 滚动位置记忆（会话内，不落盘）：视图键 → scrollTop。卸载不清空，从阅读器返回原书架时还原。
 const scrollMemory = new Map<string, number>();
+
+// P-4 书库会话缓存：切页重挂首帧渲染旧 books（刊头统计/继续阅读行即时回位，不闪空态），refresh 到货后更新
+let libraryBooksCache: Book[] = [];
 
 /** 视图键：回收站 / 根书架 / 各书架各自记忆 */
 export function viewKey(trashView: boolean, shelfId: number | null): string {
@@ -128,7 +132,7 @@ type MoveDialog = { kind: "books"; bookIds: string[] } | { kind: "shelf"; shelfI
 export default function LibraryPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [books, setBooks] = useState<Book[]>([]);
+  const [books, setBooks] = useState<Book[]>(libraryBooksCache);
   // E3 阅读时长：bookId → 累计秒数（书卡“已读 X 小时 Y 分”chip）
   const [readingTimes, setReadingTimes] = useState<Record<string, number>>({});
   // 书架树与侧栏同源（AppShell 模块单例）：本页增删改后 refresh 推写，两侧零闪烁同步
@@ -137,12 +141,11 @@ export default function LibraryPage() {
   const [trash, setTrash] = useState<Book[]>([]);
   const [retentionDays, setRetentionDays] = useState(30);
   const [loading, setLoading] = useState(false);
-  // 导入按钮各自独立 busy 文案：loading 共用于防并发（任一导入中其余导入入口全禁），
-  // "导入中…"只显示在实际触发的那颗上；删除/收藏等其它 loading 操作不再误显导入中
-  const [importing, setImporting] = useState<"books" | "images" | null>(null);
   const [query, setQuery] = useState("");
-  // R-1 继续阅读卡：会话内手动隐藏标记（sessionStorage 常驻 + state 触发即时重渲）
+  // R-1 继续阅读卡：会话内手动隐藏标记（sessionStorage 常驻 + state 触发即时重渲）；
+  // P-4 设置开关（settings 键 continue_card.enabled，'0'=关，缺省开）
   const [continueDismissed, setContinueDismissed] = useState(false);
+  const [continueEnabled, setContinueEnabled] = useState(true);
   const [sortKey, setSortKey] = useState<SortKey>("recent");
   const [sortAsc, setSortAsc] = useState(false);
   const [folderSort, setFolderSort] = useState<FolderSortKey>("default");
@@ -268,6 +271,7 @@ export default function LibraryPage() {
   // refresh 只依赖稳定的 invoke 与 setter，引用恒定（供 useCallback 依赖与自愈批处理使用）
   const refresh = useCallback(async () => {
     const [list, shelfList, tagList] = await Promise.all([listBooks(), listShelves(), listTags()]);
+    libraryBooksCache = list;
     setBooks(list);
     setShelvesCache(shelfList);
     setTags(tagList);
@@ -303,6 +307,7 @@ export default function LibraryPage() {
         if (m.library_status === "reading" || m.library_status === "finished" || m.library_status === "unread") {
           setStatusFilter(m.library_status);
         }
+        setContinueEnabled(m["continue_card.enabled"] !== "0");
         const r = Number(m.trash_retention_days);
         if (Number.isFinite(r) && r >= 0) setRetentionDays(r);
       })
@@ -405,9 +410,9 @@ export default function LibraryPage() {
     [navigate, currentShelfId],
   );
 
-  // R-1 继续阅读：全库 last_opened_at 最新且未读完的书（根视图快捷卡；✕ 本次会话不再显示）
+  // R-1 继续阅读：全库 last_opened_at 最新且未读完的书（根视图索引行；✕ 本次会话不再显示；设置可整行关闭）
   const continueBook = useMemo(() => {
-    if (continueDismissed || currentShelfId != null || query.trim()) return null;
+    if (!continueEnabled || continueDismissed || currentShelfId != null || query.trim()) return null;
     try {
       if (sessionStorage.getItem("wr-continue-dismissed") === "1") return null;
     } catch {}
@@ -416,28 +421,13 @@ export default function LibraryPage() {
         .filter((b) => b.last_opened_at != null && (b.reading_percent ?? 0) < 0.95)
         .sort((a, b) => (b.last_opened_at ?? 0) - (a.last_opened_at ?? 0))[0] ?? null
     );
-  }, [books, currentShelfId, query, continueDismissed]);
+  }, [books, currentShelfId, query, continueDismissed, continueEnabled]);
 
-  // B5 侧栏底部动作注册：刷新=页面槽（云书架等视图各自替换）；导入两钮=全局槽（handlers 含当前书架落架逻辑）
-  useSidebarActions("page", [
-    { label: "刷新", icon: <IconRefresh />, disabled: loading, onClick: () => void refresh() },
-  ]);
-  useSidebarActions("global", [
-    {
-      label: importing === "images" ? "导入中…" : "导入漫画",
-      icon: <IconImage />,
-      primary: true,
-      disabled: loading,
-      onClick: onImportImages,
-    },
-    {
-      label: importing === "books" ? "导入中…" : "导入图书",
-      icon: <IconBook />,
-      primary: true,
-      disabled: loading,
-      onClick: onImport,
-    },
-  ]);
+  // P-1 侧栏固定动作接线：刷新事件 → 重拉书库；导入服务落架目标跟随当前书架（回收站/其它页=根）
+  useEffect(() => subscribeAppRefresh(() => void refresh()), [refresh]);
+  useEffect(() => {
+    setImportTargetShelf(currentShelfId);
+  }, [currentShelfId]);
 
   // 元数据自愈批处理：一轮只发起修复并收集结果，全部完成后 refresh 一次
   // （此前每修一本 await refresh() 全量重拉，N 本待修 = N 次整页重渲）
@@ -541,64 +531,13 @@ export default function LibraryPage() {
     p.onConfirm(v);
   }
 
-  // 导入统一走 importRunner：逐本进度（壳顶进度条）+ 查重 + 四类结果汇总；刷新由 BOOKS_CHANGED_EVENT 监听兜底
-  async function onImport() {
-    if (loading) return;
-    setLoading(true);
-    setImporting("books");
-    try {
-      const selected = await open({
-        multiple: true,
-        filters: [{ name: "EPUB / TXT / CBZ / PDF", extensions: ["epub", "txt", "cbz", "pdf"] }],
-      });
-      if (!selected) return;
-      const paths = Array.isArray(selected) ? selected : [selected];
-      if (paths.length === 0) return;
-      await runImports(paths, { targetShelfId: currentShelfId });
-    } finally {
-      setLoading(false);
-      setImporting(null);
-    }
-  }
-
-  async function onImportImages() {
-    if (loading) return;
-    setLoading(true);
-    setImporting("images");
-    try {
-      const dir = await open({ directory: true, multiple: false, title: "选择漫画文件夹" });
-      if (!dir || Array.isArray(dir)) return;
-      // 批次16：单本漫画也走 importRunner（查重交互 + BOOKS_CHANGED_EVENT 自动刷新书卡，不再手动刷新才出现）
-      const res = await importSingle(dir, { targetShelfId: currentShelfId });
-      if (res.kind !== "failed") return;
-      const msg = res.error ?? "";
-      logFrontend(`ui: import image folder failed ${dir} ${msg}`);
-      // 实测根因：把“每本一个子文件夹”的父目录当单本导入——直接子项全是子文件夹 → 无图。
-      // 此时若子文件夹里有漫画，引导走批量导入而不是报错退出
-      const subdirs = msg.includes("未找到图片") ? await listImageSubdirs(dir).catch(() => [] as string[]) : [];
-      if (subdirs.length > 0) {
-        const batch = await showConfirm(
-          "改为批量导入？",
-          `该文件夹内没有直接图片，但包含 ${subdirs.length} 个图片子文件夹。\n按每个子文件夹一本批量导入。`,
-          { confirmText: "批量导入" },
-        );
-        if (batch) await runImports(subdirs, { targetShelfId: currentShelfId });
-      } else {
-        await showAlert("导入失败", msg);
-      }
-    } finally {
-      setLoading(false);
-      setImporting(null);
-    }
-  }
-
-  // 批量导入：选父目录 → 每个一级子文件夹各导入一本漫画（空/无图目录服务端已过滤）
+  // 批量导入：选父目录 → 每个一级子文件夹各导入一本漫画（空/无图目录服务端已过滤）；
+  // 单本导入（图书/漫画）已上提 importService，与侧栏固定导入钮共用
   async function onBatchImportImages() {
     if (loading) return;
     const parent = await open({ directory: true, multiple: false, title: "选择漫画父目录（每个一级子文件夹导入一本）" });
     if (!parent || Array.isArray(parent)) return;
     setLoading(true);
-    setImporting("images");
     try {
       const dirs = await listImageSubdirs(parent);
       if (dirs.length === 0) {
@@ -610,7 +549,6 @@ export default function LibraryPage() {
       await showAlert("批量导入失败", String(e));
     } finally {
       setLoading(false);
-      setImporting(null);
     }
   }
 
@@ -1356,21 +1294,20 @@ export default function LibraryPage() {
         </div>
       </div>
 
-      {/* R-1 继续阅读紧凑条（v3.0 D2：48px 工具行，仅根视图无搜索时；整条可点，✕ 本次会话隐藏） */}
+      {/* P-4 继续阅读：刊头下的一行索引信息（无边框无底色），仅根视图无搜索时；整条可点，✕ 本次会话隐藏 */}
       {continueBook ? (
         <div className="wr-continue-card" role="button" tabIndex={0} onClick={() => openBook(continueBook.id)}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBook(continueBook.id); } }}>
-          <span className="wr-continue-label">继续阅读</span>
           <div className="wr-cover" aria-hidden="true">
             {continueBook.cover_path && coverUrls[continueBook.cover_path] ? (
               <img src={coverUrls[continueBook.cover_path]} alt="" />
             ) : null}
           </div>
           <div className="wr-continue-meta">
-            <div className="wr-continue-title">{formatTitle(continueBook)}</div>
-            <div className="wr-continue-sub">
+            <span className="wr-continue-title">{formatTitle(continueBook)}</span>
+            <span className="wr-continue-sub">
               {continueBook.author?.trim() || progressText(continueBook)}
-            </div>
+            </span>
           </div>
           <div className="wr-continue-progress" aria-hidden="true">
             <i style={{ width: `${Math.round((continueBook.reading_percent ?? 0) * 100)}%` }} />
@@ -1883,10 +1820,10 @@ export default function LibraryPage() {
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onNewShelf(); }}>
                 新建书架
               </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onImport(); }}>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void importBooks(); }}>
                 导入图书
               </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onImportImages(); }}>
+              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void importImages(); }}>
                 导入漫画
               </button>
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onBatchImportImages(); }}>

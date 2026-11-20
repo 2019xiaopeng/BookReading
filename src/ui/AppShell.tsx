@@ -2,9 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getVersion } from "@tauri-apps/api/app";
-import { IconBook, IconCloud, IconImage, IconPalette, IconSearch, IconSettings, IconStar, IconTrash } from "./icons";
+import { IconBook, IconCloud, IconImage, IconPalette, IconRefresh, IconSearch, IconSettings, IconStar, IconTrash } from "./icons";
 import { getCachedBackgroundUrl, getBackgroundUrl, subscribeBackground } from "./appBackground";
-import { useSidebarActionSlots, type SidebarAction } from "./sidebarActions";
+import { emitAppRefresh } from "./appActions";
+import { importBooks, importImages } from "./importService";
 import { applyPersistedTheme, setTheme, THEME_SWATCHES, useThemeSelection } from "./theme";
 import { getSettings, listBooks, listShelves, setSetting, type Book, type Shelf } from "../tauri/invoke";
 import { normalizeBgVeil, normalizeReaderBackground } from "../reader/settings/normalize";
@@ -159,28 +160,6 @@ async function runShellStartupOnce(): Promise<void> {
   }
 }
 
-// B5 兜底：LibraryPage 未挂载的视图（收藏/云书架登录前）导入两钮常驻禁用，title 提示回书库
-const IMPORT_ACTIONS_FALLBACK: SidebarAction[] = [
-  { label: "导入漫画", icon: <IconImage />, disabled: true, title: "回书库导入" },
-  { label: "导入图书", icon: <IconBook />, disabled: true, title: "回书库导入" },
-];
-
-function sidebarActionBtn(a: SidebarAction) {
-  return (
-    <button
-      key={a.label}
-      type="button"
-      className={`wr-small-btn${a.primary ? " wr-primary" : ""}`}
-      disabled={a.disabled}
-      title={a.title}
-      onClick={a.onClick}
-    >
-      {a.icon}
-      <span>{a.label}</span>
-    </button>
-  );
-}
-
 export default function AppShell(props: {
   active: "library" | "favorites" | "cloud" | "reader";
   title: string;
@@ -213,8 +192,6 @@ export default function AppShell(props: {
   const [themeMenu, setThemeMenu] = useState<{ x: number; y: number } | null>(null);
   const shelves = useShellShelves();
   const shelfCounts = useShelfCounts();
-  // B5 底部动作区：page 槽（刷新）+ global 槽（导入）由当前挂载页注册
-  const sideActions = useSidebarActionSlots();
   // S-1 树折叠：state 驱动重渲，模块缓存保证路由切换（重挂）不丢
   const [collapsed, setCollapsed] = useState(() => new Set(shelfCollapsedCache));
   const updateAvailable = useSyncExternalStore(subscribeUpdateAvailable, getUpdateAvailable, () => null);
@@ -504,9 +481,21 @@ export default function AppShell(props: {
           </button>
         </div>
 
+        {/* P-1 底部动作区：写死的固定四钮（刷新/导入漫画/导入图书/设置），任何视图都不重挂载、不变色；
+            刷新走 appActions 事件由当前视图自消化，导入走 importService（落架=当前书架） */}
         <div className="wr-side-bottom">
-          {sideActions.page?.map((a) => sidebarActionBtn(a))}
-          {(sideActions.global ?? IMPORT_ACTIONS_FALLBACK).map((a) => sidebarActionBtn(a))}
+          <button type="button" className="wr-small-btn" title="刷新当前视图" onClick={emitAppRefresh}>
+            <IconRefresh />
+            <span>刷新</span>
+          </button>
+          <button type="button" className="wr-small-btn" title="选择漫画文件夹导入" onClick={() => void importImages()}>
+            <IconImage />
+            <span>导入漫画</span>
+          </button>
+          <button type="button" className="wr-small-btn" title="选择 EPUB / TXT / CBZ / PDF 导入" onClick={() => void importBooks()}>
+            <IconBook />
+            <span>导入图书</span>
+          </button>
           <button
             className="wr-small-btn"
             data-badge={updateAvailable ? "true" : undefined}

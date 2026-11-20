@@ -19,8 +19,8 @@ import {
 } from "../tauri/wenku8";
 import { getSettings, listShelves, setSetting, type Shelf } from "../tauri/invoke";
 import AppShell from "../ui/AppShell";
-import { useSidebarActions } from "../ui/sidebarActions";
-import { IconBookOpen, IconList, IconRefresh } from "../ui/icons";
+import { subscribeAppRefresh } from "../ui/appActions";
+import { IconBookOpen, IconList } from "../ui/icons";
 import { showToast } from "../ui/toast";
 import { showAlert } from "../ui/dialog";
 
@@ -52,6 +52,36 @@ function ensureInfo(aid: number): Promise<void> {
 
 // F2 有新章比对：会话内每本书只查一次（刷新书架不重查）
 const checkedNew = new Set<number>();
+
+// P-2 云书架会话缓存：切走再切回直接渲染旧数据（不重拉不闪 loading）；
+// 仅显式刷新 / 拉取完成 / 登录成功才真正重拉（重拉期间旧数据照常显示）
+type CloudShelfCache = {
+  books: Wenku8ShelfBook[];
+  titles: Record<number, string>;
+  hasNew: Set<number>;
+  syncText: string | null;
+  account: string;
+};
+let shelfCache: CloudShelfCache | null = null;
+
+function writeShelfCache(patch: Partial<CloudShelfCache>): void {
+  shelfCache = {
+    books: shelfCache?.books ?? [],
+    titles: shelfCache?.titles ?? {},
+    hasNew: shelfCache?.hasNew ?? new Set(),
+    syncText: shelfCache?.syncText ?? null,
+    account: shelfCache?.account ?? "",
+    ...patch,
+  };
+}
+
+/** 测试隔离：模块级缓存会跨用例泄漏，每个用例后清空 */
+export function resetCloudShelfCacheForTests(): void {
+  shelfCache = null;
+  infoCache.clear();
+  infoInflight.clear();
+  checkedNew.clear();
+}
 
 // 拉取锁：页面级一次一本（downloading 期间其它拉取钮禁用）
 type DlState =
@@ -85,7 +115,6 @@ function CloudBookDialog({
   const [info, setInfo] = useState<Wenku8BookInfo | null>(() => infoCache.get(book.aid) ?? null);
   const [catalog, setCatalog] = useState<Wenku8Volume[] | null>(null);
   const [catOpen, setCatOpen] = useState(false);
-  const [introOpen, setIntroOpen] = useState(false);
 
   useEffect(() => {
     let disposed = false;
@@ -117,7 +146,7 @@ function CloudBookDialog({
       }}
     >
       <div
-        className="wr-panel wr-prompt wr-dialog"
+        className="wr-panel wr-prompt wr-dialog wr-cloud-dialog"
         role="dialog"
         aria-modal="true"
         aria-label={`书籍详情 ${title}`}
@@ -126,60 +155,52 @@ function CloudBookDialog({
         }}
       >
         <div className="wr-prompt-title">书籍详情</div>
-        <div className="wr-details">
-          <div className="wr-details-cover" style={{ cursor: "default" }}>
-            {coverFailed ? (
-              <div className="wr-cover-title">{title}</div>
-            ) : (
-              <img src={coverUrl(book.aid)} alt="" onError={() => onCoverError(book.aid)} />
-            )}
-          </div>
-          <div className="wr-details-main">
-            {/* 完整书名不截断（默认换行） */}
-            <div style={{ fontWeight: 750, fontSize: 16 }}>{title}</div>
-            <div className="wr-muted" style={{ fontSize: 12 }}>
-              {info
-                ? `${info.author || "未知作者"} · ${info.status || "—"} · 最近更新 ${info.last_update || "—"}`
-                : "正在获取…"}
+        {/* P-3 正文独立滚动（max 78vh）：长简介/目录展开也不把底部动作区顶出屏 */}
+        <div className="wr-cloud-body">
+          <div className="wr-details">
+            <div className="wr-details-cover" style={{ cursor: "default" }}>
+              {coverFailed ? (
+                <div className="wr-cover-title">{title}</div>
+              ) : (
+                <img src={coverUrl(book.aid)} alt="" onError={() => onCoverError(book.aid)} />
+              )}
             </div>
-            <div>
-              <button
-                type="button"
-                className="wr-btn"
-                style={{ padding: "4px 10px", fontSize: 12 }}
-                disabled={catalog == null}
-                onClick={() => setCatOpen((v) => !v)}
-              >
-                {catalog == null ? "目录获取中…" : catOpen ? "收起目录" : `共 ${catalog.length} 卷 ${chapCount} 章`}
-              </button>
-            </div>
-            {catOpen ? (
-              <div style={{ maxHeight: 180, overflowY: "auto", fontSize: 12, lineHeight: 1.9 }}>
-                {catalog?.map((v) => (
-                  <div key={v.name}>
-                    <div style={{ fontWeight: 650 }}>{v.name}</div>
-                    {v.chapters.map((c) => (
-                      <div key={c.cid} className="wr-muted">{c.title}</div>
-                    ))}
-                  </div>
-                ))}
+            <div className="wr-details-main">
+              {/* 完整书名不截断（默认换行） */}
+              <div style={{ fontWeight: 750, fontSize: 16 }}>{title}</div>
+              <div className="wr-muted" style={{ fontSize: 12 }}>
+                {info
+                  ? `${info.author || "未知作者"} · ${info.status || "—"} · 最近更新 ${info.last_update || "—"}`
+                  : "正在获取…"}
               </div>
-            ) : null}
-            {info?.intro ? (
-              <div style={{ fontSize: 13 }}>
-                <div style={{ maxHeight: introOpen ? undefined : "3.6em", overflow: "hidden", whiteSpace: "pre-line" }}>
-                  {info.intro}
-                </div>
+              <div>
                 <button
                   type="button"
                   className="wr-btn"
-                  style={{ padding: "4px 10px", fontSize: 12, marginTop: 4 }}
-                  onClick={() => setIntroOpen((v) => !v)}
+                  style={{ padding: "4px 10px", fontSize: 12 }}
+                  disabled={catalog == null}
+                  onClick={() => setCatOpen((v) => !v)}
                 >
-                  {introOpen ? "收起简介" : "展开简介"}
+                  {catalog == null ? "目录获取中…" : catOpen ? "收起目录" : `共 ${catalog.length} 卷 ${chapCount} 章`}
                 </button>
               </div>
-            ) : null}
+              {catOpen ? (
+                <div style={{ maxHeight: 240, overflowY: "auto", fontSize: 12, lineHeight: 1.9 }}>
+                  {catalog?.map((v) => (
+                    <div key={v.name}>
+                      <div style={{ fontWeight: 650 }}>{v.name}</div>
+                      {v.chapters.map((c) => (
+                        <div key={c.cid} className="wr-muted">{c.title}</div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {/* P-3 简介默认全部展开（去折叠钮），完整显示 */}
+              {info?.intro ? (
+                <div style={{ fontSize: 13, whiteSpace: "pre-line" }}>{info.intro}</div>
+              ) : null}
+            </div>
           </div>
         </div>
         <div className="wr-prompt-actions">
@@ -193,9 +214,10 @@ function CloudBookDialog({
               style={{ fontSize: 12, marginRight: "auto", alignSelf: "center", display: "inline-flex", alignItems: "center", gap: 6 }}
             >
               拉到
+              {/* P-5 目标书架下拉换 wr-select（不透明 panel-solid）：原生弹层取控件底色，半透明在夜间会合成白底看不清 */}
               <select
-                className="wr-input"
-                style={{ width: 150 }}
+                className="wr-select"
+                style={{ width: 150, padding: "5px 10px" }}
                 aria-label="目标书架"
                 value={destShelf}
                 onChange={(e) => onDestShelf(e.currentTarget.value)}
@@ -230,19 +252,20 @@ function CloudBookDialog({
 
 export default function CloudShelfPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"checking" | "login" | "shelf">("checking");
+  // P-2 有会话缓存时跳过 checking/loading 首帧，直接渲染旧书架
+  const [mode, setMode] = useState<"checking" | "login" | "shelf">(() => (shelfCache ? "shelf" : "checking"));
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [books, setBooks] = useState<Wenku8ShelfBook[]>([]);
+  const [books, setBooks] = useState<Wenku8ShelfBook[]>(() => shelfCache?.books ?? []);
   const [shelfBusy, setShelfBusy] = useState(false);
   const [shelfError, setShelfError] = useState<string | null>(null);
-  const [titles, setTitles] = useState<Record<number, string>>({});
+  const [titles, setTitles] = useState<Record<number, string>>(() => shelfCache?.titles ?? {});
   const [dl, setDl] = useState<({ aid: number } & DlState) | null>(null);
-  const [account, setAccount] = useState("");
+  const [account, setAccount] = useState(() => shelfCache?.account ?? "");
   // D3 上下文行：上次成功拉取云书架的时间（HH:mm）
-  const [syncText, setSyncText] = useState<string | null>(null);
+  const [syncText, setSyncText] = useState<string | null>(() => shelfCache?.syncText ?? null);
   // D1 封面占位：远端封面拉挂的书才在封面 overlay 上显示书名（有封面不显示，照书库卡）
   const [coverFailed, setCoverFailed] = useState<Set<number>>(new Set());
   // F1 详情对话框 + 目标书架（listShelves 一次 + settings 记住上次选择）
@@ -250,25 +273,37 @@ export default function CloudShelfPage() {
   const [shelves, setShelves] = useState<Shelf[]>([]);
   const [destShelf, setDestShelf] = useState("");
   // F2 有新章徽标：imported 卡懒比对 latest_cid > last_cid（失败静默不标）
-  const [hasNew, setHasNew] = useState<Set<number>>(new Set());
+  const [hasNew, setHasNew] = useState<Set<number>>(() => new Set(shelfCache?.hasNew ?? []));
+
+  // state 与会话缓存同步写（P-2：切页回来 titles/徽标即时还原）
+  function applyTitle(aid: number, title: string): void {
+    setTitles((t) => ({ ...t, [aid]: title }));
+    if (shelfCache) writeShelfCache({ titles: { ...shelfCache.titles, [aid]: title } });
+  }
+  function applyHasNew(aid: number): void {
+    setHasNew((s) => new Set(s).add(aid));
+    if (shelfCache) writeShelfCache({ hasNew: new Set([...shelfCache.hasNew, aid]) });
+  }
 
   const loadShelf = useCallback(async () => {
     setShelfBusy(true);
     setShelfError(null);
     try {
       const list = await wenku8Bookshelf();
+      const time = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
       setBooks(list);
-      setSyncText(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }));
+      setSyncText(time);
+      writeShelfCache({ books: list, syncText: time });
       let stagger = 0;
       for (const b of list) {
         if (b.name == null) {
           // 已有缓存的书直接播种进 state，未有的取到再补
           const hit = infoCache.get(b.aid);
-          if (hit != null) setTitles((t) => ({ ...t, [b.aid]: hit.title }));
+          if (hit != null) applyTitle(b.aid, hit.title);
           else void ensureInfo(b.aid)
             .then(() => {
               const got = infoCache.get(b.aid);
-              if (got != null) setTitles((t) => ({ ...t, [b.aid]: got.title }));
+              if (got != null) applyTitle(b.aid, got.title);
             })
             .catch(() => {});
         }
@@ -280,7 +315,7 @@ export default function CloudShelfPage() {
             void ensureInfo(b.aid)
               .then(() => {
                 const got = infoCache.get(b.aid);
-                if (got != null && got.latest_cid > lastCid) setHasNew((s) => new Set(s).add(b.aid));
+                if (got != null && got.latest_cid > lastCid) applyHasNew(b.aid);
               })
               .catch(() => {});
           }, 300 * stagger++);
@@ -313,12 +348,15 @@ export default function CloudShelfPage() {
         if (disposed) return;
         setAccount(s.username ?? "");
         if (!s.has_saved) {
+          shelfCache = null;
           setUsername(s.username ?? "");
           setMode("login");
           return;
         }
+        if (shelfCache) writeShelfCache({ account: s.username ?? "" });
         setMode("shelf");
-        void loadShelf();
+        // P-2 会话缓存命中不重拉（回本页零等待）；无缓存才首拉。重拉仅：显式刷新 / 拉取完成 / 登录成功
+        if (!shelfCache) void loadShelf();
         // F1 目标书架下拉数据 + 上次选择（失败静默退默认根）
         void listShelves().then((list) => {
           if (!disposed) setShelves(list);
@@ -344,6 +382,7 @@ export default function CloudShelfPage() {
       const res = await wenku8Login(username, password);
       if (res.ok) {
         setAccount(username);
+        writeShelfCache({ account: username });
         setMode("shelf");
         void loadShelf();
         void listShelves().then(setShelves).catch(() => {});
@@ -391,11 +430,12 @@ export default function CloudShelfPage() {
     }
   }
 
-  // D3 退出登录：清本机账密后回登录卡（invoke 失败也照常回，下次进入 status 会纠偏）
+  // D3 退出登录：清本机账密与会话缓存后回登录卡（invoke 失败也照常回，下次进入 status 会纠偏）
   async function onLogout() {
     try {
       await wenku8Logout();
     } catch {}
+    shelfCache = null;
     setBooks([]);
     setDl(null);
     setTitles({});
@@ -407,13 +447,10 @@ export default function CloudShelfPage() {
     setMode("login");
   }
 
-  // B5 刷新=页面槽（本视图自带，替换书库的刷新）；登录/检查态无刷新动作
-  useSidebarActions(
-    "page",
-    mode === "shelf"
-      ? [{ label: "刷新", icon: <IconRefresh />, disabled: shelfBusy, onClick: () => void loadShelf() }]
-      : null,
-  );
+  // P-1 侧栏固定「刷新」钮：本视图订阅（shelf 态才重拉云端书架；后台刷新期间旧数据照常显示）
+  useEffect(() => subscribeAppRefresh(() => {
+    if (mode === "shelf") void loadShelf();
+  }), [mode, loadShelf]);
 
   const titleOf = (b: Wenku8ShelfBook): string => b.name ?? titles[b.aid] ?? "正在获取书名…";
   const pullBusy = dl?.phase === "downloading";

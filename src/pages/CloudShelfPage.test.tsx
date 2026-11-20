@@ -56,7 +56,7 @@ import {
 } from "../tauri/wenku8";
 import { getSettings, listShelves, setSetting } from "../tauri/invoke";
 import { listen } from "@tauri-apps/api/event";
-import CloudShelfPage from "./CloudShelfPage";
+import CloudShelfPage, { resetCloudShelfCacheForTests } from "./CloudShelfPage";
 
 const statusMock = vi.mocked(wenku8Status);
 const loginMock = vi.mocked(wenku8Login);
@@ -96,6 +96,8 @@ function renderCloudShelf() {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  // P-2 会话缓存（书架列表/懒取名/新章标记）是模块级，会跨用例泄漏
+  resetCloudShelfCacheForTests();
 });
 
 describe("云书架页（v3.0）", () => {
@@ -172,6 +174,9 @@ describe("云书架页（v3.0）", () => {
     expect(within(dialog).getByText("作者X · 连载中 · 最近更新 2024-01-01")).toBeTruthy();
     expect(within(dialog).getByText("共 1 卷 2 章")).toBeTruthy();
     expect(within(dialog).queryByText("第一章 出发")).toBeNull();
+    // P-3 简介默认全部展开（无折叠钮），完整显示
+    expect(within(dialog).getByText("这是简介内容。")).toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: "展开简介" })).toBeNull();
 
     // 目标书架：切到书架 5 → 拉取透传 shelfId 并记忆
     fireEvent.change(within(dialog).getByLabelText("目标书架"), { target: { value: "5" } });
@@ -270,5 +275,26 @@ describe("云书架页（v3.0）", () => {
     expect(logoutMock).toHaveBeenCalledTimes(1);
     // 上下文行随登录卡消失
     expect(screen.queryByText(/上次同步/)).toBeNull();
+  });
+
+  test("P-2 会话缓存：切走再切回直接渲染缓存书卡，不重新拉取云端书架", async () => {
+    statusMock.mockResolvedValue({ has_saved: true, username: "u" });
+    shelfMock.mockResolvedValue([
+      { aid: 601, name: "缓存书", date: null, book_id: null, last_cid: 0 },
+    ]);
+    shelvesMock.mockResolvedValue([]);
+    getSettingsMock.mockResolvedValue({});
+
+    const { unmount } = renderCloudShelf();
+    expect(await screen.findByText("缓存书")).toBeTruthy();
+    expect(shelfMock).toHaveBeenCalledTimes(1);
+    unmount();
+
+    // 二次挂载：render 同步帧即有缓存内容（不闪"正在加载"），且不再调 wenku8Bookshelf
+    renderCloudShelf();
+    expect(screen.getByText("缓存书")).toBeTruthy();
+    expect(screen.queryByText("正在加载云书架…")).toBeNull();
+    await waitFor(() => expect(statusMock).toHaveBeenCalledTimes(2));
+    expect(shelfMock).toHaveBeenCalledTimes(1);
   });
 });
