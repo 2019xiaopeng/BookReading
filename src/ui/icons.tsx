@@ -514,6 +514,20 @@ export function IconUpdate(props: P) {
   );
 }
 
+/** 云书架（v3.0 wenku8） */
+export function IconCloud(props: P) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M7 18.5h10.2a3.8 3.8 0 0 0 .6-7.56A6 6 0 0 0 6.2 9.9 4.3 4.3 0 0 0 7 18.5Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /** 放大查看（v2.7.0 lightbox） */
 export function IconZoom(props: P) {
   return (

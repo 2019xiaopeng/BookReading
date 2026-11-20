@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getVersion } from "@tauri-apps/api/app";
-import { IconBook, IconPalette, IconSearch, IconSettings, IconStar, IconTrash } from "./icons";
+import { IconBook, IconCloud, IconPalette, IconSearch, IconSettings, IconStar, IconTrash } from "./icons";
 import { getCachedBackgroundUrl, getBackgroundUrl, subscribeBackground } from "./appBackground";
 import { applyPersistedTheme, setTheme, THEME_SWATCHES, useThemeSelection } from "./theme";
 import { getSettings, listBooks, listShelves, setSetting, type Book, type Shelf } from "../tauri/invoke";
@@ -159,7 +159,7 @@ async function runShellStartupOnce(): Promise<void> {
 }
 
 export default function AppShell(props: {
-  active: "library" | "favorites" | "reader";
+  active: "library" | "favorites" | "cloud" | "reader";
   title: string;
   search?: {
     value: string;
@@ -451,6 +451,13 @@ export default function AppShell(props: {
               收藏
             </div>
             <div className="wr-nav-sub">书籍与收藏句子</div>
+          </button>
+          <button className="wr-nav-btn" data-active={props.active === "cloud"} aria-current={props.active === "cloud" ? "page" : undefined} onClick={() => navigate("/cloud-shelf")}>
+            <div className="wr-nav-title">
+              <IconCloud />
+              云书架
+            </div>
+            <div className="wr-nav-sub">wenku8 在线书架，可拉取入库</div>
           </button>
           <button
             className="wr-nav-btn"
