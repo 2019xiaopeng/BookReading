@@ -14,10 +14,13 @@ export type Wenku8Status = {
   username: string | null;
 };
 
+/** book_id 非空=已入库（可直接 /read/:book_id）；last_cid=入库时最后一章 cid，未入库为 0 */
 export type Wenku8ShelfBook = {
   aid: number;
   name: string | null;
   date: string | null;
+  book_id: string | null;
+  last_cid: number;
 };
 
 export type Wenku8BookInfo = {
@@ -34,6 +37,17 @@ export type Wenku8DownloadResult = {
   book_id: string;
   title: string;
   chapters: number;
+};
+
+/** 卷章目录（action=book&do=list） */
+export type Wenku8Chapter = {
+  cid: number;
+  title: string;
+};
+
+export type Wenku8Volume = {
+  name: string;
+  chapters: Wenku8Chapter[];
 };
 
 /** 下载进度事件（listen 频道 "wr:wenku8-progress"）载荷 */
@@ -81,8 +95,14 @@ export function wenku8BookInfo(aid: number): Promise<Wenku8BookInfo> {
   return invoke<Wenku8BookInfo>("wenku8_book_info", { aid });
 }
 
-export function wenku8Download(aid: number): Promise<Wenku8DownloadResult> {
-  return invoke<Wenku8DownloadResult>("wenku8_download", { aid });
+/** shelfId 空串=默认（根）；书随导入入库后挂到该书架（'' 归一为 null，数字串转 number） */
+export function wenku8Download(aid: number, shelfId: string): Promise<Wenku8DownloadResult> {
+  const shelfIdArg = shelfId === "" ? null : Number(shelfId);
+  return invoke<Wenku8DownloadResult>("wenku8_download", { aid, shelfId: shelfIdArg });
+}
+
+export function wenku8Catalog(aid: number): Promise<Wenku8Volume[]> {
+  return invoke<Wenku8Volume[]>("wenku8_catalog", { aid });
 }
 
 /** 退出登录：清掉本机保存的账密与会话 cookie（页面侧随后回登录卡） */

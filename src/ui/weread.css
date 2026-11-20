@@ -3614,3 +3614,45 @@ body::after {
   font-weight: 650;
   white-space: nowrap;
 }
+
+/* F2 云书架卡右上角徽标：已入库/有新章（有新章叠在已入库下方；悬浮动作层 z-index 更高遮盖） */
+.wr-cloud-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--wr-hairline);
+  border-radius: var(--wr-radius-xs);
+  background: var(--panel-solid);
+  font-size: 11px;
+  color: var(--m2-ink-soft);
+  white-space: nowrap;
+}
+
+.wr-cloud-badge--new {
+  top: 30px;
+  border-color: rgba(var(--wr-accent-rgb), 0.5);
+  color: var(--wr-accent);
+}
+
+/* F4 刊头统计行尾网页版入口小钮（同排 mono 小字） */
+.wr-masthead-stats .wr-stats-link {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border: 1px solid var(--wr-hairline);
+  border-radius: var(--wr-radius-xs);
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--m2-ink-soft);
+  cursor: pointer;
+}
+
+.wr-masthead-stats .wr-stats-link:hover {
+  border-color: rgba(var(--wr-accent-rgb), 0.5);
+  color: var(--wr-accent);
+}

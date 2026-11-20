@@ -84,6 +84,9 @@ pub fn ensure_book_columns(conn: &Connection) -> Result<(), String> {
         "ALTER TABLE books ADD COLUMN subtitle TEXT",
         "ALTER TABLE books ADD COLUMN source_tags TEXT",
         "ALTER TABLE books ADD COLUMN title_source TEXT NULL DEFAULT 'import'",
+        // v3.0 wenku8：下载入库回写的源站关联（aid）与最新章节 cid；已有书不回填，保持 NULL
+        "ALTER TABLE books ADD COLUMN wenku8_aid INTEGER NULL",
+        "ALTER TABLE books ADD COLUMN wenku8_last_cid INTEGER NULL",
     ] {
         if let Err(e) = conn.execute(ddl, []) {
             if !e.to_string().contains("duplicate column name") {
@@ -282,6 +285,8 @@ mod tests {
         assert!(cols.contains(&"subtitle".to_string()));
         assert!(cols.contains(&"source_tags".to_string()));
         assert!(cols.contains(&"title_source".to_string()));
+        assert!(cols.contains(&"wenku8_aid".to_string()));
+        assert!(cols.contains(&"wenku8_last_cid".to_string()));
 
         ensure_book_columns(&conn).unwrap();
     }

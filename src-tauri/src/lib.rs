@@ -20,7 +20,8 @@ use commands::library::{
 };
 use commands::metadata_clean::{clean_title_apply, clean_title_preview};
 use commands::wenku8::{
-    wenku8_book_info, wenku8_bookshelf, wenku8_download, wenku8_login, wenku8_logout, wenku8_status,
+    wenku8_book_info, wenku8_bookshelf, wenku8_catalog, wenku8_download, wenku8_login,
+    wenku8_logout, wenku8_status,
 };
 use commands::images::{
     import_image_folder, list_image_page_meta, list_image_pages, list_image_subdirs,
@@ -186,6 +187,7 @@ pub fn run() {
             wenku8_bookshelf,
             wenku8_book_info,
             wenku8_download,
+            wenku8_catalog,
             delete_book,
             list_shelves,
             create_shelf,

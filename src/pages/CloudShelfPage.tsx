@@ -1,51 +1,235 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { useNavigate } from "react-router-dom";
 
 import {
   wenku8BookInfo,
   wenku8Bookshelf,
+  wenku8Catalog,
   wenku8Download,
   wenku8ErrcodeMessage,
   wenku8Login,
   wenku8Logout,
   wenku8Status,
+  type Wenku8BookInfo,
   type Wenku8ProgressEvent,
   type Wenku8ShelfBook,
+  type Wenku8Volume,
 } from "../tauri/wenku8";
+import { getSettings, listShelves, setSetting, type Shelf } from "../tauri/invoke";
 import AppShell from "../ui/AppShell";
 import { useSidebarActions } from "../ui/sidebarActions";
-import { IconDownload, IconRefresh } from "../ui/icons";
+import { IconBookOpen, IconList, IconRefresh } from "../ui/icons";
+import { showToast } from "../ui/toast";
+import { showAlert } from "../ui/dialog";
 
 // 封面直链无鉴权：卷目录 = aid 整除 1000（协议实测，docs/开发计划-v3.0.md §2）
 function coverUrl(aid: number): string {
   return `http://img.wenku8.com/image/${Math.floor(aid / 1000)}/${aid}/${aid}s.jpg`;
 }
 
-// 书名懒取：会话级缓存 + in-flight 去重（书架接口对未看过的书不返回 name）
-const titleCache = new Map<number, string>();
-const titleInflight = new Map<number, Promise<void>>();
+// settings 表键：目标书架（'' = 默认根）
+const DEST_SHELF_KEY = "wenku8.dest_shelf";
 
-function ensureTitle(aid: number): Promise<void> {
-  const cached = titleCache.has(aid) ? Promise.resolve() : titleInflight.get(aid);
+// 书籍元信息懒取：会话级缓存 + in-flight 去重（书架接口对未看过的书不返回 name；详情/新章比对共用）
+const infoCache = new Map<number, Wenku8BookInfo>();
+const infoInflight = new Map<number, Promise<void>>();
+
+function ensureInfo(aid: number): Promise<void> {
+  const cached = infoCache.has(aid) ? Promise.resolve() : infoInflight.get(aid);
   if (cached) return cached;
   const p = wenku8BookInfo(aid)
     .then((info) => {
-      titleCache.set(aid, info.title);
+      infoCache.set(aid, info);
     })
     .finally(() => {
-      titleInflight.delete(aid);
+      infoInflight.delete(aid);
     });
-  titleInflight.set(aid, p);
+  infoInflight.set(aid, p);
   return p;
 }
 
-// 单卡拉取状态：downloading 有进度条，done/error 为终态
+// F2 有新章比对：会话内每本书只查一次（刷新书架不重查）
+const checkedNew = new Set<number>();
+
+// 拉取锁：页面级一次一本（downloading 期间其它拉取钮禁用）
 type DlState =
   | { phase: "downloading"; done: number; total: number }
   | { phase: "done" }
   | { phase: "error"; message: string };
 
+// F1 详情对话框：大封面 + 完整元信息 + 卷章目录（默认收起）+ 简介 + 底部目标书架/拉取
+function CloudBookDialog({
+  book,
+  shelves,
+  destShelf,
+  onDestShelf,
+  pullBusy,
+  onPull,
+  onClose,
+  coverFailed,
+  onCoverError,
+}: {
+  book: Wenku8ShelfBook;
+  shelves: Shelf[];
+  destShelf: string;
+  onDestShelf: (v: string) => void;
+  pullBusy: boolean;
+  onPull: (aid: number, shelfId: string) => void;
+  onClose: () => void;
+  coverFailed: boolean;
+  onCoverError: (aid: number) => void;
+}) {
+  const navigate = useNavigate();
+  const [info, setInfo] = useState<Wenku8BookInfo | null>(() => infoCache.get(book.aid) ?? null);
+  const [catalog, setCatalog] = useState<Wenku8Volume[] | null>(null);
+  const [catOpen, setCatOpen] = useState(false);
+  const [introOpen, setIntroOpen] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    void ensureInfo(book.aid)
+      .then(() => {
+        if (!disposed) setInfo(infoCache.get(book.aid) ?? null);
+      })
+      .catch(() => {});
+    // 目录独立拉，失败不拖垮元信息（按钮停留「目录获取中…」可重开）
+    void wenku8Catalog(book.aid)
+      .then((v) => {
+        if (!disposed) setCatalog(v);
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+    };
+  }, [book.aid]);
+
+  const imported = book.book_id != null;
+  const title = info?.title ?? book.name ?? "正在获取书名…";
+  const chapCount = catalog?.reduce((n, v) => n + v.chapters.length, 0) ?? 0;
+
+  return (
+    <div
+      className="wr-prompt-overlay"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="wr-panel wr-prompt wr-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`书籍详情 ${title}`}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onClose();
+        }}
+      >
+        <div className="wr-prompt-title">书籍详情</div>
+        <div className="wr-details">
+          <div className="wr-details-cover" style={{ cursor: "default" }}>
+            {coverFailed ? (
+              <div className="wr-cover-title">{title}</div>
+            ) : (
+              <img src={coverUrl(book.aid)} alt="" onError={() => onCoverError(book.aid)} />
+            )}
+          </div>
+          <div className="wr-details-main">
+            {/* 完整书名不截断（默认换行） */}
+            <div style={{ fontWeight: 750, fontSize: 16 }}>{title}</div>
+            <div className="wr-muted" style={{ fontSize: 12 }}>
+              {info
+                ? `${info.author || "未知作者"} · ${info.status || "—"} · 最近更新 ${info.last_update || "—"}`
+                : "正在获取…"}
+            </div>
+            <div>
+              <button
+                type="button"
+                className="wr-btn"
+                style={{ padding: "4px 10px", fontSize: 12 }}
+                disabled={catalog == null}
+                onClick={() => setCatOpen((v) => !v)}
+              >
+                {catalog == null ? "目录获取中…" : catOpen ? "收起目录" : `共 ${catalog.length} 卷 ${chapCount} 章`}
+              </button>
+            </div>
+            {catOpen ? (
+              <div style={{ maxHeight: 180, overflowY: "auto", fontSize: 12, lineHeight: 1.9 }}>
+                {catalog?.map((v) => (
+                  <div key={v.name}>
+                    <div style={{ fontWeight: 650 }}>{v.name}</div>
+                    {v.chapters.map((c) => (
+                      <div key={c.cid} className="wr-muted">{c.title}</div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {info?.intro ? (
+              <div style={{ fontSize: 13 }}>
+                <div style={{ maxHeight: introOpen ? undefined : "3.6em", overflow: "hidden", whiteSpace: "pre-line" }}>
+                  {info.intro}
+                </div>
+                <button
+                  type="button"
+                  className="wr-btn"
+                  style={{ padding: "4px 10px", fontSize: 12, marginTop: 4 }}
+                  onClick={() => setIntroOpen((v) => !v)}
+                >
+                  {introOpen ? "收起简介" : "展开简介"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div className="wr-prompt-actions">
+          {imported ? (
+            <span className="wr-muted" style={{ fontSize: 12, marginRight: "auto", alignSelf: "center" }}>
+              已入库，增量更新将随后续版本提供
+            </span>
+          ) : (
+            <label
+              className="wr-muted"
+              style={{ fontSize: 12, marginRight: "auto", alignSelf: "center", display: "inline-flex", alignItems: "center", gap: 6 }}
+            >
+              拉到
+              <select
+                className="wr-input"
+                style={{ width: 150 }}
+                aria-label="目标书架"
+                value={destShelf}
+                onChange={(e) => onDestShelf(e.currentTarget.value)}
+              >
+                <option value="">默认（根）</option>
+                {shelves.map((s) => (
+                  <option key={s.id} value={String(s.id)}>{s.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <button className="wr-btn" onClick={onClose}>关闭</button>
+          {imported ? (
+            <button className="wr-btn wr-btn-primary" onClick={() => navigate(`/read/${book.book_id}`)}>
+              打开这本书
+            </button>
+          ) : (
+            <button
+              className="wr-btn wr-btn-primary"
+              disabled={pullBusy}
+              title={pullBusy ? "正在拉取另一本" : undefined}
+              onClick={() => onPull(book.aid, destShelf)}
+            >
+              {pullBusy ? "正在拉取另一本" : "拉取到书库"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function CloudShelfPage() {
+  const navigate = useNavigate();
   const [mode, setMode] = useState<"checking" | "login" | "shelf">("checking");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -55,12 +239,18 @@ export default function CloudShelfPage() {
   const [shelfBusy, setShelfBusy] = useState(false);
   const [shelfError, setShelfError] = useState<string | null>(null);
   const [titles, setTitles] = useState<Record<number, string>>({});
-  const [dl, setDl] = useState<Record<number, DlState>>({});
+  const [dl, setDl] = useState<({ aid: number } & DlState) | null>(null);
   const [account, setAccount] = useState("");
   // D3 上下文行：上次成功拉取云书架的时间（HH:mm）
   const [syncText, setSyncText] = useState<string | null>(null);
   // D1 封面占位：远端封面拉挂的书才在封面 overlay 上显示书名（有封面不显示，照书库卡）
   const [coverFailed, setCoverFailed] = useState<Set<number>>(new Set());
+  // F1 详情对话框 + 目标书架（listShelves 一次 + settings 记住上次选择）
+  const [detail, setDetail] = useState<Wenku8ShelfBook | null>(null);
+  const [shelves, setShelves] = useState<Shelf[]>([]);
+  const [destShelf, setDestShelf] = useState("");
+  // F2 有新章徽标：imported 卡懒比对 latest_cid > last_cid（失败静默不标）
+  const [hasNew, setHasNew] = useState<Set<number>>(new Set());
 
   const loadShelf = useCallback(async () => {
     setShelfBusy(true);
@@ -69,15 +259,32 @@ export default function CloudShelfPage() {
       const list = await wenku8Bookshelf();
       setBooks(list);
       setSyncText(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }));
+      let stagger = 0;
       for (const b of list) {
-        if (b.name != null) continue;
-        // 已有缓存的书直接播种进 state，未有的取到再补
-        const hit = titleCache.get(b.aid);
-        if (hit != null) setTitles((t) => ({ ...t, [b.aid]: hit }));
-        else void ensureTitle(b.aid).then(() => {
-          const got = titleCache.get(b.aid);
-          if (got != null) setTitles((t) => ({ ...t, [b.aid]: got }));
-        });
+        if (b.name == null) {
+          // 已有缓存的书直接播种进 state，未有的取到再补
+          const hit = infoCache.get(b.aid);
+          if (hit != null) setTitles((t) => ({ ...t, [b.aid]: hit.title }));
+          else void ensureInfo(b.aid)
+            .then(() => {
+              const got = infoCache.get(b.aid);
+              if (got != null) setTitles((t) => ({ ...t, [b.aid]: got.title }));
+            })
+            .catch(() => {});
+        }
+        if (b.book_id != null && !checkedNew.has(b.aid)) {
+          checkedNew.add(b.aid);
+          const lastCid = b.last_cid;
+          // F2 错峰 300ms：整架 imported 卡不至于同拍打满中继
+          setTimeout(() => {
+            void ensureInfo(b.aid)
+              .then(() => {
+                const got = infoCache.get(b.aid);
+                if (got != null && got.latest_cid > lastCid) setHasNew((s) => new Set(s).add(b.aid));
+              })
+              .catch(() => {});
+          }, 300 * stagger++);
+        }
       }
     } catch (e) {
       setShelfError(String(e));
@@ -89,14 +296,12 @@ export default function CloudShelfPage() {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
-    // 拉取进度事件按 aid 过滤，只更新 downloading 中的卡
+    // 拉取进度事件按 aid 过滤，只更新下载中的那本（页面级单飞锁）
     void listen<Wenku8ProgressEvent>("wr:wenku8-progress", (e) => {
       const { aid, done, total } = e.payload;
-      setDl((prev) => {
-        const cur = prev[aid];
-        if (!cur || cur.phase !== "downloading") return prev;
-        return { ...prev, [aid]: { phase: "downloading", done, total } };
-      });
+      setDl((prev) =>
+        prev && prev.aid === aid && prev.phase === "downloading" ? { ...prev, done, total } : prev,
+      );
     })
       .then((f) => {
         if (disposed) f();
@@ -114,6 +319,13 @@ export default function CloudShelfPage() {
         }
         setMode("shelf");
         void loadShelf();
+        // F1 目标书架下拉数据 + 上次选择（失败静默退默认根）
+        void listShelves().then((list) => {
+          if (!disposed) setShelves(list);
+        }).catch(() => {});
+        void getSettings().then((s2) => {
+          if (!disposed) setDestShelf(s2[DEST_SHELF_KEY] ?? "");
+        }).catch(() => {});
       })
       .catch(() => {
         if (!disposed) setMode("login");
@@ -134,6 +346,8 @@ export default function CloudShelfPage() {
         setAccount(username);
         setMode("shelf");
         void loadShelf();
+        void listShelves().then(setShelves).catch(() => {});
+        void getSettings().then((s) => setDestShelf(s[DEST_SHELF_KEY] ?? "")).catch(() => {});
       } else {
         setLoginError(wenku8ErrcodeMessage(res.errcode));
       }
@@ -144,13 +358,36 @@ export default function CloudShelfPage() {
     }
   }
 
-  async function onDownload(aid: number) {
-    setDl((prev) => ({ ...prev, [aid]: { phase: "downloading", done: 0, total: 0 } }));
+  // F3 拉取流：对话框发起 → 卡片下载态 → 完成重拉书架（imported 徽标即现）
+  async function onDownload(aid: number, shelfId: string) {
+    setDetail(null);
+    setDl({ aid, phase: "downloading", done: 0, total: 0 });
     try {
-      await wenku8Download(aid);
-      setDl((prev) => ({ ...prev, [aid]: { phase: "done" } }));
+      await wenku8Download(aid, shelfId);
+      setDl({ aid, phase: "done" });
+      void loadShelf();
     } catch (err) {
-      setDl((prev) => ({ ...prev, [aid]: { phase: "error", message: String(err) } }));
+      setDl({ aid, phase: "error", message: String(err) });
+    }
+  }
+
+  function onDestShelfChange(v: string) {
+    setDestShelf(v);
+    void setSetting(DEST_SHELF_KEY, v).catch(() => {});
+  }
+
+  // F4 网页版入口（照 SettingsDialog openUrl 先例：失败退复制链接提示）
+  async function openWeb() {
+    const url = "http://www.wenku8.cc/";
+    try {
+      await openUrl(url);
+    } catch {
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast("已复制网页版链接");
+      } catch {
+        void showAlert("打开网页版失败", url);
+      }
     }
   }
 
@@ -160,9 +397,10 @@ export default function CloudShelfPage() {
       await wenku8Logout();
     } catch {}
     setBooks([]);
-    setDl({});
+    setDl(null);
     setTitles({});
     setSyncText(null);
+    setHasNew(new Set());
     setAccount("");
     setUsername("");
     setPassword("");
@@ -178,6 +416,7 @@ export default function CloudShelfPage() {
   );
 
   const titleOf = (b: Wenku8ShelfBook): string => b.name ?? titles[b.aid] ?? "正在获取书名…";
+  const pullBusy = dl?.phase === "downloading";
 
   return (
     <AppShell
@@ -199,7 +438,15 @@ export default function CloudShelfPage() {
       <div className="wr-masthead">
         <h1 className="wr-masthead-name">云 书 架</h1>
         <div className="wr-masthead-stats">
-          {mode === "shelf" ? `wenku8 · ${account || "已登录"} · 共 ${books.length} 本` : "wenku8 在线书架"}
+          <span>{mode === "shelf" ? `wenku8 · ${account || "已登录"} · 共 ${books.length} 本` : "wenku8 在线书架"}</span>
+          <button
+            type="button"
+            className="wr-stats-link"
+            title="去网页版管理云端书架"
+            onClick={() => void openWeb()}
+          >
+            网页版 ↗
+          </button>
         </div>
       </div>
 
@@ -264,11 +511,12 @@ export default function CloudShelfPage() {
         ) : (
           <div className="wr-book-grid">
             {books.map((b) => {
-              const state = dl[b.aid];
+              const state = dl != null && dl.aid === b.aid ? dl : undefined;
               const pct = state?.phase === "downloading" && state.total > 0 ? (state.done / state.total) * 100 : 0;
               const failed = coverFailed.has(b.aid);
+              const imported = b.book_id != null;
               return (
-                <div key={b.aid} className="wr-book-card" data-aid={b.aid} style={{ cursor: "default" }}>
+                <div key={b.aid} className="wr-book-card" data-aid={b.aid} onClick={() => setDetail(b)}>
                   <div className="wr-cover">
                     {failed ? (
                       <div className="wr-cover-text">
@@ -288,7 +536,10 @@ export default function CloudShelfPage() {
                     <div className="wr-title" title={titleOf(b)}>{titleOf(b)}</div>
                     {b.date ? <div className="wr-author" title={b.date}>{b.date}</div> : null}
                   </div>
-                  {/* D1 悬浮动作层（书库卡同款 wr-card-tools）：下载钮/进度墨线/✓ 已入库微标 */}
+                  {/* F2 已入库/有新章徽标（右上角，悬浮动作层之下） */}
+                  {imported ? <span className="wr-cloud-badge">已入库</span> : null}
+                  {hasNew.has(b.aid) ? <span className="wr-cloud-badge wr-cloud-badge--new">有新章</span> : null}
+                  {/* 悬浮动作层：下载进度/✓；imported=打开，否则开详情（直接拉取改由对话框发起） */}
                   <div className="wr-card-tools" data-show={state != null}>
                     {state?.phase === "downloading" ? (
                       <div
@@ -301,18 +552,34 @@ export default function CloudShelfPage() {
                         <span>{state.total > 0 ? `${Math.round(pct)}%` : "…"}</span>
                         <i style={{ width: `${pct}%` }} />
                       </div>
-                    ) : state?.phase === "done" ? (
+                    ) : state?.phase === "done" && !imported ? (
+                      // ✓ 过渡微标：只在书架重拉、imported 徽标落地前的窗口里显示
                       <span className="wr-dl-done">✓ 已入库</span>
+                    ) : imported ? (
+                      <button
+                        type="button"
+                        className="wr-mini-btn"
+                        aria-label="打开"
+                        title="打开这本书"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/read/${b.book_id}`);
+                        }}
+                      >
+                        <IconBookOpen />
+                      </button>
                     ) : (
                       <button
                         type="button"
                         className="wr-mini-btn"
-                        aria-label="拉取到书库"
-                        title={state?.phase === "error" ? `拉取失败：${state.message}` : "拉取到书库"}
-                        disabled={shelfBusy}
-                        onClick={() => void onDownload(b.aid)}
+                        aria-label="详情"
+                        title={state?.phase === "error" ? `拉取失败：${state.message}` : "详情与拉取"}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDetail(b);
+                        }}
                       >
-                        <IconDownload />
+                        <IconList />
                       </button>
                     )}
                   </div>
@@ -321,6 +588,20 @@ export default function CloudShelfPage() {
             })}
           </div>
         )
+      ) : null}
+
+      {detail != null ? (
+        <CloudBookDialog
+          book={detail}
+          shelves={shelves}
+          destShelf={destShelf}
+          onDestShelf={onDestShelfChange}
+          pullBusy={pullBusy}
+          onPull={(aid, shelfId) => void onDownload(aid, shelfId)}
+          onClose={() => setDetail(null)}
+          coverFailed={coverFailed.has(detail.aid)}
+          onCoverError={(aid) => setCoverFailed((s) => new Set(s).add(aid))}
+        />
       ) : null}
     </AppShell>
   );

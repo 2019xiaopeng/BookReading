@@ -41,12 +41,30 @@ pub struct Wenku8Status {
     pub username: Option<String>,
 }
 
-/// 云书架条目。name 为 None 时由前端调 wenku8_book_info 懒取（会话内缓存）。
+/// 云书架条目。imported=本地库命中（books.wenku8_aid 关联）；name 为 None 时由前端调
+/// wenku8_book_info 懒取（会话内缓存）；last_cid 为本地记录的最新章节 cid（未入库 0）。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Wenku8ShelfBook {
     pub aid: i64,
     pub name: Option<String>,
     pub date: Option<String>,
+    pub imported: bool,
+    pub book_id: Option<String>,
+    pub last_cid: i64,
+}
+
+/// 目录章节（action=book&do=list）。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Wenku8Chapter {
+    pub cid: i64,
+    pub title: String,
+}
+
+/// 目录卷：卷名 + 章节列表。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Wenku8Volume {
+    pub name: String,
+    pub chapters: Vec<Wenku8Chapter>,
 }
 
 /// 书籍元信息（action=book&do=bookinfo）。
@@ -463,11 +481,49 @@ pub fn wenku8_bookshelf(app: tauri::AppHandle) -> Result<Vec<Wenku8ShelfBook>, S
 }
 
 fn bookshelf_inner(app: &tauri::AppHandle) -> Result<Vec<Wenku8ShelfBook>, String> {
-    let body = wenku8_action(app, "action=bookcase&do=list")?;
-    Ok(parse_bookcase(&body)
-        .into_iter()
-        .map(|aid| Wenku8ShelfBook { aid, name: None, date: None })
-        .collect())
+    let aids = parse_bookcase(&wenku8_action(app, "action=bookcase&do=list")?);
+    if aids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // 已入库书一次 IN 查询合并（替代前端逐本懒取的 N+1）
+    let conn = db::open_db(app)?;
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT wenku8_aid, id, title, wenku8_last_cid FROM books
+             WHERE wenku8_aid IN {} AND deleted_at IS NULL",
+            crate::commands::shelves::in_clause(aids.len())
+        ))
+        .map_err(|e| format!("查询本地书库失败：{e}"))?;
+    let hits: Vec<(i64, String, Option<String>, Option<i64>)> = stmt
+        .query_map(rusqlite::params_from_iter(aids.iter()), |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })
+        .map_err(|e| format!("查询本地书库失败：{e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("查询本地书库失败：{e}"))?;
+    Ok(merge_shelf(&aids, &hits))
+}
+
+/// 纯映射：书架 aid 列表 × 本地命中行 (wenku8_aid, id, title, wenku8_last_cid) → 条目。
+/// 命中取本地书名与进度（title 为 NULL 仍留懒取）；同 aid 多本（重复导入）取首行。
+fn merge_shelf(aids: &[i64], hits: &[(i64, String, Option<String>, Option<i64>)]) -> Vec<Wenku8ShelfBook> {
+    let mut by_aid: HashMap<i64, &(i64, String, Option<String>, Option<i64>)> = HashMap::new();
+    for h in hits {
+        by_aid.entry(h.0).or_insert(h);
+    }
+    aids.iter()
+        .map(|&aid| match by_aid.get(&aid) {
+            Some((_, id, title, last_cid)) => Wenku8ShelfBook {
+                aid,
+                name: title.clone(),
+                date: None,
+                imported: true,
+                book_id: Some(id.clone()),
+                last_cid: last_cid.unwrap_or(0),
+            },
+            None => Wenku8ShelfBook { aid, name: None, date: None, imported: false, book_id: None, last_cid: 0 },
+        })
+        .collect()
 }
 
 #[tauri::command(async)]
@@ -493,18 +549,22 @@ fn book_info_inner(app: &tauri::AppHandle, aid: i64) -> Result<Wenku8BookInfo, S
 }
 
 #[tauri::command(async)]
-pub fn wenku8_download(app: tauri::AppHandle, aid: i64) -> Result<Wenku8DownloadResult, String> {
+pub fn wenku8_download(
+    app: tauri::AppHandle,
+    aid: i64,
+    shelf_id: Option<i64>,
+) -> Result<Wenku8DownloadResult, String> {
     let (tx, rx) = std::sync::mpsc::channel::<Result<Wenku8DownloadResult, String>>();
     std::thread::spawn(move || {
-        let _ = tx.send(download_inner(&app, aid));
+        let _ = tx.send(download_inner(&app, aid, shelf_id));
     });
     rx.recv().map_err(|_| "下载线程异常退出".to_string())?
 }
 
-fn download_inner(app: &tauri::AppHandle, aid: i64) -> Result<Wenku8DownloadResult, String> {
-    // 1) bookinfo 取标题/作者
+fn download_inner(app: &tauri::AppHandle, aid: i64, shelf_id: Option<i64>) -> Result<Wenku8DownloadResult, String> {
+    // 1) bookinfo 取标题/作者（LatestSection cid 顺手留下，导入后回写 wenku8_last_cid，不二次请求）
     let xml = wenku8_action(app, &format!("action=book&do=bookinfo&aid={aid}&t=0"))?;
-    let (fields, _) = bookinfo_fields(&xml)?;
+    let (fields, latest_cid) = bookinfo_fields(&xml)?;
     let title = fields
         .get("Title")
         .filter(|s| !s.is_empty())
@@ -597,7 +657,44 @@ fn download_inner(app: &tauri::AppHandle, aid: i64) -> Result<Wenku8DownloadResu
     };
     let _ = std::fs::remove_file(&tmp);
 
+    // 7) 回写源站关联列（书架刷新靠 wenku8_aid 命中）；指定书架时挂上去（新导入书 sort_order 本就 NULL）
+    let conn = db::open_db(app)?;
+    conn.execute(
+        "UPDATE books SET wenku8_aid = ?2, wenku8_last_cid = ?3 WHERE id = ?1",
+        params![imported.id, aid, latest_cid],
+    )
+    .map_err(|e| format!("回写 wenku8 关联失败：{e}"))?;
+    if let Some(sid) = shelf_id {
+        // 书架可能已被删：挂不上去不推翻导入结果，书留在根视图（用户可手动挪）
+        if let Err(e) = conn.execute("UPDATE books SET shelf_id = ?2 WHERE id = ?1", params![imported.id, sid]) {
+            eprintln!("[wenku8] 挂载书架 {sid} 失败（书已入根视图）：{e}");
+        }
+    }
+
     Ok(Wenku8DownloadResult { book_id: imported.id, title, chapters: total as i32 })
+}
+
+#[tauri::command(async)]
+pub fn wenku8_catalog(app: tauri::AppHandle, aid: i64) -> Result<Vec<Wenku8Volume>, String> {
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<Wenku8Volume>, String>>();
+    std::thread::spawn(move || {
+        let _ = tx.send(catalog_inner(&app, aid));
+    });
+    rx.recv().map_err(|_| "目录拉取线程异常退出".to_string())?
+}
+
+fn catalog_inner(app: &tauri::AppHandle, aid: i64) -> Result<Vec<Wenku8Volume>, String> {
+    let xml = wenku8_action(app, &format!("action=book&do=list&aid={aid}&t=0"))?;
+    Ok(catalog_to_volumes(parse_catalog(&xml)?))
+}
+
+fn catalog_to_volumes(cat: Catalog) -> Vec<Wenku8Volume> {
+    cat.into_iter()
+        .map(|(volume, chapters)| Wenku8Volume {
+            name: volume,
+            chapters: chapters.into_iter().map(|(cid, title)| Wenku8Chapter { cid, title }).collect(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -696,5 +793,39 @@ mod tests {
     fn filename_sanitize() {
         assert_eq!(sanitize_filename("小说:第一卷?"), "小说_第一卷_"); // ASCII 非法字符替换；全角：合法保留
         assert_eq!(sanitize_filename("  ."), "book");
+    }
+
+    #[test]
+    fn shelf_merge_hit_miss_duplicate() {
+        let hits = vec![
+            (7, "b1".into(), Some("本地名".into()), Some(55)),
+            (7, "b2".into(), Some("重复导入".into()), None), // 同 aid 多本：取首行 b1
+            (9, "b9".into(), None, None), // 命中但本地书名 NULL：name 仍 None 走前端懒取
+        ];
+        let out = merge_shelf(&[7, 7, 8, 9], &hits); // 书架列表本身也可能重复 aid：各自独立映射
+        assert_eq!(out.len(), 4);
+        for (i, book_id, name, last_cid) in [
+            (0, Some("b1"), Some("本地名"), 55),
+            (1, Some("b1"), Some("本地名"), 55),
+            (2, None, None, 0),
+            (3, Some("b9"), None, 0),
+        ] {
+            assert_eq!(out[i].book_id.as_deref(), book_id, "index {i}");
+            assert_eq!(out[i].name.as_deref(), name, "index {i}");
+            assert_eq!(out[i].last_cid, last_cid, "index {i}");
+        }
+        assert!(out[0].imported && out[1].imported && out[3].imported);
+        assert!(!out[2].imported);
+        assert!(out.iter().all(|b| b.date.is_none()));
+    }
+
+    #[test]
+    fn catalog_volume_serde_field_names() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<root><volume vid="1">第一卷 起始<chapter cid="101">第一章 出发</chapter></volume></root>"#;
+        let v = serde_json::to_value(catalog_to_volumes(parse_catalog(xml).unwrap())).unwrap();
+        assert_eq!(v[0]["name"], "第一卷 起始");
+        assert_eq!(v[0]["chapters"][0]["cid"], 101);
+        assert_eq!(v[0]["chapters"][0]["title"], "第一章 出发");
     }
 }
