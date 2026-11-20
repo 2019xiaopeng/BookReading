@@ -514,8 +514,8 @@ export default function FavoritesPage() {
 
   return (
     <>
-      {/* M2 U5：小型刊头（书架刊头 60% 缩档）+ 统计列 */}
-      <div className="wr-masthead wr-masthead--sm">
+      {/* 批次12 U-1：刊头回归书库同款大版——四视图标题同字号同结构 */}
+      <div className="wr-masthead">
         <h1 className="wr-masthead-name">收 藏</h1>
         <div className="wr-masthead-stats">
           收藏 {favoriteBooks.length} · 摘录 {quotes.length}

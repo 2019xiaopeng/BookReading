@@ -135,7 +135,7 @@ type DlState =
   | { phase: "done" }
   | { phase: "error"; message: string };
 
-// 批次10 F-2 目标书架自绘下拉：玻璃弹层（原生 select 弹层做不了玻璃/新建交互），
+// 批次10 F-2 目标书架自绘下拉：自绘弹层（原生 select 弹层做不了"新建书架"交互），
 // 含「＋ 新建书架…」原位内联输入（回车确认 / Esc 取消，重名沿用后端报错）
 function ShelfPicker({
   shelves,
@@ -233,7 +233,7 @@ function ShelfPicker({
             <span aria-hidden="true" style={{ marginLeft: 4, fontSize: 10, opacity: 0.7 }}>▾</span>
           </button>
           {open ? (
-            <div className="wr-menu wr-menu--glass wr-cloud-picker-menu" role="listbox" aria-label="目标书架选项">
+            <div className="wr-menu wr-cloud-picker-menu" role="listbox" aria-label="目标书架选项">
               <button
                 type="button"
                 className="wr-menu-item"
@@ -337,13 +337,16 @@ function CloudBookDialog({
 
   return (
     <div
-      className="wr-prompt-overlay wr-cloud-overlay"
+      className="wr-prompt-overlay"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
+      {/* 批次12 U-3：撤玻璃——结构与样式类直接复用书库 BookDetailsDialog 同一套
+          （wr-prompt-overlay / wr-panel wr-prompt wr-dialog / wr-details / wr-details-cover），
+          弹窗整体随 wr-dialog 滚动；云特有内容（标签/目录/书架下拉/网页版/拉取）照旧 */}
       <div
-        className="wr-panel wr-prompt wr-dialog wr-cloud-dialog"
+        className="wr-panel wr-prompt wr-dialog"
         role="dialog"
         aria-modal="true"
         aria-label={`书籍详情 ${title}`}
@@ -352,65 +355,60 @@ function CloudBookDialog({
         }}
       >
         <div className="wr-prompt-title">书籍详情</div>
-        {/* P-3 正文独立滚动（max 78vh）：长简介/目录展开也不把底部动作区顶出屏 */}
-        <div className="wr-cloud-body">
-          <div className="wr-cloud-details">
-            <div className="wr-cloud-cover">
-              {coverFailed ? (
+        <div className="wr-details">
+          <div className="wr-details-cover" style={{ cursor: "default" }}>
+            {coverFailed ? (
+              <>
                 <div className="wr-cover-title">{title}</div>
-              ) : (
-                <img
-                  src={coverUrl(book.aid)}
-                  alt=""
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  onError={() => onCoverError(book.aid)}
-                />
-              )}
+                <div className="wr-cover-author">{info?.author?.trim() || "未知作者"}</div>
+              </>
+            ) : (
+              <img src={coverUrl(book.aid)} alt="" onError={() => onCoverError(book.aid)} />
+            )}
+          </div>
+          <div className="wr-details-main">
+            {/* 完整书名不截断（默认换行） */}
+            <div style={{ fontWeight: 750, fontSize: 16 }}>{title}</div>
+            <div className="wr-muted" style={{ fontSize: 12 }}>
+              {info
+                ? `${info.author || "未知作者"} · ${info.status || "—"} · 最近更新 ${info.last_update || "—"}`
+                : "正在获取…"}
             </div>
-            <div className="wr-details-main">
-              {/* 完整书名不截断（默认换行） */}
-              <div style={{ fontWeight: 750, fontSize: 16 }}>{title}</div>
-              <div className="wr-muted" style={{ fontSize: 12 }}>
-                {info
-                  ? `${info.author || "未知作者"} · ${info.status || "—"} · 最近更新 ${info.last_update || "—"}`
-                  : "正在获取…"}
+            {/* 批次10 F-1 标签：墨线细边小 chips 一排（空数组不渲染该行） */}
+            {info?.tags?.length ? (
+              <div className="wr-cloud-tags">
+                {info.tags.map((t) => (
+                  <span key={t} className="wr-cloud-tag-chip">{t}</span>
+                ))}
               </div>
-              {/* 批次10 F-1 标签：墨线细边小 chips 一排（空数组不渲染该行） */}
-              {info?.tags?.length ? (
-                <div className="wr-cloud-tags">
-                  {info.tags.map((t) => (
-                    <span key={t} className="wr-cloud-tag-chip">{t}</span>
-                  ))}
-                </div>
-              ) : null}
-              <div>
-                <button
-                  type="button"
-                  className="wr-btn"
-                  style={{ padding: "4px 10px", fontSize: 12 }}
-                  disabled={catalog == null}
-                  onClick={() => setCatOpen((v) => !v)}
-                >
-                  {catalog == null ? "目录获取中…" : catOpen ? "收起目录" : `共 ${catalog.length} 卷 ${chapCount} 章`}
-                </button>
-              </div>
-              {catOpen ? (
-                <div style={{ maxHeight: 240, overflowY: "auto", fontSize: 12, lineHeight: 1.9 }}>
-                  {catalog?.map((v) => (
-                    <div key={v.name}>
-                      <div style={{ fontWeight: 650 }}>{v.name}</div>
-                      {v.chapters.map((c) => (
-                        <div key={c.cid} className="wr-muted">{c.title}</div>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {/* P-3 简介默认全部展开（去折叠钮），完整显示 */}
-              {info?.intro ? (
-                <div style={{ fontSize: 13, whiteSpace: "pre-line" }}>{info.intro}</div>
-              ) : null}
+            ) : null}
+            <div>
+              <button
+                type="button"
+                className="wr-btn"
+                style={{ padding: "4px 10px", fontSize: 12 }}
+                disabled={catalog == null}
+                onClick={() => setCatOpen((v) => !v)}
+              >
+                {catalog == null ? "目录获取中…" : catOpen ? "收起目录" : `共 ${catalog.length} 卷 ${chapCount} 章`}
+              </button>
             </div>
+            {catOpen ? (
+              <div style={{ maxHeight: 240, overflowY: "auto", fontSize: 12, lineHeight: 1.9 }}>
+                {catalog?.map((v) => (
+                  <div key={v.name}>
+                    <div style={{ fontWeight: 650 }}>{v.name}</div>
+                    {v.chapters.map((c) => (
+                      <div key={c.cid} className="wr-muted">{c.title}</div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {/* P-3 简介默认全部展开（去折叠钮），完整显示 */}
+            {info?.intro ? (
+              <div style={{ fontSize: 13, whiteSpace: "pre-line" }}>{info.intro}</div>
+            ) : null}
           </div>
         </div>
         <div className="wr-prompt-actions">
@@ -424,7 +422,7 @@ function CloudBookDialog({
               style={{ fontSize: 12, marginRight: "auto", alignSelf: "center", display: "inline-flex", alignItems: "center", gap: 6 }}
             >
               拉到
-              {/* 批次10 F-2/F-3：自绘玻璃下拉（可新建书架）；原生 select 弹层无法玻璃化 */}
+              {/* 批次10 F-2：自绘下拉（可新建书架），弹层回归原版 wr-menu 墨线 */}
               <ShelfPicker shelves={shelves} value={destShelf} onChange={onDestShelf} onShelves={onShelves} />
             </span>
           )}
@@ -496,6 +494,8 @@ export default function CloudShelfPage() {
   const [destShelf, setDestShelf] = useState("");
   // F2 有新章徽标：imported 卡懒比对 latest_cid > last_cid（失败静默不标）
   const [hasNew, setHasNew] = useState<Set<number>>(() => new Set(shelfCache?.hasNew ?? []));
+  // 批次12 U-2 顶栏搜索：本地过滤（书名/作者/aid，大小写不敏感；空=全部），清空恢复
+  const [search, setSearch] = useState("");
 
   // state 与会话缓存同步写（P-2：切页回来徽标即时还原）
   function seedInfo(aid: number): void {
@@ -680,6 +680,15 @@ export default function CloudShelfPage() {
     });
   }, [books, sortKey, infos]);
 
+  // U-2 搜索过滤在排序之后套一层（与排序/密度正交）：匹配懒取书名 / 作者 / aid
+  const visibleBooks = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return sortedBooks;
+    return sortedBooks.filter((b) =>
+      `${b.name ?? infos[b.aid]?.title ?? ""} ${infos[b.aid]?.author ?? ""} ${b.aid}`.toLowerCase().includes(q),
+    );
+  }, [sortedBooks, search, infos]);
+
   function changeSort(k: CloudSort): void {
     setSortKey(k);
     void setSetting(SORT_KEY, k).catch(() => {});
@@ -708,10 +717,12 @@ export default function CloudShelfPage() {
   }, [menu]);
 
   // 批次8：壳常驻，本页元信息布局期写入 pageMeta store（切页零闪烁；登录卡态不渲染上下文行）
+  // 批次12 U-1/U-2：顶栏与书库同款恒放搜索框（不再显示标题——刊头已有，避免双「云书架」）
   useLayoutEffect(() => {
     setPageMeta({
       active: "cloud",
       title: "云书架",
+      search: { value: search, placeholder: "搜索云书架 / 作者", onChange: setSearch },
       contextRow:
         mode === "shelf" ? (
           <>
@@ -724,7 +735,7 @@ export default function CloudShelfPage() {
           </>
         ) : undefined,
     });
-  }, [mode, account, syncText, shelfBusy]);
+  }, [mode, account, syncText, shelfBusy, search]);
 
   return (
     <>
@@ -837,12 +848,17 @@ export default function CloudShelfPage() {
             <div className="wr-state-title">云书架是空的</div>
             <div className="wr-state-sub">去 wenku8 网站或 App 把小说加入书架，再回来刷新</div>
           </div>
+        ) : visibleBooks.length === 0 ? (
+          <div className="wr-state" style={{ gridColumn: "1 / -1" }}>
+            <div className="wr-state-title">没有匹配的书</div>
+            <div className="wr-state-sub">换个书名或作者试试</div>
+          </div>
         ) : (
           <div
             className={density === "standard" ? "wr-book-grid" : `wr-book-grid wr-book-grid--${density}`}
             style={{ gridTemplateColumns: DENSITY_PRESETS[density].grid }}
           >
-            {sortedBooks.map((b) => {
+            {visibleBooks.map((b) => {
               const state = dl != null && dl.aid === b.aid ? dl : undefined;
               const pct = state?.phase === "downloading" && state.total > 0 ? (state.done / state.total) * 100 : 0;
               const failed = coverFailed.has(b.aid);
@@ -928,9 +944,9 @@ export default function CloudShelfPage() {
         )
       ) : null}
 
-      {/* C-1 排序菜单（样式照书库排序菜单：wr-menu + radio 项） */}
+      {/* C-1 排序菜单（样式照书库排序菜单：wr-menu 原版墨线 + radio 项） */}
       {menu ? (
-        <div ref={menuRef} className="wr-menu wr-menu--glass" role="menu" style={{ left: menu.x, top: menu.y }}>
+        <div ref={menuRef} className="wr-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
           {(Object.keys(CLOUD_SORT_LABELS) as CloudSort[]).map((k) => (
             <button
               key={k}

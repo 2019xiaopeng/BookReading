@@ -40,10 +40,22 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(() => Promise.resolve()),
 }));
 
-// 壳渲染透传：页面行为测试不背 AppShell 的 Tauri 面（设置/托盘/拖拽导入）；contextRow 透传出来便于断言（D3）
+// 壳渲染透传：页面行为测试不背 AppShell 的 Tauri 面（设置/托盘/拖拽导入）；contextRow/search 透传出来便于断言（D3/批次12 U-2）
 vi.mock("../ui/AppShell", () => ({
-  default: (props: { children?: React.ReactNode; contextRow?: React.ReactNode }) => (
+  default: (props: {
+    children?: React.ReactNode;
+    contextRow?: React.ReactNode;
+    search?: { value: string; placeholder: string; onChange: (v: string) => void };
+  }) => (
     <div>
+      {props.search ? (
+        <input
+          placeholder={props.search.placeholder}
+          aria-label={props.search.placeholder}
+          value={props.search.value}
+          onChange={(e) => props.search?.onChange(e.currentTarget.value)}
+        />
+      ) : null}
       {props.contextRow}
       {props.children}
     </div>
@@ -430,7 +442,7 @@ describe("云书架页（v3.0）", () => {
     await waitFor(() => expect(aids()).toEqual(["2", "3", "1", "4"]));
   });
 
-  test("批次11 D-3/D-2：详情动作区「网页版 ↗」开 https 书页（aid 拼接）；封面换 wr-cloud-cover 去框、img object-fit cover 撑满", async () => {
+  test("批次11 D-3 / 批次12 U-3：详情「网页版 ↗」开 https 书页（aid 拼接）；对话框复用书库详情类名、玻璃类已撤", async () => {
     statusMock.mockResolvedValue({ has_saved: true, username: "u" });
     shelfMock.mockResolvedValue([
       { aid: 812, name: "网页书", date: null, book_id: null, last_cid: 0 },
@@ -448,13 +460,51 @@ describe("云书架页（v3.0）", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "网页版 ↗" }));
     await waitFor(() => expect(openUrlMock).toHaveBeenCalledWith("https://www.wenku8.cc/book/812.htm"));
 
-    // D-2 封面：弃描边壳 wr-details-cover，独立容器 + 铺满裁切的 img
-    const cover = dialog.querySelector(".wr-cloud-cover") as HTMLElement;
+    // U-3 与书库 BookDetailsDialog 同一套载体类（wr-prompt/wr-dialog/wr-details/wr-details-cover）；
+    // 云玻璃变体（wr-cloud-dialog/wr-cloud-overlay）不再存在
+    expect(dialog.className).toContain("wr-prompt");
+    expect(dialog.className).toContain("wr-dialog");
+    expect(dialog.className).not.toContain("wr-cloud-dialog");
+    expect(dialog.parentElement?.className).not.toContain("wr-cloud-overlay");
+    expect(dialog.querySelector(".wr-details")).toBeTruthy();
+    const cover = dialog.querySelector(".wr-details-cover") as HTMLElement;
     expect(cover).toBeTruthy();
-    expect(cover.className).not.toContain("wr-details-cover");
-    const img = cover.querySelector("img") as HTMLElement;
-    expect(img).toBeTruthy();
-    expect(getComputedStyle(img).objectFit).toBe("cover");
+    expect(cover.querySelector("img")).toBeTruthy();
+  });
+
+  test("批次12 U-2：顶栏搜索本地过滤书卡（书名/作者/aid，大小写不敏感），清空恢复", async () => {
+    statusMock.mockResolvedValue({ has_saved: true, username: "u" });
+    shelfMock.mockResolvedValue([
+      { aid: 101, name: "绑架游戏", date: null, book_id: null, last_cid: 0 },
+      { aid: 202, name: "白夜行", date: null, book_id: null, last_cid: 0 },
+    ]);
+    infoMock.mockImplementation((aid: number) =>
+      Promise.resolve(bookInfo(aid, aid === 101 ? "绑架游戏" : "白夜行")),
+    );
+    shelvesMock.mockResolvedValue([]);
+    getSettingsMock.mockResolvedValue({});
+
+    renderCloudShelf();
+    expect(await screen.findByText("绑架游戏")).toBeTruthy();
+    expect(screen.getByText("白夜行")).toBeTruthy();
+
+    const input = screen.getByPlaceholderText("搜索云书架 / 作者");
+    // 书名过滤
+    fireEvent.change(input, { target: { value: "白夜" } });
+    expect(screen.queryByText("绑架游戏")).toBeNull();
+    expect(screen.getByText("白夜行")).toBeTruthy();
+    // 作者（大小写不敏感：作者x 命中 作者X）与 aid
+    fireEvent.change(input, { target: { value: "作者x" } });
+    expect(document.querySelectorAll(".wr-book-card").length).toBe(2);
+    fireEvent.change(input, { target: { value: "202" } });
+    expect(screen.queryByText("绑架游戏")).toBeNull();
+    expect(screen.getByText("白夜行")).toBeTruthy();
+    // 全不匹配给空态；清空恢复全部
+    fireEvent.change(input, { target: { value: "不存在" } });
+    expect(screen.getByText("没有匹配的书")).toBeTruthy();
+    fireEvent.change(input, { target: { value: "" } });
+    expect(screen.getByText("绑架游戏")).toBeTruthy();
+    expect(screen.getByText("白夜行")).toBeTruthy();
   });
 
   test("C-1 密度：读书库同一 library_density 键（large → --large 类 + 320px 列宽）；密度钮写同键", async () => {
