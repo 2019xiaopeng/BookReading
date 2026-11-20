@@ -3699,12 +3699,9 @@ body::after {
   white-space: nowrap;
 }
 
-/* 弹层挂在动作行的 picker 容器下；批次12 U-3 详情回归 wr-dialog（overflow:auto）后向下弹会被
-   弹窗底边裁掉，改为向上弹进弹窗正文区 */
+/* 批次13 F-3+发布前补：弹层由组件 Portal 到 body + fixed 内联定位（视口坐标，上下自适应），
+   详情对话框 overflow/圆角再也裁不到；此处只留尺寸与视觉 */
 .wr-cloud-picker-menu {
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 0;
   min-width: 170px;
 }
 

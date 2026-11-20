@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNavigate } from "react-router-dom";
@@ -154,14 +155,39 @@ function ShelfPicker({
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  // Portal 弹层视口定位（根治：详情对话框随简介变高 + overflow:auto 裁切内嵌弹层的问题）
+  const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number; width: number } | null>(null);
 
   const active = open || creating;
 
-  // 外点关闭；Esc 只收下拉不关对话框（捕获期拦截，不冒泡到详情面板的 Esc）
+  function openMenu() {
+    const r = btnRef.current?.getBoundingClientRect();
+    if (!r) {
+      setOpen(true);
+      return;
+    }
+    const below = window.innerHeight - r.bottom - 12;
+    const above = r.top - 12;
+    const useAbove = below < 200 && above > below;
+    const space = Math.max(160, useAbove ? above : below);
+    const maxHeight = Math.min(300, space);
+    setPos({
+      left: r.left,
+      top: useAbove ? Math.max(8, r.top - maxHeight - 4) : r.bottom + 4,
+      maxHeight,
+      width: Math.max(r.width, 180),
+    });
+    setOpen(true);
+  }
+
+  // 外点关闭；Esc 只收下拉不关对话框（捕获期拦截）；对话框内滚动即收（弹层已 Portal 不随滚）
   useEffect(() => {
     if (!active) return;
     const onPointerDown = (e: PointerEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) {
+      const t = e.target as Node;
+      if (!rootRef.current?.contains(t) && !menuRef.current?.contains(t)) {
         setOpen(false);
         setCreating(false);
       }
@@ -173,12 +199,17 @@ function ShelfPicker({
         setCreating(false);
       }
     };
+    const onScroll = () => {
+      setOpen(false);
+    };
     window.addEventListener("pointerdown", onPointerDown, true);
     // keydown 须捕获期注册：气泡期拦在 React 根监听之后，Esc 会先关掉整个对话框
     window.addEventListener("keydown", onKey, true);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [active]);
 
@@ -221,25 +252,37 @@ function ShelfPicker({
       ) : (
         <>
           <button
+            ref={btnRef}
             type="button"
             className="wr-cloud-picker-btn"
             aria-haspopup="listbox"
             aria-expanded={open}
             aria-label="目标书架"
             title={label}
-            onClick={() => setOpen((v) => !v)}
+            onClick={() => (open ? setOpen(false) : openMenu())}
           >
             <span className="wr-cloud-picker-label">{label}</span>
             <span aria-hidden="true" style={{ marginLeft: 4, fontSize: 10, opacity: 0.7 }}>▾</span>
           </button>
-          {open ? (
-            /* 批次13 F-3：书架过多弹层定高可滚（内联便于 jsdom 断言；「＋ 新建书架…」sticky 常驻在 CSS） */
-            <div
-              className="wr-menu wr-cloud-picker-menu"
-              role="listbox"
-              aria-label="目标书架选项"
-              style={{ maxHeight: 300, overflowY: "auto" }}
-            >
+          {open && pos
+            ? createPortal(
+                /* 批次13 F-3 + 发布前补：Portal 到 body 的 fixed 弹层——对话框 overflow/圆角裁不到；
+                   书架过多定高可滚，「＋ 新建书架…」sticky 常驻在 CSS；对话框滚动即收（见 effect） */
+                <div
+                  ref={menuRef}
+                  className="wr-menu wr-cloud-picker-menu"
+                  role="listbox"
+                  aria-label="目标书架选项"
+                  style={{
+                    position: "fixed",
+                    left: pos.left,
+                    top: pos.top,
+                    width: pos.width,
+                    maxHeight: pos.maxHeight,
+                    overflowY: "auto",
+                    zIndex: 2000,
+                  }}
+                >
               <button
                 type="button"
                 className="wr-menu-item"
@@ -281,8 +324,10 @@ function ShelfPicker({
               >
                 ＋ 新建书架…
               </button>
-            </div>
-          ) : null}
+                </div>,
+                document.body,
+              )
+            : null}
         </>
       )}
       {err ? <div className="wr-cloud-picker-err" role="alert">{err}</div> : null}

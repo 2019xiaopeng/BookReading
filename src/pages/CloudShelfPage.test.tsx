@@ -214,7 +214,7 @@ describe("云书架页（v3.0）", () => {
 
     // 目标书架（批次10 F-2 自绘下拉）：切到书架 5 → 拉取透传 shelfId 并记忆
     fireEvent.click(within(dialog).getByRole("button", { name: "目标书架" }));
-    fireEvent.click(within(dialog).getByRole("option", { name: "小说架" }));
+    fireEvent.click(screen.getByRole("option", { name: "小说架" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "拉取到书库" }));
     expect(downloadMock).toHaveBeenCalledWith(310, "5");
     expect(setSettingMock).toHaveBeenCalledWith("wenku8.dest_shelf", "5");
@@ -304,9 +304,9 @@ describe("云书架页（v3.0）", () => {
 
     // 打开下拉：默认（根）+ 已有书架 + 新建入口
     fireEvent.click(within(dialog).getByRole("button", { name: "目标书架" }));
-    expect(within(dialog).getByRole("option", { name: "默认（根）" })).toBeTruthy();
-    expect(within(dialog).getByRole("option", { name: "小说架" })).toBeTruthy();
-    fireEvent.click(within(dialog).getByRole("option", { name: "＋ 新建书架…" }));
+    expect(screen.getByRole("option", { name: "默认（根）" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "小说架" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("option", { name: "＋ 新建书架…" }));
 
     // 回车撞重名：报错原样提示，输入保留
     const input = await within(dialog).findByLabelText("新书架名称");
@@ -321,7 +321,7 @@ describe("云书架页（v3.0）", () => {
 
     // 重开再建：成功后刷新列表并自动选中新架（写回 wenku8.dest_shelf 记忆）
     fireEvent.click(within(dialog).getByRole("button", { name: "目标书架" }));
-    fireEvent.click(within(dialog).getByRole("option", { name: "＋ 新建书架…" }));
+    fireEvent.click(screen.getByRole("option", { name: "＋ 新建书架…" }));
     const input2 = await within(dialog).findByLabelText("新书架名称");
     shelvesMock.mockResolvedValue([
       { id: 5, name: "小说架", parent_id: null, sort_order: 0, created_at: 0 },
