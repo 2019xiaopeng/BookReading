@@ -17,7 +17,7 @@ import {
   type Wenku8ShelfBook,
   type Wenku8Volume,
 } from "../tauri/wenku8";
-import { getSettings, listShelves, setSetting, type Shelf } from "../tauri/invoke";
+import { createShelf, getSettings, listShelves, setSetting, type Shelf } from "../tauri/invoke";
 import { DENSITY_PRESETS, normalizeLibraryDensity, type LibraryDensity } from "../library/density";
 import { setPageMeta } from "../ui/pageMeta";
 import { subscribeAppRefresh } from "../ui/appActions";
@@ -121,12 +121,162 @@ type DlState =
   | { phase: "done" }
   | { phase: "error"; message: string };
 
+// 批次10 F-2 目标书架自绘下拉：玻璃弹层（原生 select 弹层做不了玻璃/新建交互），
+// 含「＋ 新建书架…」原位内联输入（回车确认 / Esc 取消，重名沿用后端报错）
+function ShelfPicker({
+  shelves,
+  value,
+  onChange,
+  onShelves,
+}: {
+  shelves: Shelf[];
+  value: string;
+  onChange: (v: string) => void;
+  onShelves: (list: Shelf[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  const active = open || creating;
+
+  // 外点关闭；Esc 只收下拉不关对话框（捕获期拦截，不冒泡到详情面板的 Esc）
+  useEffect(() => {
+    if (!active) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) {
+        setOpen(false);
+        setCreating(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+        setCreating(false);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    // keydown 须捕获期注册：气泡期拦在 React 根监听之后，Esc 会先关掉整个对话框
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [active]);
+
+  async function submitCreate() {
+    const n = name.trim();
+    if (!n || busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const shelf = await createShelf(n, null);
+      onShelves(await listShelves());
+      onChange(String(shelf.id)); // 自动选中新架（onChange 内含 dest_shelf 记忆）
+      setCreating(false);
+      setName("");
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const label = shelves.find((s) => String(s.id) === value)?.name ?? "默认（根）";
+
+  return (
+    <div ref={rootRef} style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+      {creating ? (
+        <input
+          className="wr-input"
+          style={{ width: 150, padding: "5px 10px", fontSize: 12 }}
+          aria-label="新书架名称"
+          placeholder="新书架名称，回车确认"
+          autoFocus
+          disabled={busy}
+          value={name}
+          onChange={(e) => setName(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void submitCreate();
+          }}
+        />
+      ) : (
+        <>
+          <button
+            type="button"
+            className="wr-cloud-picker-btn"
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            aria-label="目标书架"
+            title={label}
+            onClick={() => setOpen((v) => !v)}
+          >
+            <span className="wr-cloud-picker-label">{label}</span>
+            <span aria-hidden="true" style={{ marginLeft: 4, fontSize: 10, opacity: 0.7 }}>▾</span>
+          </button>
+          {open ? (
+            <div className="wr-menu wr-menu--glass wr-cloud-picker-menu" role="listbox" aria-label="目标书架选项">
+              <button
+                type="button"
+                className="wr-menu-item"
+                role="option"
+                aria-selected={value === ""}
+                data-checked={value === ""}
+                onClick={() => {
+                  onChange("");
+                  setOpen(false);
+                }}
+              >
+                默认（根）
+              </button>
+              {shelves.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="wr-menu-item"
+                  role="option"
+                  aria-selected={value === String(s.id)}
+                  data-checked={value === String(s.id)}
+                  onClick={() => {
+                    onChange(String(s.id));
+                    setOpen(false);
+                  }}
+                >
+                  {s.name}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="wr-menu-item"
+                role="option"
+                aria-selected={false}
+                onClick={() => {
+                  setOpen(false);
+                  setCreating(true);
+                }}
+              >
+                ＋ 新建书架…
+              </button>
+            </div>
+          ) : null}
+        </>
+      )}
+      {err ? <div className="wr-cloud-picker-err" role="alert">{err}</div> : null}
+    </div>
+  );
+}
+
 // F1 详情对话框：大封面 + 完整元信息 + 卷章目录（默认收起）+ 简介 + 底部目标书架/拉取
 function CloudBookDialog({
   book,
   shelves,
   destShelf,
   onDestShelf,
+  onShelves,
   pullBusy,
   onPull,
   onClose,
@@ -137,6 +287,7 @@ function CloudBookDialog({
   shelves: Shelf[];
   destShelf: string;
   onDestShelf: (v: string) => void;
+  onShelves: (list: Shelf[]) => void;
   pullBusy: boolean;
   onPull: (aid: number, shelfId: string) => void;
   onClose: () => void;
@@ -205,6 +356,14 @@ function CloudBookDialog({
                   ? `${info.author || "未知作者"} · ${info.status || "—"} · 最近更新 ${info.last_update || "—"}`
                   : "正在获取…"}
               </div>
+              {/* 批次10 F-1 标签：墨线细边小 chips 一排（空数组不渲染该行） */}
+              {info?.tags?.length ? (
+                <div className="wr-cloud-tags">
+                  {info.tags.map((t) => (
+                    <span key={t} className="wr-cloud-tag-chip">{t}</span>
+                  ))}
+                </div>
+              ) : null}
               <div>
                 <button
                   type="button"
@@ -241,25 +400,14 @@ function CloudBookDialog({
               已入库，增量更新将随后续版本提供
             </span>
           ) : (
-            <label
+            <span
               className="wr-muted"
               style={{ fontSize: 12, marginRight: "auto", alignSelf: "center", display: "inline-flex", alignItems: "center", gap: 6 }}
             >
               拉到
-              {/* P-5 目标书架下拉换 wr-select（不透明 panel-solid）：原生弹层取控件底色，半透明在夜间会合成白底看不清 */}
-              <select
-                className="wr-select"
-                style={{ width: 150, padding: "5px 10px" }}
-                aria-label="目标书架"
-                value={destShelf}
-                onChange={(e) => onDestShelf(e.currentTarget.value)}
-              >
-                <option value="">默认（根）</option>
-                {shelves.map((s) => (
-                  <option key={s.id} value={String(s.id)}>{s.name}</option>
-                ))}
-              </select>
-            </label>
+              {/* 批次10 F-2/F-3：自绘玻璃下拉（可新建书架）；原生 select 弹层无法玻璃化 */}
+              <ShelfPicker shelves={shelves} value={destShelf} onChange={onDestShelf} onShelves={onShelves} />
+            </span>
           )}
           <button className="wr-btn" onClick={onClose}>关闭</button>
           {imported ? (
@@ -536,7 +684,7 @@ export default function CloudShelfPage() {
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [menu]);
 
@@ -763,7 +911,7 @@ export default function CloudShelfPage() {
 
       {/* C-1 排序菜单（样式照书库排序菜单：wr-menu + radio 项） */}
       {menu ? (
-        <div ref={menuRef} className="wr-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+        <div ref={menuRef} className="wr-menu wr-menu--glass" role="menu" style={{ left: menu.x, top: menu.y }}>
           {(Object.keys(CLOUD_SORT_LABELS) as CloudSort[]).map((k) => (
             <button
               key={k}
@@ -788,6 +936,7 @@ export default function CloudShelfPage() {
           shelves={shelves}
           destShelf={destShelf}
           onDestShelf={onDestShelfChange}
+          onShelves={setShelves}
           pullBusy={pullBusy}
           onPull={(aid, shelfId) => void onDownload(aid, shelfId)}
           onClose={() => setDetail(null)}

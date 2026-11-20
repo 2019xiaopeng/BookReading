@@ -31,6 +31,8 @@ export type Wenku8BookInfo = {
   last_update: string;
   latest_cid: number;
   intro: string | null;
+  /** bookinfo 的 Tags 字段按空白切分（Rust Vec<String>，无标签为空数组） */
+  tags: string[];
 };
 
 export type Wenku8DownloadResult = {

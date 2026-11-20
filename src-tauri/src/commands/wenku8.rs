@@ -16,6 +16,7 @@ use time::OffsetDateTime;
 
 use crate::app_paths;
 use crate::commands::library::import_book;
+use crate::commands::tags::create_tag_db;
 use crate::db;
 use crate::models::ImportBookRequest;
 
@@ -77,6 +78,7 @@ pub struct Wenku8BookInfo {
     pub last_update: String,
     pub latest_cid: i64,
     pub intro: Option<String>,
+    pub tags: Vec<String>,
 }
 
 /// 拉取结果：已走现有导入管线入库。
@@ -369,6 +371,11 @@ fn bookinfo_fields(xml: &str) -> Result<(HashMap<String, String>, i64), String> 
     Ok((map, latest_cid))
 }
 
+/// bookinfo 的 Tags 字段按空白切分（split_whitespace 含全角空格 U+3000，trim+空串丢弃天然成立）
+fn split_tags(s: &str) -> Vec<String> {
+    s.split_whitespace().map(str::to_string).collect()
+}
+
 fn parse_bookinfo(aid: i64, xml: &str) -> Result<Wenku8BookInfo, String> {
     let (map, latest_cid) = bookinfo_fields(xml)?;
     Ok(Wenku8BookInfo {
@@ -379,6 +386,7 @@ fn parse_bookinfo(aid: i64, xml: &str) -> Result<Wenku8BookInfo, String> {
         last_update: map.get("LastUpdate").cloned().unwrap_or_default(),
         latest_cid,
         intro: None,
+        tags: split_tags(map.get("Tags").map(String::as_str).unwrap_or("")),
     })
 }
 
@@ -561,6 +569,24 @@ pub fn wenku8_download(
     rx.recv().map_err(|_| "下载线程异常退出".to_string())?
 }
 
+/// 给书打一个源站标签：同名不存在则按 create_tag 默认色（color=NULL）新建，再挂 book_tags（主键幂等）。
+/// 用于导入流程，失败由调用方记录后继续，不阻断。
+fn attach_tag(conn: &rusqlite::Connection, book_id: &str, name: &str) -> Result<(), String> {
+    let id: Option<i64> = conn
+        .query_row("SELECT id FROM tags WHERE name = ?1", params![name], |r| r.get(0))
+        .ok();
+    let id = match id {
+        Some(id) => id,
+        None => create_tag_db(conn, name, None)?.id,
+    };
+    conn.execute(
+        "INSERT OR IGNORE INTO book_tags (book_id, tag_id) VALUES (?1, ?2)",
+        params![book_id, id],
+    )
+    .map_err(|e| format!("failed to link tag: {e}"))?;
+    Ok(())
+}
+
 fn download_inner(app: &tauri::AppHandle, aid: i64, shelf_id: Option<i64>) -> Result<Wenku8DownloadResult, String> {
     // 1) bookinfo 取标题/作者（LatestSection cid 顺手留下，导入后回写 wenku8_last_cid，不二次请求）
     let xml = wenku8_action(app, &format!("action=book&do=bookinfo&aid={aid}&t=0"))?;
@@ -571,6 +597,12 @@ fn download_inner(app: &tauri::AppHandle, aid: i64, shelf_id: Option<i64>) -> Re
         .cloned()
         .unwrap_or_else(|| format!("wenku8 {aid}"));
     let author = fields.get("Author").cloned().unwrap_or_default();
+    let tags = split_tags(fields.get("Tags").map(String::as_str).unwrap_or(""));
+    // 简介是独立 action（与 book_info_inner 同款取法）；取失败不拖垮下载
+    let intro = wenku8_action(app, &format!("action=book&do=intro&aid={aid}&t=0"))
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty() && t != "4");
 
     // 2) 目录拍平成 (卷名, cid, 章名) 序列
     let cat_xml = wenku8_action(app, &format!("action=book&do=list&aid={aid}&t=0"))?;
@@ -671,6 +703,18 @@ fn download_inner(app: &tauri::AppHandle, aid: i64, shelf_id: Option<i64>) -> Re
         }
     }
 
+    // 8) 源站详情尽力入库：简介→description、Tags→本地标签系统；单项失败仅记录不推翻导入
+    if let Some(intro) = intro {
+        if let Err(e) = conn.execute("UPDATE books SET description = ?2 WHERE id = ?1", params![imported.id, intro]) {
+            eprintln!("[wenku8] 写入简介失败：{e}");
+        }
+    }
+    for tag in &tags {
+        if let Err(e) = attach_tag(&conn, &imported.id, tag) {
+            eprintln!("[wenku8] 打标签“{tag}”失败：{e}");
+        }
+    }
+
     Ok(Wenku8DownloadResult { book_id: imported.id, title, chapters: total as i32 })
 }
 
@@ -745,6 +789,57 @@ mod tests {
         assert_eq!(info.status, "连载中");
         assert_eq!(info.last_update, "2023-1-1");
         assert_eq!(info.latest_cid, 123456);
+    }
+
+    #[test]
+    fn bookinfo_tags_split_and_serde() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <data name="Title" value="T"/>
+  <data name="Tags" value=" 校园　恋爱  轻小说 "/>
+</root>"#;
+        let info = parse_bookinfo(1, xml).unwrap();
+        // 半角空格 + 全角空格 U+3000 均切分，trim 与空串丢弃天然成立
+        assert_eq!(info.tags, vec!["校园", "恋爱", "轻小说"]);
+        assert_eq!(split_tags(""), Vec::<String>::new());
+        assert_eq!(split_tags(" 　"), Vec::<String>::new());
+        // 契约字段名 tags: string[]
+        let v = serde_json::to_value(&info).unwrap();
+        assert_eq!(v["tags"], serde_json::json!(["校园", "恋爱", "轻小说"]));
+    }
+
+    #[test]
+    fn attach_tag_creates_reuses_and_is_idempotent() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(db::SCHEMA_SQL).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, library_path, added_at) VALUES ('b1', 't', 'library/books/b1.txt', 1)",
+            [],
+        )
+        .unwrap();
+
+        attach_tag(&conn, "b1", "轻小说").unwrap();
+        attach_tag(&conn, "b1", "轻小说").unwrap(); // 重放幂等（book_tags 主键兜底）
+
+        // 预置同名标签：复用不新建、颜色不动
+        let pre = create_tag_db(&conn, "科幻", Some("#1971c2")).unwrap();
+        attach_tag(&conn, "b1", "科幻").unwrap();
+
+        let tags = crate::commands::tags::list_tags_db(&conn).unwrap();
+        assert_eq!(tags.len(), 2); // 重放未翻倍
+        assert_eq!(tags.iter().find(|t| t.name == "科幻").unwrap().color.as_deref(), Some("#1971c2"));
+        let ids: Vec<i64> = conn
+            .prepare("SELECT tag_id FROM book_tags WHERE book_id = 'b1' ORDER BY tag_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&pre.id));
+
+        // 目标书不存在：外键挡下，报错不 panic（调用方 eprintln 后继续）
+        assert!(attach_tag(&conn, "nope", "新标签").is_err());
     }
 
     #[test]

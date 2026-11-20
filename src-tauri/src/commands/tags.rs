@@ -95,7 +95,7 @@ pub(crate) fn list_tags_db(conn: &Connection) -> Result<Vec<Tag>, rusqlite::Erro
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-fn create_tag_db(conn: &Connection, name: &str, color: Option<&str>) -> Result<Tag, String> {
+pub(crate) fn create_tag_db(conn: &Connection, name: &str, color: Option<&str>) -> Result<Tag, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("标签名称不能为空".to_string());

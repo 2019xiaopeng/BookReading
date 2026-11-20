@@ -27,6 +27,9 @@
   --wr-ink-rgb: 22, 24, 26;
   /* B13 玻璃栏：透明度 0.86→0.6 + blur(16px)——栏浮在内容上而非实色横条（暗字最坏对比≈4.5:1 仍 AA） */
   --wr-chrome-bg: rgba(251, 250, 247, 0.6);
+  /* 批次10 F-3 云书架弹层玻璃底/边：弹层文字密度高于栏，底比 chrome 略浓；边从 ink-rgb 派生（各主题自适配） */
+  --wr-glass-bg: rgba(251, 250, 247, 0.78);
+  --wr-glass-border: rgba(var(--wr-ink-rgb), 0.16);
   --wr-scrim: rgba(0, 0, 0, 0.26);
   --wr-panel-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.55));
   --wr-reader-paper-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.64));
@@ -48,6 +51,8 @@
 [data-theme="dark"] {
   color-scheme: dark;
   --wr-bg: #0f1214;
+  /* 批次10 F-3：弹层玻璃底（暗主题取黑玻璃，白 ink 文字对比充足） */
+  --wr-glass-bg: rgba(0, 0, 0, 0.62);
   --wr-paper: rgba(255, 255, 255, 0.06);
   --wr-ink: rgba(255, 255, 255, 0.92);
   --wr-muted: rgba(255, 255, 255, 0.62);
@@ -135,6 +140,8 @@
 [data-theme="darkcontrast"] {
   color-scheme: dark;
   --wr-bg: #000000;
+  /* 批次10 F-3：高对比主题玻璃底更浓 */
+  --wr-glass-bg: rgba(0, 0, 0, 0.72);
   --wr-paper: #050505;
   --wr-ink: #f5f5f5;
   --wr-muted: #bdbdbd;
@@ -193,6 +200,8 @@
 [data-theme="ink-dark"] {
   color-scheme: dark;
   --wr-bg: #191816;
+  /* 批次10 F-3：墨夜玻璃底取墨纸黑 */
+  --wr-glass-bg: rgba(25, 24, 22, 0.76);
   --wr-paper: rgba(237, 236, 231, 0.06);
   --wr-ink: rgba(237, 236, 231, 0.92);
   --wr-muted: rgba(237, 236, 231, 0.62);
@@ -2355,12 +2364,18 @@ input[type="range"]:focus-visible {
   overflow-y: auto;
 }
 
-/* P-3 云书架详情：加宽 + 正文独立滚动（78vh 内），底部动作区常驻不随长简介离屏 */
+/* P-3 云书架详情：加宽 + 正文独立滚动（78vh 内），底部动作区常驻不随长简介离屏；
+   批次10 F-3 圆角玻璃（源序在 wr-panel/wr-prompt 之后，覆盖其实底；遮罩仍走 scrim） */
 .wr-cloud-dialog {
   width: min(820px, 92vw);
   display: flex;
   flex-direction: column;
   overflow: visible;
+  border: 1px solid var(--wr-glass-border);
+  border-radius: 14px;
+  background: var(--wr-glass-bg);
+  backdrop-filter: blur(16px) saturate(1.2);
+  box-shadow: var(--wr-shadow);
 }
 .wr-cloud-body {
   min-height: 0;
@@ -3679,6 +3694,73 @@ body::after {
 .wr-cloud-tag--new {
   border-color: rgba(var(--wr-accent-rgb), 0.5);
   color: var(--wr-accent);
+}
+
+/* 批次10 F-1 详情标签：墨线细边小 chips（非填充），一排可换行 */
+.wr-cloud-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wr-cloud-tag-chip {
+  padding: 1px 8px;
+  border: 1px solid rgba(var(--wr-ink-rgb), 0.28);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--wr-muted);
+  white-space: nowrap;
+}
+
+/* 批次10 F-3 云书架弹出菜单（排序/目标书架下拉）统一圆角玻璃——仅此组弹层，不动其它 wr-menu */
+.wr-menu--glass {
+  border: 1px solid var(--wr-glass-border);
+  border-radius: 12px;
+  background: var(--wr-glass-bg);
+  backdrop-filter: blur(16px) saturate(1.2);
+}
+
+/* 批次10 F-2 目标书架自绘下拉触发钮 + 弹层 + 新建内联输入的错误提示 */
+.wr-cloud-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 150px;
+  padding: 5px 10px;
+  border: 1px solid var(--wr-hairline);
+  border-radius: var(--wr-radius-md);
+  background: rgba(var(--wr-ink-rgb), 0.04);
+  color: var(--wr-ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wr-cloud-picker-btn:hover {
+  border-color: rgba(var(--wr-ink-rgb), 0.28);
+}
+
+.wr-cloud-picker-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 弹层挂在动作行的 picker 容器下（dialog overflow:visible 不裁剪） */
+.wr-cloud-picker-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 170px;
+}
+
+.wr-cloud-picker-err {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  font-size: 11px;
+  color: var(--wr-danger);
+  white-space: nowrap;
 }
 
 /* F4 刊头统计行尾网页版入口小钮（同排 mono 小字） */
