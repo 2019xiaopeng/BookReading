@@ -38,3 +38,5 @@ tauri-plugin-window-state = "2"
 trash = "5"
 # v2.7 应用内更新：GitHub Releases API + 安装包下载（阻塞客户端，跑在 async 命令的阻塞线程池）
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "default-tls"] }
+hmac = "0.12"
+sha2 = "0.10"

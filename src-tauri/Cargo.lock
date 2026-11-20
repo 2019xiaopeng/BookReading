@@ -431,6 +431,7 @@ name = "bookreading"
 version = "2.9.0"
 dependencies = [
  "encoding_rs",
+ "hmac",
  "image",
  "regex",
  "reqwest 0.12.28",
@@ -438,6 +439,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

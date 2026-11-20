@@ -19,6 +19,9 @@ use commands::library::{
     update_book_metadata,
 };
 use commands::metadata_clean::{clean_title_apply, clean_title_preview};
+use commands::wenku8::{
+    wenku8_book_info, wenku8_bookshelf, wenku8_download, wenku8_login, wenku8_status,
+};
 use commands::images::{
     import_image_folder, list_image_page_meta, list_image_pages, list_image_subdirs,
     read_image_page, relink_image_book, AppState as ImageState,
@@ -177,6 +180,11 @@ pub fn run() {
             update_book_metadata,
             clean_title_preview,
             clean_title_apply,
+            wenku8_login,
+            wenku8_status,
+            wenku8_bookshelf,
+            wenku8_book_info,
+            wenku8_download,
             delete_book,
             list_shelves,
             create_shelf,
