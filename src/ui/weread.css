@@ -518,17 +518,6 @@
 }
 
 /* S-2 导入两钮随主题色：文字/图标 accent + 细 accent 淡化边（无填充底），八主题自动随动 */
-.wr-small-btn--accent {
-  color: var(--wr-accent);
-  border-color: rgba(var(--wr-accent-rgb), 0.35);
-  background: transparent;
-}
-
-.wr-small-btn--accent:hover {
-  border-color: rgba(var(--wr-accent-rgb), 0.65);
-  background: rgba(var(--wr-accent-rgb), 0.08);
-}
-
 .wr-main {
   display: grid;
   /* 批次11b：auto 代替定高 62px——窄窗下顶栏控件换行时栏随长，不裁切 */
