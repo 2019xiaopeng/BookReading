@@ -429,7 +429,8 @@ export default function LibraryPage() {
 
   // R-1 继续阅读：全库 last_opened_at 最新且未读完的书（根视图索引行；✕ 本次会话不再显示；设置可整行关闭）
   const continueBook = useMemo(() => {
-    if (!continueEnabled || continueDismissed || currentShelfId != null || query.trim()) return null;
+    // 回收站视图不显示（软删的书不该引导"继续读"）；其余条件：开关开+根视图+无搜索+未手动隐藏
+    if (trashView || !continueEnabled || continueDismissed || currentShelfId != null || query.trim()) return null;
     try {
       if (sessionStorage.getItem("wr-continue-dismissed") === "1") return null;
     } catch {}
@@ -438,7 +439,7 @@ export default function LibraryPage() {
         .filter((b) => b.last_opened_at != null && (b.reading_percent ?? 0) < 0.95)
         .sort((a, b) => (b.last_opened_at ?? 0) - (a.last_opened_at ?? 0))[0] ?? null
     );
-  }, [books, currentShelfId, query, continueDismissed, continueEnabled]);
+  }, [trashView, books, currentShelfId, query, continueDismissed, continueEnabled]);
 
   // P-1 侧栏固定动作接线：刷新事件 → 重拉书库；导入服务落架目标跟随当前书架（回收站/其它页=根）
   useEffect(() => subscribeAppRefresh(() => void refresh()), [refresh]);

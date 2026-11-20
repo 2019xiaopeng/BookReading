@@ -27,8 +27,9 @@
   --wr-ink-rgb: 22, 24, 26;
   /* B13 玻璃栏：透明度 0.86→0.6 + blur(16px)——栏浮在内容上而非实色横条（暗字最坏对比≈4.5:1 仍 AA） */
   --wr-chrome-bg: rgba(251, 250, 247, 0.6);
-  /* 批次10 F-3 云书架弹层玻璃底/边：弹层文字密度高于栏，底比 chrome 略浓；边从 ink-rgb 派生（各主题自适配） */
-  --wr-glass-bg: rgba(251, 250, 247, 0.78);
+  /* 批次10 F-3 云书架弹层玻璃底/边：弹层文字密度高于栏，底比 chrome 略浓；边从 ink-rgb 派生（各主题自适配）；
+     批次11 D-1 真毛玻璃：0.78→0.72 更"磨"，透出更多 blur 后的书卡色 */
+  --wr-glass-bg: rgba(251, 250, 247, 0.72);
   --wr-glass-border: rgba(var(--wr-ink-rgb), 0.16);
   --wr-scrim: rgba(0, 0, 0, 0.26);
   --wr-panel-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.55));
@@ -51,8 +52,8 @@
 [data-theme="dark"] {
   color-scheme: dark;
   --wr-bg: #0f1214;
-  /* 批次10 F-3：弹层玻璃底（暗主题取黑玻璃，白 ink 文字对比充足） */
-  --wr-glass-bg: rgba(0, 0, 0, 0.62);
+  /* 批次10 F-3：弹层玻璃底（暗主题取黑玻璃，白 ink 文字对比充足）；批次11 D-1 深色系 0.66 档 */
+  --wr-glass-bg: rgba(0, 0, 0, 0.66);
   --wr-paper: rgba(255, 255, 255, 0.06);
   --wr-ink: rgba(255, 255, 255, 0.92);
   --wr-muted: rgba(255, 255, 255, 0.62);
@@ -200,8 +201,8 @@
 [data-theme="ink-dark"] {
   color-scheme: dark;
   --wr-bg: #191816;
-  /* 批次10 F-3：墨夜玻璃底取墨纸黑 */
-  --wr-glass-bg: rgba(25, 24, 22, 0.76);
+  /* 批次10 F-3：墨夜玻璃底取墨纸黑；批次11 D-1 深色系 0.66 档 */
+  --wr-glass-bg: rgba(25, 24, 22, 0.66);
   --wr-paper: rgba(237, 236, 231, 0.06);
   --wr-ink: rgba(237, 236, 231, 0.92);
   --wr-muted: rgba(237, 236, 231, 0.62);
@@ -2365,7 +2366,12 @@ input[type="range"]:focus-visible {
 }
 
 /* P-3 云书架详情：加宽 + 正文独立滚动（78vh 内），底部动作区常驻不随长简介离屏；
-   批次10 F-3 圆角玻璃（源序在 wr-panel/wr-prompt 之后，覆盖其实底；遮罩仍走 scrim） */
+   批次10 F-3 圆角玻璃（源序在 wr-panel/wr-prompt 之后，覆盖其实底；遮罩仍走 scrim）；
+   批次11 D-1 真毛玻璃：blur 16→22 + saturate 1.4，顶缘内侧高光 rim 模拟玻璃上沿 */
+.wr-cloud-overlay {
+  /* D-1 遮罩减淡到 ink 0.28：纯色遮罩磨不出玻璃，书卡/封面色须从后面透进 blur */
+  background: rgba(var(--wr-ink-rgb), 0.28);
+}
 .wr-cloud-dialog {
   width: min(820px, 92vw);
   display: flex;
@@ -2374,13 +2380,34 @@ input[type="range"]:focus-visible {
   border: 1px solid var(--wr-glass-border);
   border-radius: 14px;
   background: var(--wr-glass-bg);
-  backdrop-filter: blur(16px) saturate(1.2);
-  box-shadow: var(--wr-shadow);
+  backdrop-filter: blur(22px) saturate(1.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), var(--wr-shadow);
 }
 .wr-cloud-body {
   min-height: 0;
   max-height: 78vh;
   overflow-y: auto;
+}
+
+/* 批次11 D-2 详情封面：弃 wr-details-cover（那是书库详情的描边+纸底壳）——
+   云详情封面无独立边框（浮在玻璃面上），5/7 定比铺满裁切；渐变兜底兼作封面拉挂占位底 */
+.wr-cloud-details {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 16px;
+}
+.wr-cloud-cover {
+  width: 180px;
+  aspect-ratio: 5 / 7;
+  align-self: start;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--wr-radius-sm);
+  overflow: hidden;
+  background: radial-gradient(90px 110px at 35% 20%, rgba(var(--wr-accent-rgb), 0.42), rgba(var(--wr-accent-rgb), 0) 60%),
+    radial-gradient(80px 80px at 70% 72%, rgba(var(--wr-accent-2-rgb), 0.3), rgba(var(--wr-accent-2-rgb), 0) 60%),
+    linear-gradient(180deg, rgba(var(--wr-ink-rgb), 0.05), rgba(var(--wr-ink-rgb), 0));
 }
 
 /* 批次10 设置对话框：分组标题 + 占用/只读行 + 快捷键表；M2 U5 分组标题/行线换 m2 token */
@@ -3712,12 +3739,14 @@ body::after {
   white-space: nowrap;
 }
 
-/* 批次10 F-3 云书架弹出菜单（排序/目标书架下拉）统一圆角玻璃——仅此组弹层，不动其它 wr-menu */
+/* 批次10 F-3 云书架弹出菜单（排序/目标书架下拉）统一圆角玻璃——仅此组弹层，不动其它 wr-menu；
+   批次11 D-1 与详情对话框同一片玻璃（blur 22 + saturate 1.4 + 顶缘高光 rim） */
 .wr-menu--glass {
   border: 1px solid var(--wr-glass-border);
   border-radius: 12px;
   background: var(--wr-glass-bg);
-  backdrop-filter: blur(16px) saturate(1.2);
+  backdrop-filter: blur(22px) saturate(1.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), var(--wr-shadow-pop);
 }
 
 /* 批次10 F-2 目标书架自绘下拉触发钮 + 弹层 + 新建内联输入的错误提示 */

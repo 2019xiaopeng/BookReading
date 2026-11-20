@@ -30,6 +30,20 @@ function coverUrl(aid: number): string {
   return `http://img.wenku8.com/image/${Math.floor(aid / 1000)}/${aid}/${aid}s.jpg`;
 }
 
+// F4/批次11 D-3 网页版入口统一（照 SettingsDialog openUrl 先例：失败退复制链接提示）
+async function openWebUrl(url: string) {
+  try {
+    await openUrl(url);
+  } catch {
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast("已复制网页版链接");
+    } catch {
+      void showAlert("打开网页版失败", url);
+    }
+  }
+}
+
 // settings 表键：目标书架（'' = 默认根）
 const DEST_SHELF_KEY = "wenku8.dest_shelf";
 
@@ -323,7 +337,7 @@ function CloudBookDialog({
 
   return (
     <div
-      className="wr-prompt-overlay"
+      className="wr-prompt-overlay wr-cloud-overlay"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -340,12 +354,17 @@ function CloudBookDialog({
         <div className="wr-prompt-title">书籍详情</div>
         {/* P-3 正文独立滚动（max 78vh）：长简介/目录展开也不把底部动作区顶出屏 */}
         <div className="wr-cloud-body">
-          <div className="wr-details">
-            <div className="wr-details-cover" style={{ cursor: "default" }}>
+          <div className="wr-cloud-details">
+            <div className="wr-cloud-cover">
               {coverFailed ? (
                 <div className="wr-cover-title">{title}</div>
               ) : (
-                <img src={coverUrl(book.aid)} alt="" onError={() => onCoverError(book.aid)} />
+                <img
+                  src={coverUrl(book.aid)}
+                  alt=""
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  onError={() => onCoverError(book.aid)}
+                />
               )}
             </div>
             <div className="wr-details-main">
@@ -409,6 +428,16 @@ function CloudBookDialog({
               <ShelfPicker shelves={shelves} value={destShelf} onChange={onDestShelf} onShelves={onShelves} />
             </span>
           )}
+          {/* 批次11 D-3 每本书的网页版入口：次级小钮，同顶栏网页版的失败退复制 */}
+          <button
+            type="button"
+            className="wr-btn"
+            style={{ padding: "4px 10px", fontSize: 12, alignSelf: "center" }}
+            title={`在网页版打开 ${title}`}
+            onClick={() => void openWebUrl(`https://www.wenku8.cc/book/${book.aid}.htm`)}
+          >
+            网页版 ↗
+          </button>
           <button className="wr-btn" onClick={onClose}>关闭</button>
           {imported ? (
             <button className="wr-btn wr-btn-primary" onClick={() => navigate(`/read/${book.book_id}`)}>
@@ -608,19 +637,9 @@ export default function CloudShelfPage() {
     void setSetting(DEST_SHELF_KEY, v).catch(() => {});
   }
 
-  // F4 网页版入口（照 SettingsDialog openUrl 先例：失败退复制链接提示）
-  async function openWeb() {
-    const url = "http://www.wenku8.cc/";
-    try {
-      await openUrl(url);
-    } catch {
-      try {
-        await navigator.clipboard.writeText(url);
-        showToast("已复制网页版链接");
-      } catch {
-        void showAlert("打开网页版失败", url);
-      }
-    }
+  // F4 网页版入口（顶栏）：统一走 openWebUrl（失败退复制链接提示）
+  function openWeb() {
+    return openWebUrl("http://www.wenku8.cc/");
   }
 
   // D3 退出登录：清本机账密与会话缓存后回登录卡（invoke 失败也照常回，下次进入 status 会纠偏）

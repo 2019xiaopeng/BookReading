@@ -35,6 +35,11 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
+// 批次11 D-3 详情「网页版 ↗」走 opener，mock 掉便于 URL 拼接断言
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: vi.fn(() => Promise.resolve()),
+}));
+
 // 壳渲染透传：页面行为测试不背 AppShell 的 Tauri 面（设置/托盘/拖拽导入）；contextRow 透传出来便于断言（D3）
 vi.mock("../ui/AppShell", () => ({
   default: (props: { children?: React.ReactNode; contextRow?: React.ReactNode }) => (
@@ -58,6 +63,7 @@ import {
 } from "../tauri/wenku8";
 import { createShelf, getSettings, listShelves, setSetting } from "../tauri/invoke";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 // 批次8：页面不再自带壳，按真实结构挂 AppLayout 下（mock 壳从 pageMeta 拿 contextRow 渲染）
 import { AppLayout } from "../app/router";
 import CloudShelfPage, { resetCloudShelfCacheForTests } from "./CloudShelfPage";
@@ -74,6 +80,7 @@ const createShelfMock = vi.mocked(createShelf);
 const getSettingsMock = vi.mocked(getSettings);
 const setSettingMock = vi.mocked(setSetting);
 const listenMock = vi.mocked(listen);
+const openUrlMock = vi.mocked(openUrl);
 
 function bookInfo(aid: number, title: string, latest_cid = 1, tags: string[] = ["轻小说", "推理"]) {
   return {
@@ -421,6 +428,33 @@ describe("云书架页（v3.0）", () => {
     renderCloudShelf();
     await screen.findByText("甲书");
     await waitFor(() => expect(aids()).toEqual(["2", "3", "1", "4"]));
+  });
+
+  test("批次11 D-3/D-2：详情动作区「网页版 ↗」开 https 书页（aid 拼接）；封面换 wr-cloud-cover 去框、img object-fit cover 撑满", async () => {
+    statusMock.mockResolvedValue({ has_saved: true, username: "u" });
+    shelfMock.mockResolvedValue([
+      { aid: 812, name: "网页书", date: null, book_id: null, last_cid: 0 },
+    ]);
+    infoMock.mockResolvedValue(bookInfo(812, "网页书"));
+    catalogMock.mockResolvedValue([]);
+    shelvesMock.mockResolvedValue([]);
+    getSettingsMock.mockResolvedValue({});
+
+    renderCloudShelf();
+    fireEvent.click(await screen.findByText("网页书"));
+    const dialog = await screen.findByRole("dialog", { name: "书籍详情 网页书" });
+
+    // D-3 次级小钮：URL 按 aid 拼接
+    fireEvent.click(within(dialog).getByRole("button", { name: "网页版 ↗" }));
+    await waitFor(() => expect(openUrlMock).toHaveBeenCalledWith("https://www.wenku8.cc/book/812.htm"));
+
+    // D-2 封面：弃描边壳 wr-details-cover，独立容器 + 铺满裁切的 img
+    const cover = dialog.querySelector(".wr-cloud-cover") as HTMLElement;
+    expect(cover).toBeTruthy();
+    expect(cover.className).not.toContain("wr-details-cover");
+    const img = cover.querySelector("img") as HTMLElement;
+    expect(img).toBeTruthy();
+    expect(getComputedStyle(img).objectFit).toBe("cover");
   });
 
   test("C-1 密度：读书库同一 library_density 键（large → --large 类 + 320px 列宽）；密度钮写同键", async () => {
