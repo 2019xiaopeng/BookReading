@@ -517,6 +517,18 @@
   border-color: rgba(var(--wr-accent-rgb), 0.28);
 }
 
+/* S-2 导入两钮随主题色：文字/图标 accent + 细 accent 淡化边（无填充底），八主题自动随动 */
+.wr-small-btn--accent {
+  color: var(--wr-accent);
+  border-color: rgba(var(--wr-accent-rgb), 0.35);
+  background: transparent;
+}
+
+.wr-small-btn--accent:hover {
+  border-color: rgba(var(--wr-accent-rgb), 0.65);
+  background: rgba(var(--wr-accent-rgb), 0.08);
+}
+
 .wr-main {
   display: grid;
   /* 批次11b：auto 代替定高 62px——窄窗下顶栏控件换行时栏随长，不裁切 */
@@ -2340,6 +2352,20 @@ input[type="range"]:focus-visible {
   overflow: auto;
 }
 
+/* SET-1 设置弹窗：外层圆角框 overflow:hidden 裁剪，滚动移到内层——
+   滚动条被弹窗 padding（14px）推离圆角边，不再凸出/溢出圆角 */
+.wr-dialog--settings {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wr-settings-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 /* P-3 云书架详情：加宽 + 正文独立滚动（78vh 内），底部动作区常驻不随长简介离屏 */
 .wr-cloud-dialog {
   width: min(820px, 92vw);
@@ -2812,12 +2838,16 @@ input[type="range"]:focus-visible {
   padding-bottom: 5px;
 }
 
-/* 侧栏顶部快捷筛选 chips：选中态=墨色实底反白 */
+/* 侧栏顶部快捷筛选 chips：选中态=墨色实底反白；
+   S-1 四视图行高恒定：书库 chips 行与云书架/收藏/回收站的 contextRow 文本行共用本容器，
+   定 min-height 居中——内容异构（按钮/纯文本）但行高不变，切页零跳动 */
 .wr-quick-row {
   display: flex;
   gap: 6px;
   padding: 10px 12px 0;
   flex-wrap: wrap;
+  align-items: center;
+  min-height: 32px;
 }
 
 .wr-quick-chip {
@@ -3629,26 +3659,34 @@ body::after {
   white-space: nowrap;
 }
 
-/* F2 云书架卡右上角徽标：已入库/有新章（有新章叠在已入库下方；悬浮动作层 z-index 更高遮盖） */
-.wr-cloud-badge {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 1;
+/* C-1 云书卡副行：作者 · 最近更新（超长省略）+ 状态内联小徽——封面上不放任何角标/图标 */
+.wr-cloud-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wr-cloud-sub-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wr-cloud-tag {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  height: 20px;
+  height: 18px;
   padding: 0 6px;
   border: 1px solid var(--wr-hairline);
   border-radius: var(--wr-radius-xs);
-  background: var(--panel-solid);
   font-size: 11px;
   color: var(--m2-ink-soft);
   white-space: nowrap;
 }
 
-.wr-cloud-badge--new {
-  top: 30px;
+.wr-cloud-tag--new {
   border-color: rgba(var(--wr-accent-rgb), 0.5);
   color: var(--wr-accent);
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -72,6 +72,12 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [dlProgress, setDlProgress] = useState<{ downloaded: number; total: number } | null>(null);
   // H-5 后台插图优化进度：事件仅在优化进行中持续发，无事件/已完成时隐藏
   const [optProgress, setOptProgress] = useState<{ done: number; total: number } | null>(null);
+  // SET-1 滚动归零：此前底部「关闭」钮 autoFocus 把滚动容器拽到底，改为外层归零兜底
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    scrollRef.current?.scrollTo(0, 0);
+  }, []);
 
   const reload = async () => {
     const [s, settings] = await Promise.all([storageStats(), getSettings()]);
@@ -286,7 +292,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
       }}
     >
       <div
-        className="wr-panel wr-prompt wr-dialog"
+        className="wr-panel wr-prompt wr-dialog wr-dialog--settings"
         role="dialog"
         aria-modal="true"
         aria-label="设置"
@@ -294,6 +300,8 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           if (e.key === "Escape" && !busy) onClose();
         }}
       >
+        {/* SET-1 滚动移到内层：外层圆角框裁剪，滚动条不再凸出圆角边框 */}
+        <div className="wr-settings-scroll" ref={scrollRef}>
         <div className="wr-prompt-title">设置</div>
 
         <div className="wr-settings-group">存储</div>
@@ -535,6 +543,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
             </tr>
           </tbody>
         </table>
+        </div>
 
         <div className="wr-prompt-actions">
           <button className="wr-btn wr-btn-primary" autoFocus disabled={busy} onClick={onClose}>

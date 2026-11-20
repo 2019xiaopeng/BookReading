@@ -138,7 +138,8 @@ describe("云书架页（v3.0）", () => {
     expect((await screen.findAllByText("绑架游戏")).length).toBe(1);
     await waitFor(() => expect(infoMock).toHaveBeenCalledWith(202));
     expect((await screen.findAllByText("白夜行")).length).toBe(1);
-    expect(screen.getByTitle("2024-01-02").textContent).toBe("2024-01-02");
+    // C-1 副行 = 作者 · 最近更新（bookinfo.last_update），两卡都懒取到后各渲染一处
+    expect((await screen.findAllByTitle("作者X · 2024-01-01")).length).toBe(2);
     // D1 刊头：书库同款大版统计（wenku8 · 用户名 · 共 n 本）+ F4 网页版入口
     expect(screen.getByText("wenku8 · u · 共 2 本")).toBeTruthy();
     expect(screen.getByTitle("去网页版管理云端书架").textContent).toBe("网页版 ↗");
@@ -155,7 +156,10 @@ describe("云书架页（v3.0）", () => {
       { aid: 310, name: "绑架游戏", date: "2024-01-02", book_id: "b1", last_cid: 12 },
       { aid: 320, name: "另一本", date: null, book_id: null, last_cid: 0 },
     ]);
-    infoMock.mockResolvedValue(bookInfo(310, "绑架游戏"));
+    // C-1 后每本书都预取元信息：详情标题取 bookinfo.title，mock 需按 aid 给对书名
+    infoMock.mockImplementation((aid: number) =>
+      Promise.resolve(bookInfo(aid, aid === 310 ? "绑架游戏" : aid === 320 ? "另一本" : `书${aid}`)),
+    );
     catalogMock.mockResolvedValue([
       { name: "第一卷", chapters: [{ cid: 1, title: "第一章 出发" }, { cid: 2, title: "第二章 途中" }] },
     ]);
@@ -230,6 +234,9 @@ describe("云书架页（v3.0）", () => {
     renderCloudShelf();
 
     expect(await screen.findByText("已入库")).toBeTruthy();
+    // C-1 状态内联：徽标是 meta 副行尾的 chip（.wr-cloud-sub 内），封面上无任何角标
+    expect(screen.getByText("已入库").closest(".wr-cloud-sub")).toBeTruthy();
+    expect(document.querySelector(".wr-cloud-badge")).toBeNull();
 
     // 点卡仍开详情：imported 主钮=打开这本书，无拉取入口（提示增量更新未提供）
     fireEvent.click(screen.getByText("已读书"));
@@ -256,8 +263,9 @@ describe("云书架页（v3.0）", () => {
     renderCloudShelf();
 
     expect(await screen.findByText("已入库")).toBeTruthy();
-    // 错峰 300ms 后比对完成才亮徽标
-    expect(await screen.findByText("有新章", undefined, { timeout: 3000 })).toBeTruthy();
+    // 错峰 300ms 后比对完成才亮徽标（内联小徽在副行尾）
+    const tag = await screen.findByText("有新章", undefined, { timeout: 3000 });
+    expect(tag.closest(".wr-cloud-sub")).toBeTruthy();
   });
 
   test("D3 上下文行显示账号与上次同步时间；退出登录调 wenku8Logout 清账密回登录卡", async () => {
@@ -268,6 +276,7 @@ describe("云书架页（v3.0）", () => {
     logoutMock.mockResolvedValue(undefined);
     shelvesMock.mockResolvedValue([]);
     getSettingsMock.mockResolvedValue({});
+    infoMock.mockResolvedValue(bookInfo(101, "绑架游戏"));
 
     renderCloudShelf();
 
@@ -288,6 +297,7 @@ describe("云书架页（v3.0）", () => {
     ]);
     shelvesMock.mockResolvedValue([]);
     getSettingsMock.mockResolvedValue({});
+    infoMock.mockResolvedValue(bookInfo(601, "缓存书"));
 
     const { unmount } = renderCloudShelf();
     expect(await screen.findByText("缓存书")).toBeTruthy();
@@ -300,5 +310,64 @@ describe("云书架页（v3.0）", () => {
     expect(screen.queryByText("正在加载云书架…")).toBeNull();
     await waitFor(() => expect(statusMock).toHaveBeenCalledTimes(2));
     expect(shelfMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("C-1 排序：默认收藏顺序=API 返回序；「最近更新」last_update 降序（未取到排尾）并写 settings，重进保持", async () => {
+    statusMock.mockResolvedValue({ has_saved: true, username: "u" });
+    shelfMock.mockResolvedValue([
+      { aid: 1, name: "甲书", date: null, book_id: null, last_cid: 0 },
+      { aid: 2, name: "乙书", date: null, book_id: null, last_cid: 0 },
+      { aid: 3, name: "丙书", date: null, book_id: null, last_cid: 0 },
+      { aid: 4, name: "丁书", date: null, book_id: null, last_cid: 0 },
+    ]);
+    // 丁书取不到 bookinfo：最近更新排序下应排尾部
+    infoMock.mockImplementation((aid: number) =>
+      aid === 4
+        ? Promise.reject(new Error("network"))
+        : Promise.resolve({
+            ...bookInfo(aid, `书${aid}`),
+            last_update: aid === 1 ? "2026-01-01" : aid === 2 ? "2026-03-06" : "2026-02-15",
+          }),
+    );
+    shelvesMock.mockResolvedValue([]);
+    getSettingsMock.mockResolvedValue({});
+
+    const aids = () => Array.from(document.querySelectorAll(".wr-book-card")).map((el) => el.getAttribute("data-aid"));
+    const { unmount } = renderCloudShelf();
+
+    expect(await screen.findByText("甲书")).toBeTruthy();
+    expect(aids()).toEqual(["1", "2", "3", "4"]); // 默认=收藏顺序（API 返回序）
+
+    fireEvent.click(screen.getByRole("button", { name: "排序：收藏顺序" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "最近更新" }));
+    expect(setSettingMock).toHaveBeenCalledWith("wenku8.sort", "updated");
+    await waitFor(() => expect(aids()).toEqual(["2", "3", "1", "4"])); // 2026-03-06 > 02-15 > 01-01 > 未取到
+    unmount();
+
+    // 重进保持：settings 已是 updated，挂载即按最近更新排布
+    getSettingsMock.mockResolvedValue({ "wenku8.sort": "updated" });
+    renderCloudShelf();
+    await screen.findByText("甲书");
+    await waitFor(() => expect(aids()).toEqual(["2", "3", "1", "4"]));
+  });
+
+  test("C-1 密度：读书库同一 library_density 键（large → --large 类 + 320px 列宽）；密度钮写同键", async () => {
+    statusMock.mockResolvedValue({ has_saved: true, username: "u" });
+    shelfMock.mockResolvedValue([
+      { aid: 7, name: "密度书", date: null, book_id: null, last_cid: 0 },
+    ]);
+    infoMock.mockResolvedValue(bookInfo(7, "密度书"));
+    shelvesMock.mockResolvedValue([]);
+    getSettingsMock.mockResolvedValue({ library_density: "large" });
+
+    renderCloudShelf();
+    await screen.findByText("密度书");
+    const grid = document.querySelector(".wr-book-grid") as HTMLElement;
+    expect(grid.className).toContain("wr-book-grid--large");
+    expect(grid.style.gridTemplateColumns).toContain("320px");
+
+    fireEvent.click(screen.getByRole("button", { name: "标准" }));
+    expect(setSettingMock).toHaveBeenCalledWith("library_density", "standard");
+    expect((document.querySelector(".wr-book-grid") as HTMLElement).className).not.toContain("--large");
   });
 });

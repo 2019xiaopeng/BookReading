@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNavigate } from "react-router-dom";
@@ -18,9 +18,10 @@ import {
   type Wenku8Volume,
 } from "../tauri/wenku8";
 import { getSettings, listShelves, setSetting, type Shelf } from "../tauri/invoke";
+import { DENSITY_PRESETS, normalizeLibraryDensity, type LibraryDensity } from "../library/density";
 import { setPageMeta } from "../ui/pageMeta";
 import { subscribeAppRefresh } from "../ui/appActions";
-import { IconBookOpen, IconList } from "../ui/icons";
+import { IconBookOpen, IconDensity, IconDownload, IconSort } from "../ui/icons";
 import { showToast } from "../ui/toast";
 import { showAlert } from "../ui/dialog";
 
@@ -32,20 +33,50 @@ function coverUrl(aid: number): string {
 // settings 表键：目标书架（'' = 默认根）
 const DEST_SHELF_KEY = "wenku8.dest_shelf";
 
+// settings 表键：云书架排序（added=收藏顺序，即 API 返回序=云端新收藏在前）
+const SORT_KEY = "wenku8.sort";
+type CloudSort = "added" | "updated" | "title";
+const CLOUD_SORT_LABELS: Record<CloudSort, string> = { added: "收藏顺序", updated: "最近更新", title: "书名" };
+
+function normalizeCloudSort(v: unknown): CloudSort {
+  return v === "updated" || v === "title" ? v : "added";
+}
+
 // 书籍元信息懒取：会话级缓存 + in-flight 去重（书架接口对未看过的书不返回 name；详情/新章比对共用）
 const infoCache = new Map<number, Wenku8BookInfo>();
 const infoInflight = new Map<number, Promise<void>>();
 
+// 公益中继限流：bookinfo 最多 3 并发，超出排队（FIFO）——整架懒取不再同拍打满
+const infoQueue: Array<() => void> = [];
+let infoActive = 0;
+function infoSlot(): Promise<void> {
+  if (infoActive < 3) {
+    infoActive++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => infoQueue.push(() => {
+    infoActive++;
+    resolve();
+  }));
+}
+function infoRelease() {
+  infoActive--;
+  const next = infoQueue.shift();
+  if (next) next();
+}
+
 function ensureInfo(aid: number): Promise<void> {
   const cached = infoCache.has(aid) ? Promise.resolve() : infoInflight.get(aid);
   if (cached) return cached;
-  const p = wenku8BookInfo(aid)
-    .then((info) => {
+  const p = (async () => {
+    await infoSlot();
+    try {
+      const info = await wenku8BookInfo(aid);
       infoCache.set(aid, info);
-    })
-    .finally(() => {
-      infoInflight.delete(aid);
-    });
+    } finally {
+      infoRelease();
+    }
+  })();
   infoInflight.set(aid, p);
   return p;
 }
@@ -55,9 +86,9 @@ const checkedNew = new Set<number>();
 
 // P-2 云书架会话缓存：切走再切回直接渲染旧数据（不重拉不闪 loading）；
 // 仅显式刷新 / 拉取完成 / 登录成功才真正重拉（重拉期间旧数据照常显示）
+// （书名/元信息不缓存：模块级 infoCache 同会话存活，重挂时由它重建）
 type CloudShelfCache = {
   books: Wenku8ShelfBook[];
-  titles: Record<number, string>;
   hasNew: Set<number>;
   syncText: string | null;
   account: string;
@@ -67,7 +98,6 @@ let shelfCache: CloudShelfCache | null = null;
 function writeShelfCache(patch: Partial<CloudShelfCache>): void {
   shelfCache = {
     books: shelfCache?.books ?? [],
-    titles: shelfCache?.titles ?? {},
     hasNew: shelfCache?.hasNew ?? new Set(),
     syncText: shelfCache?.syncText ?? null,
     account: shelfCache?.account ?? "",
@@ -81,6 +111,8 @@ export function resetCloudShelfCacheForTests(): void {
   infoCache.clear();
   infoInflight.clear();
   checkedNew.clear();
+  infoQueue.length = 0;
+  infoActive = 0;
 }
 
 // 拉取锁：页面级一次一本（downloading 期间其它拉取钮禁用）
@@ -261,7 +293,20 @@ export default function CloudShelfPage() {
   const [books, setBooks] = useState<Wenku8ShelfBook[]>(() => shelfCache?.books ?? []);
   const [shelfBusy, setShelfBusy] = useState(false);
   const [shelfError, setShelfError] = useState<string | null>(null);
-  const [titles, setTitles] = useState<Record<number, string>>(() => shelfCache?.titles ?? {});
+  // C-1 元信息（书名兜底/作者/更新日期/排序）：从模块级 infoCache 重建，懒取到再补
+  const [infos, setInfos] = useState<Record<number, Wenku8BookInfo>>(() => {
+    const m: Record<number, Wenku8BookInfo> = {};
+    for (const b of shelfCache?.books ?? []) {
+      const i = infoCache.get(b.aid);
+      if (i) m[b.aid] = i;
+    }
+    return m;
+  });
+  // C-1 密度复用书库同一键（library_density），排序存 wenku8.sort
+  const [density, setDensity] = useState<LibraryDensity>("standard");
+  const [sortKey, setSortKey] = useState<CloudSort>("added");
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [dl, setDl] = useState<({ aid: number } & DlState) | null>(null);
   const [account, setAccount] = useState(() => shelfCache?.account ?? "");
   // D3 上下文行：上次成功拉取云书架的时间（HH:mm）
@@ -275,10 +320,10 @@ export default function CloudShelfPage() {
   // F2 有新章徽标：imported 卡懒比对 latest_cid > last_cid（失败静默不标）
   const [hasNew, setHasNew] = useState<Set<number>>(() => new Set(shelfCache?.hasNew ?? []));
 
-  // state 与会话缓存同步写（P-2：切页回来 titles/徽标即时还原）
-  function applyTitle(aid: number, title: string): void {
-    setTitles((t) => ({ ...t, [aid]: title }));
-    if (shelfCache) writeShelfCache({ titles: { ...shelfCache.titles, [aid]: title } });
+  // state 与会话缓存同步写（P-2：切页回来徽标即时还原）
+  function seedInfo(aid: number): void {
+    const got = infoCache.get(aid);
+    if (got != null) setInfos((m) => (m[aid] === got ? m : { ...m, [aid]: got }));
   }
   function applyHasNew(aid: number): void {
     setHasNew((s) => new Set(s).add(aid));
@@ -296,17 +341,9 @@ export default function CloudShelfPage() {
       writeShelfCache({ books: list, syncText: time });
       let stagger = 0;
       for (const b of list) {
-        if (b.name == null) {
-          // 已有缓存的书直接播种进 state，未有的取到再补
-          const hit = infoCache.get(b.aid);
-          if (hit != null) applyTitle(b.aid, hit.title);
-          else void ensureInfo(b.aid)
-            .then(() => {
-              const got = infoCache.get(b.aid);
-              if (got != null) applyTitle(b.aid, got.title);
-            })
-            .catch(() => {});
-        }
+        // C-1 每本书都取元信息（作者 · 最近更新是卡面副行的必需品）；已有缓存直接播种
+        if (infoCache.has(b.aid)) seedInfo(b.aid);
+        else void ensureInfo(b.aid).then(() => seedInfo(b.aid)).catch(() => {});
         if (b.book_id != null && !checkedNew.has(b.aid)) {
           checkedNew.add(b.aid);
           const lastCid = b.last_cid;
@@ -314,6 +351,7 @@ export default function CloudShelfPage() {
           setTimeout(() => {
             void ensureInfo(b.aid)
               .then(() => {
+                seedInfo(b.aid);
                 const got = infoCache.get(b.aid);
                 if (got != null && got.latest_cid > lastCid) applyHasNew(b.aid);
               })
@@ -362,7 +400,10 @@ export default function CloudShelfPage() {
           if (!disposed) setShelves(list);
         }).catch(() => {});
         void getSettings().then((s2) => {
-          if (!disposed) setDestShelf(s2[DEST_SHELF_KEY] ?? "");
+          if (disposed) return;
+          setDestShelf(s2[DEST_SHELF_KEY] ?? "");
+          setSortKey(normalizeCloudSort(s2[SORT_KEY]));
+          setDensity(normalizeLibraryDensity(s2.library_density));
         }).catch(() => {});
       })
       .catch(() => {
@@ -386,7 +427,11 @@ export default function CloudShelfPage() {
         setMode("shelf");
         void loadShelf();
         void listShelves().then(setShelves).catch(() => {});
-        void getSettings().then((s) => setDestShelf(s[DEST_SHELF_KEY] ?? "")).catch(() => {});
+        void getSettings().then((s) => {
+          setDestShelf(s[DEST_SHELF_KEY] ?? "");
+          setSortKey(normalizeCloudSort(s[SORT_KEY]));
+          setDensity(normalizeLibraryDensity(s.library_density));
+        }).catch(() => {});
       } else {
         setLoginError(wenku8ErrcodeMessage(res.errcode));
       }
@@ -438,7 +483,7 @@ export default function CloudShelfPage() {
     shelfCache = null;
     setBooks([]);
     setDl(null);
-    setTitles({});
+    setInfos({});
     setSyncText(null);
     setHasNew(new Set());
     setAccount("");
@@ -452,8 +497,48 @@ export default function CloudShelfPage() {
     if (mode === "shelf") void loadShelf();
   }), [mode, loadShelf]);
 
-  const titleOf = (b: Wenku8ShelfBook): string => b.name ?? titles[b.aid] ?? "正在获取书名…";
+  const titleOf = (b: Wenku8ShelfBook): string => b.name ?? infos[b.aid]?.title ?? "正在获取书名…";
   const pullBusy = dl?.phase === "downloading";
+
+  // C-1 排序：收藏顺序=API 返回序（云端新收藏在前）；最近更新=last_update 降序，尚未取到 bookinfo 的排尾部
+  //（取到后 infos 更新触发重排自动归位）；书名按中文 locale
+  const sortedBooks = useMemo(() => {
+    if (sortKey === "added") return books;
+    if (sortKey === "title") return [...books].sort((a, b) => titleOf(a).localeCompare(titleOf(b), "zh"));
+    return [...books].sort((a, b) => {
+      const ua = infos[a.aid]?.last_update ?? "";
+      const ub = infos[b.aid]?.last_update ?? "";
+      if (!ua || !ub) return ua === ub ? 0 : ua ? -1 : 1;
+      return ub.localeCompare(ua);
+    });
+  }, [books, sortKey, infos]);
+
+  function changeSort(k: CloudSort): void {
+    setSortKey(k);
+    void setSetting(SORT_KEY, k).catch(() => {});
+  }
+
+  function changeDensity(v: LibraryDensity): void {
+    setDensity(v);
+    void setSetting("library_density", v).catch(() => {});
+  }
+
+  // 排序菜单：外部 pointerdown / Esc 关闭（照 AppShell 主题菜单模式）
+  useEffect(() => {
+    if (!menu) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenu(null);
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
 
   // 批次8：壳常驻，本页元信息布局期写入 pageMeta store（切页零闪烁；登录卡态不渲染上下文行）
   useLayoutEffect(() => {
@@ -490,6 +575,42 @@ export default function CloudShelfPage() {
           </button>
         </div>
       </div>
+
+      {/* C-1 工具行：排序菜单 + 密度档（复用书库同一 library_density 键，两处生效） */}
+      {mode === "shelf" ? (
+        <div className="wr-toolbar-row">
+          <button
+            type="button"
+            className="wr-btn wr-icon-btn"
+            aria-haspopup="menu"
+            aria-expanded={menu != null}
+            aria-label={`排序：${CLOUD_SORT_LABELS[sortKey]}`}
+            title={`排序：${CLOUD_SORT_LABELS[sortKey]}`}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenu((m) => (m ? null : { x: r.left, y: r.bottom + 4 }));
+            }}
+          >
+            <IconSort />
+          </button>
+          <div className="wr-seg" role="group" aria-label="书架密度" style={{ marginLeft: "auto" }}>
+            {(Object.keys(DENSITY_PRESETS) as LibraryDensity[]).map((d) => (
+              <button
+                key={d}
+                type="button"
+                className="wr-seg-btn wr-seg-btn--icon"
+                data-active={density === d}
+                aria-pressed={density === d}
+                aria-label={DENSITY_PRESETS[d].label}
+                title={DENSITY_PRESETS[d].label}
+                onClick={() => changeDensity(d)}
+              >
+                <IconDensity bars={d === "standard" ? 2 : d === "large" ? 3 : 4} />
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {mode === "checking" ? <div className="wr-state" style={{ gridColumn: "1 / -1" }}>正在检查登录状态…</div> : null}
 
@@ -550,12 +671,17 @@ export default function CloudShelfPage() {
             <div className="wr-state-sub">去 wenku8 网站或 App 把小说加入书架，再回来刷新</div>
           </div>
         ) : (
-          <div className="wr-book-grid">
-            {books.map((b) => {
+          <div
+            className={density === "standard" ? "wr-book-grid" : `wr-book-grid wr-book-grid--${density}`}
+            style={{ gridTemplateColumns: DENSITY_PRESETS[density].grid }}
+          >
+            {sortedBooks.map((b) => {
               const state = dl != null && dl.aid === b.aid ? dl : undefined;
               const pct = state?.phase === "downloading" && state.total > 0 ? (state.done / state.total) * 100 : 0;
               const failed = coverFailed.has(b.aid);
               const imported = b.book_id != null;
+              const info = infos[b.aid];
+              const sub = info ? `${info.author || "未知作者"} · ${info.last_update}` : null;
               return (
                 <div key={b.aid} className="wr-book-card" data-aid={b.aid} onClick={() => setDetail(b)}>
                   <div className="wr-cover">
@@ -575,11 +701,15 @@ export default function CloudShelfPage() {
                   </div>
                   <div className="wr-meta">
                     <div className="wr-title" title={titleOf(b)}>{titleOf(b)}</div>
-                    {b.date ? <div className="wr-author" title={b.date}>{b.date}</div> : null}
+                    {/* C-1 副行：作者 · 最近更新（未取到=加载点）+ 状态内联小徽（封面/文字上不放任何角标） */}
+                    <div className="wr-author wr-cloud-sub">
+                      <span className="wr-cloud-sub-text" title={sub ?? undefined}>
+                        {sub ?? "…"}
+                      </span>
+                      {imported ? <span className="wr-cloud-tag">已入库</span> : null}
+                      {hasNew.has(b.aid) ? <span className="wr-cloud-tag wr-cloud-tag--new">有新章</span> : null}
+                    </div>
                   </div>
-                  {/* F2 已入库/有新章徽标（右上角，悬浮动作层之下） */}
-                  {imported ? <span className="wr-cloud-badge">已入库</span> : null}
-                  {hasNew.has(b.aid) ? <span className="wr-cloud-badge wr-cloud-badge--new">有新章</span> : null}
                   {/* 悬浮动作层：下载进度/✓；imported=打开，否则开详情（直接拉取改由对话框发起） */}
                   <div className="wr-card-tools" data-show={state != null}>
                     {state?.phase === "downloading" ? (
@@ -613,14 +743,14 @@ export default function CloudShelfPage() {
                       <button
                         type="button"
                         className="wr-mini-btn"
-                        aria-label="详情"
+                        aria-label="拉取"
                         title={state?.phase === "error" ? `拉取失败：${state.message}` : "详情与拉取"}
                         onClick={(e) => {
                           e.stopPropagation();
                           setDetail(b);
                         }}
                       >
-                        <IconList />
+                        <IconDownload />
                       </button>
                     )}
                   </div>
@@ -629,6 +759,27 @@ export default function CloudShelfPage() {
             })}
           </div>
         )
+      ) : null}
+
+      {/* C-1 排序菜单（样式照书库排序菜单：wr-menu + radio 项） */}
+      {menu ? (
+        <div ref={menuRef} className="wr-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+          {(Object.keys(CLOUD_SORT_LABELS) as CloudSort[]).map((k) => (
+            <button
+              key={k}
+              className="wr-menu-item"
+              role="menuitemradio"
+              aria-checked={sortKey === k}
+              data-checked={sortKey === k}
+              onClick={() => {
+                setMenu(null);
+                changeSort(k);
+              }}
+            >
+              {CLOUD_SORT_LABELS[k]}
+            </button>
+          ))}
+        </div>
       ) : null}
 
       {detail != null ? (

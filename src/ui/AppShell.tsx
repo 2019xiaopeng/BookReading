@@ -488,11 +488,11 @@ export default function AppShell(props: {
             <IconRefresh />
             <span>刷新</span>
           </button>
-          <button type="button" className="wr-small-btn" title="选择漫画文件夹导入" onClick={() => void importImages()}>
+          <button type="button" className="wr-small-btn wr-small-btn--accent" title="选择漫画文件夹导入" onClick={() => void importImages()}>
             <IconImage />
             <span>导入漫画</span>
           </button>
-          <button type="button" className="wr-small-btn" title="选择 EPUB / TXT / CBZ / PDF 导入" onClick={() => void importBooks()}>
+          <button type="button" className="wr-small-btn wr-small-btn--accent" title="选择 EPUB / TXT / CBZ / PDF 导入" onClick={() => void importBooks()}>
             <IconBook />
             <span>导入图书</span>
           </button>
