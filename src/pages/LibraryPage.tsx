@@ -59,9 +59,10 @@ import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "../library/us
 import { notifyBackgroundChanged, resetBackgroundCache } from "../ui/appBackground";
 import { subscribeAppRefresh } from "../ui/appActions";
 import { importBooks, importImages, setImportTargetShelf } from "../ui/importService";
+import { setPageMeta } from "../ui/pageMeta";
 import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
-import AppShell, { setShelvesCache, useShellShelves } from "../ui/AppShell";
+import { setShelvesCache, useShellShelves } from "../ui/AppShell";
 import { showAlert, showConfirm } from "../ui/dialog";
 import { showToast } from "../ui/toast";
 import { IconBook, IconCheckSquare, IconClose, IconDensity, IconFolder, IconReveal, IconShelf, IconSort, IconTrash } from "../ui/icons";
@@ -382,6 +383,22 @@ export default function LibraryPage() {
     if (!settingsHydratedRef.current) return;
     void setSetting("folder_sort", folderSort);
   }, [folderSort]);
+
+  // 批次8：壳常驻（AppLayout 唯一 AppShell），本页元信息在布局期写入 pageMeta store——切页零闪烁；
+  // deps 覆盖 search/quickFilter/contextRow 引用到的全部 state
+  useLayoutEffect(() => {
+    setPageMeta({
+      active: "library",
+      title: trashView ? "回收站" : "书架",
+      search: { value: query, placeholder: "搜索书名 / 作者", onChange: setQuery },
+      quickFilter: trashView ? undefined : { value: statusFilter, onChange: setStatusFilter },
+      contextRow: trashView ? (
+        <span className="wr-quick-context">
+          {retentionDays === 0 ? "永久保留" : `保留 ${retentionDays} 天`} · {trash.length} 本可恢复
+        </span>
+      ) : undefined,
+    });
+  }, [trashView, query, statusFilter, retentionDays, trash.length]);
 
   // H-1：Ctrl+F 聚焦搜索框（AppShell 顶栏 .wr-search-input；阅读器书内搜索路由隔离不受影响）
   useEffect(() => {
@@ -1274,19 +1291,7 @@ export default function LibraryPage() {
   const mastheadName = path.length > 0 ? path[path.length - 1].name : "书 架";
 
   return (
-    <AppShell
-      active="library"
-      title={trashView ? "回收站" : "书架"}
-      search={{ value: query, placeholder: trashView ? "搜索书名 / 作者" : "搜索书名 / 作者", onChange: setQuery }}
-      quickFilter={trashView ? undefined : { value: statusFilter, onChange: setStatusFilter }}
-      contextRow={
-        trashView ? (
-          <span className="wr-quick-context">
-            {retentionDays === 0 ? "永久保留" : `保留 ${retentionDays} 天`} · {trash.length} 本可恢复
-          </span>
-        ) : undefined
-      }
-    >
+    <>
       <div className="wr-masthead">
         <h1 className="wr-masthead-name">{trashView ? "回 收 站" : mastheadName}</h1>
         <div className="wr-masthead-stats">
@@ -2066,6 +2071,6 @@ export default function LibraryPage() {
       {manageTagsOpen ? (
         <ManageTagsDialog tags={tags} onClose={() => setManageTagsOpen(false)} onChanged={() => void refresh()} />
       ) : null}
-    </AppShell>
+    </>
   );
 }

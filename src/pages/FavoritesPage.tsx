@@ -29,7 +29,8 @@ import { DENSITY_PRESETS, normalizeLibraryDensity, type LibraryDensity } from ".
 import { applyRangeSelect } from "../library/rangeSelect";
 import { BOOKS_CHANGED_EVENT } from "../library/importRunner";
 import { formatReadingTime } from "../library/readingTime";
-import AppShell, { useShellShelves } from "../ui/AppShell";
+import { useShellShelves } from "../ui/AppShell";
+import { setPageMeta } from "../ui/pageMeta";
 import { subscribeAppRefresh } from "../ui/appActions";
 import { showAlert, showConfirm } from "../ui/dialog";
 import { showToast } from "../ui/toast";
@@ -476,11 +477,12 @@ export default function FavoritesPage() {
     return t ? `已读 ${t}` : null;
   };
 
-  return (
-    <AppShell
-      active="favorites"
-      title="收藏"
-      search={{
+  // 批次8：壳常驻，本页元信息布局期写入 pageMeta store（切页零闪烁）
+  useLayoutEffect(() => {
+    setPageMeta({
+      active: "favorites",
+      title: "收藏",
+      search: {
         value: query,
         placeholder: tab === "books" ? "搜索书名 / 作者" : "搜索收藏句子",
         onChange: setQuery,
@@ -491,8 +493,8 @@ export default function FavoritesPage() {
                 refreshQuotes().finally(() => setLoading(false));
               }
             : undefined,
-      }}
-      seg={{
+      },
+      seg: {
         items: [
           { key: "books", label: "收藏书籍" },
           { key: "quotes", label: "收藏句子" },
@@ -501,13 +503,17 @@ export default function FavoritesPage() {
         onChange: (k) => {
           if (k === "books" || k === "quotes") changeTab(k);
         },
-      }}
-      contextRow={
+      },
+      contextRow: (
         <span className="wr-quick-context">
           收藏 {favoriteBooks.length} 本 · 句子 {quotes.length} 条
         </span>
-      }
-    >
+      ),
+    });
+  }, [tab, query, filterBookId, favoriteBooks.length, quotes.length]);
+
+  return (
+    <>
       {/* M2 U5：小型刊头（书架刊头 60% 缩档）+ 统计列 */}
       <div className="wr-masthead wr-masthead--sm">
         <h1 className="wr-masthead-name">收 藏</h1>
@@ -864,6 +870,6 @@ export default function FavoritesPage() {
           onChanged={() => void refreshBooks()}
         />
       ) : null}
-    </AppShell>
+    </>
   );
 }

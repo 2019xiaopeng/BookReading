@@ -26,8 +26,8 @@ export function parseBgVeil(raw: string | undefined): number {
   return raw === "" ? 88 : normalizeBgVeil(raw);
 }
 
-// 侧栏书架树模块级单例（批次12b）：每页各渲染一个 AppShell，路由切换整树重挂曾是闪烁根因；
-// 数据上提后重挂首帧即有旧值，LibraryPage.refresh 推写，导入事件兜底（LibraryPage 卸载时也能刷新）
+// 侧栏书架树数据模块级单例（批次12b）：批次8 起壳由 AppLayout 常驻（切页不重挂），数据仍居模块层——
+// 进阅读页壳卸载、返回重挂时首帧即有旧值；LibraryPage.refresh 推写，导入事件兜底
 // v2.7.0 K-4：同一次加载顺带拉 books 算每架递归计数（countByShelf 上卷到祖先），books 失败不拖垮树
 let shelvesCache: Shelf[] = [];
 let shelfCountsCache: Map<number, number> = new Map();
@@ -143,7 +143,7 @@ export function shouldShowHighlights(lastSeen: unknown, current: string): boolea
   return s !== "" && current !== "" && s !== current;
 }
 
-// H-9 + U-3 启动一次性（AppShell 每页重挂，模块哨兵保证全会话只跑一次）
+// H-9 + U-3 启动一次性（模块哨兵保证全会话只跑一次）
 let shellStartupDone = false;
 async function runShellStartupOnce(): Promise<void> {
   if (shellStartupDone) return;

@@ -56,6 +56,8 @@ import {
 } from "../tauri/wenku8";
 import { getSettings, listShelves, setSetting } from "../tauri/invoke";
 import { listen } from "@tauri-apps/api/event";
+// 批次8：页面不再自带壳，按真实结构挂 AppLayout 下（mock 壳从 pageMeta 拿 contextRow 渲染）
+import { AppLayout } from "../app/router";
 import CloudShelfPage, { resetCloudShelfCacheForTests } from "./CloudShelfPage";
 
 const statusMock = vi.mocked(wenku8Status);
@@ -86,7 +88,9 @@ function renderCloudShelf() {
   return render(
     <MemoryRouter initialEntries={["/cloud-shelf"]}>
       <Routes>
-        <Route path="/cloud-shelf" element={<CloudShelfPage />} />
+        <Route element={<AppLayout />}>
+          <Route path="/cloud-shelf" element={<CloudShelfPage />} />
+        </Route>
         <Route path="/read/:bookId" element={<div data-testid="read-page" />} />
       </Routes>
     </MemoryRouter>,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, type FormEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNavigate } from "react-router-dom";
@@ -18,7 +18,7 @@ import {
   type Wenku8Volume,
 } from "../tauri/wenku8";
 import { getSettings, listShelves, setSetting, type Shelf } from "../tauri/invoke";
-import AppShell from "../ui/AppShell";
+import { setPageMeta } from "../ui/pageMeta";
 import { subscribeAppRefresh } from "../ui/appActions";
 import { IconBookOpen, IconList } from "../ui/icons";
 import { showToast } from "../ui/toast";
@@ -455,11 +455,12 @@ export default function CloudShelfPage() {
   const titleOf = (b: Wenku8ShelfBook): string => b.name ?? titles[b.aid] ?? "正在获取书名…";
   const pullBusy = dl?.phase === "downloading";
 
-  return (
-    <AppShell
-      active="cloud"
-      title="云书架"
-      contextRow={
+  // 批次8：壳常驻，本页元信息布局期写入 pageMeta store（切页零闪烁；登录卡态不渲染上下文行）
+  useLayoutEffect(() => {
+    setPageMeta({
+      active: "cloud",
+      title: "云书架",
+      contextRow:
         mode === "shelf" ? (
           <>
             <span className="wr-quick-context">
@@ -469,9 +470,12 @@ export default function CloudShelfPage() {
               退出登录
             </button>
           </>
-        ) : undefined
-      }
-    >
+        ) : undefined,
+    });
+  }, [mode, account, syncText, shelfBusy]);
+
+  return (
+    <>
       <div className="wr-masthead">
         <h1 className="wr-masthead-name">云 书 架</h1>
         <div className="wr-masthead-stats">
@@ -640,6 +644,6 @@ export default function CloudShelfPage() {
           onCoverError={(aid) => setCoverFailed((s) => new Set(s).add(aid))}
         />
       ) : null}
-    </AppShell>
+    </>
   );
 }
