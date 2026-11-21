@@ -26,10 +26,6 @@ v2.5.0 起全新「碳墨刊头」界面：默认**纸墨**主题（米白纸底
 | --- | --- |
 | ![](./docs/design/shots/readme/reader-epub-settings.png) | ![](./docs/design/shots/readme/reader-epub-inkdark.png) |
 
-| 云书架 · wenku8 同步【v3.0.1】 | 书籍详情 · 选书架拉取入库 |
-| --- | --- |
-| ![](./docs/design/shots/readme/cloud-shelf.png) | ![](./docs/design/shots/readme/cloud-detail.png) |
-
 > 截图为运行中的真实应用（为保护演示书库隐私，正文使用合成测试书）。
 
 ## v3.0.1 更新
