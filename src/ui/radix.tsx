@@ -85,13 +85,24 @@ export function Modal(props: {
         <Dialog.Overlay className="wr-prompt-overlay" />
         <Dialog.Content asChild>
           <div
-            className={`wr-dialog-center ${props.panelClassName ?? "wr-panel wr-prompt"}`}
-            style={props.panelStyle}
-            role="dialog"
-            aria-modal="true"
-            aria-label={props.label}
+            style={{
+              position: "fixed",
+              inset: 0,
+              display: "grid",
+              placeItems: "center",
+              zIndex: "var(--wr-z-overlay)",
+              pointerEvents: "none",
+            }}
           >
-            {props.children}
+            <div
+              className={props.panelClassName ?? "wr-panel wr-prompt"}
+              style={{ ...props.panelStyle, pointerEvents: "auto" }}
+              role="dialog"
+              aria-modal="true"
+              aria-label={props.label}
+            >
+              {props.children}
+            </div>
           </div>
         </Dialog.Content>
       </Dialog.Portal>
