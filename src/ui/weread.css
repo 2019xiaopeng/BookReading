@@ -492,11 +492,11 @@ textarea,
 
 .wr-nav {
   padding: 10px 10px 12px;
-  display: grid;
+  /* U-1 侧栏三段布局：中段（导航+书架树）弹性占位内部滚动，顶/底永不被挤出。
+     纯 flex 列——grid item 遇 overflow:auto 最小尺寸坍缩成 0（书架树 8px/0px 怪象根因） */
+  display: flex;
+  flex-direction: column;
   gap: 8px;
-  align-content: start;
-  /* U-1 侧栏三段布局：中段（导航+书架树）弹性占位内部滚动，
-     顶部 chips 区与底部动作区永不被挤出视口 */
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
@@ -3745,13 +3745,8 @@ body::after {
   outline-offset: 1px;
 }
 
-/* S-3 长树滚动：侧栏其余件（刊头/快捷 chips/三个导航大钮/底部按钮列）实测约 600px，
-   树超高在本层滚（壳层 overflow:hidden 本不滚）；窄窗 140px 保底可见 */
-.wr-nav-groups {
-  max-height: max(140px, calc(100vh - 600px));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
+/* S-3 长树滚动已由 U-1 的 .wr-nav 中段统一内滚接管（旧 max-height 公式在标题栏
+   +32px 后计算出塌陷值，曾致书架树 0 高）；此规则退役留注释防回归 */
 
 /* N-1 清洗预览弹窗（v2.9.0） */
 .wr-clean-dialog { max-width: 640px; }

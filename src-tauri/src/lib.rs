@@ -78,11 +78,24 @@ fn quit_app(app: tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // A12 窗口状态记忆（大小/位置/最大化），须在窗口创建（setup 内）前注册
-        .plugin(tauri_plugin_window_state::Builder::new().build())
+        // A12 窗口状态记忆（大小/位置/最大化），须在窗口创建（setup 内）前注册；
+        // 排除 DECORATIONS——旧缓存会把 decorated:true 恢复回来压过 tauri.conf 的无边框（双标题栏根因）
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        & !tauri_plugin_window_state::StateFlags::DECORATIONS,
+                )
+                .build(),
+        )
         .setup(|app| {
             let handle = app.handle();
             append_startup_log(&handle, "startup: begin");
+
+            // U-23 代码级兜底：强制无边框（防任何插件/缓存路径复活原生标题栏）
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.set_decorations(false);
+            }
 
             let hook_handle = handle.clone();
             std::panic::set_hook(Box::new(move |info| {

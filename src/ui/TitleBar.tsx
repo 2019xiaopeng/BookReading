@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import { IconBook } from "./icons";
+import appIcon from "../assets/app-icon.png";
 
 /**
  * U-23 无边框窗口的自定义标题栏。红线：关闭钮绝不裸 close——emit 既有 wr:close-requested，
@@ -108,7 +108,7 @@ export default function TitleBar(props: { title: string }) {
   return (
     <div className="wr-titlebar">
       <div className="wr-titlebar-left">
-        <IconBook width={16} height={16} aria-hidden="true" />
+        <img src={appIcon} width={16} height={16} alt="" style={{ borderRadius: 3 }} />
         <span className="wr-titlebar-title" title={props.title}>
           {props.title}
         </span>
