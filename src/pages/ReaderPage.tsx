@@ -102,7 +102,7 @@ import {
 } from "../reader/settings/epuset";
 import { speak, stop as ttsStop, subscribeTts, ttsSpeaking, ttsSupported } from "../reader/tts";
 import { calcPaperStage } from "../reader/ui/paperStage";
-import { createPageSnapshot, foldSpec, playFold, type FoldHandle } from "../reader/ui/foldTurn";
+import { createPageSnapshot, type FoldHandle } from "../reader/ui/foldTurn";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
 import { showAlert, showConfirm } from "../ui/dialog";
@@ -1553,14 +1553,7 @@ export default function ReaderPage() {
       // display resolve 时浏览器尚未上屏：双 rAF 等新页真画完，动画才不在空窗期开演
       await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
       if (turn.interrupted) return;
-      if (anim === "fold" && !reduced) {
-        const h = playFold(turn.overlay, {
-          durationMs: settingsRef.current.turnSpeedMs,
-          spec: foldSpec(direction, spreadModeRef.current === "always"),
-        });
-        turn.fold = h;
-        await h.done;
-      } else if (anim === "fade" && !reduced) {
+      if (anim === "fade" && !reduced) {
         // 跨章 fade：旧页快照淡出，下方新页已就绪（交叉过渡，无空白画布空窗）
         const ms = Math.round(180 * k);
         turn.overlay.style.transition = `opacity ${ms}ms ease`;

@@ -1,17 +1,18 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * V-4 窄窗断点（CSS 与 JS 同一套数值）：
- * - <900 搜索框收为图标；<800 侧栏 56px 图标栏 + 底部四钮 2×2；<600 侧栏转抽屉。
- * - drawer 档当前窗口 minWidth=720 不可达（tauri.conf.json），档位先就位、放宽窗口后即刻生效。
+ * V-4 窄窗断点（用户修正 2026-11-24）：
+ * 单一阈值 720px——应用 minWidth=720，>=720 恒完整布局（搜索展开/侧栏全文字/底钮纵向全宽）；
+ * <720 理论不可达（除非放宽 minWidth），档位代码就位但当前不触发。
+ * 原三档 900/800/600 已废弃（默认窗口宽度下触发过早+比例失调）。
  */
-export const SEARCH_COLLAPSE_MAX = 900;
-export const RAIL_MAX = 800;
-export const DRAWER_MAX = 600;
+export const SEARCH_COLLAPSE_MAX = 720;
+export const RAIL_MAX = 720;
+export const DRAWER_MAX = 720;
 
 export type ViewportTier = "full" | "rail" | "drawer";
 
-/** 纯：宽度 → 档位（600/800 两道侧栏阈值；搜索 900 阈值独立见 useCompactSearch）。 */
+/** 纯：宽度 → 档位（当前恒 full，窗口 minWidth=720 以下不可达） */
 export function tierFromWidth(w: number): ViewportTier {
   if (w < DRAWER_MAX) return "drawer";
   if (w < RAIL_MAX) return "rail";
@@ -38,14 +39,14 @@ export function useMediaQuery(query: string): boolean {
   );
 }
 
-/** 侧栏档位（JS 侧驱动树过滤/抽屉态；宽度与视觉仍由 CSS 断点接管，无闪帧）。 */
+/** 侧栏档位（当前恒 full） */
 export function useViewportTier(): ViewportTier {
   const drawer = useMediaQuery(`(max-width: ${DRAWER_MAX - 1}px)`);
   const rail = useMediaQuery(`(max-width: ${RAIL_MAX - 1}px)`);
   return drawer ? "drawer" : rail ? "rail" : "full";
 }
 
-/** <900：搜索框收为图标按钮（Ctrl+F 任何宽度可唤起）。 */
+/** <720：搜索收为图标（当前恒 false=展开；留档未来放宽 minWidth 用） */
 export function useCompactSearch(): boolean {
   return useMediaQuery(`(max-width: ${SEARCH_COLLAPSE_MAX - 1}px)`);
 }

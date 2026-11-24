@@ -115,7 +115,6 @@ export default function ImageSettingsPanel({ value, onChange, pdf = false, hasOv
           { value: "none", text: "无", disabled: webtoon },
           // V-1：PDF 分页管线实现 hold+fold；slide 仍为漫画专属
           { value: "slide", text: "滑动", disabled: webtoon || pdf },
-          { value: "fold", text: "纸页折影", disabled: webtoon },
         ]}
         onPick={(pageAnimation: ImagePageAnimation) => onChange({ ...value, pageAnimation })}
       />

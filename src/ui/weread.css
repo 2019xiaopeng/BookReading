@@ -3201,7 +3201,7 @@ body::after {
    V-4 起 <800 侧栏收 56px 图标栏（--wr-sidebar-w 变量按档切换，见文末 V-4 段） */
 @media (max-width: 1199px) {
   .wr-shell-body {
-    --wr-sidebar-w: 210px;
+    --wr-sidebar-w: 210px; /* V-4 修正：完整布局恒 210+ */
   }
 }
 
@@ -4007,7 +4007,8 @@ body::after {
 }
 
 /* 600–799：侧栏 56px 图标栏（宽度由 --wr-sidebar-w=56 给出；文字隐、图标居中、Tooltip 补词） */
-@media (min-width: 600px) and (max-width: 799px) {
+/* V-4 修正：rail 档仅在 <720 理论触发（minWidth=720 不可达，布局恒完整） */
+@media (max-width: 719px) {
   .wr-side-top {
     min-height: 0;
     padding: 12px 6px;

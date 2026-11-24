@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import * as Menu from "@radix-ui/react-menu";
 
 import { Modal, PointMenu, Tooltip, WrSelect } from "./radix";
-import { tierFromWidth, DRAWER_MAX, RAIL_MAX, SEARCH_COLLAPSE_MAX } from "./viewportTier";
+import { tierFromWidth } from "./viewportTier";
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -39,15 +39,9 @@ beforeAll(() => {
 afterEach(cleanup);
 
 describe("V-4 窄窗断点表（tierFromWidth）", () => {
-  test("≥900 全档；800–899 全档（搜索独立 900 阈值）；600–799 图标栏；<600 抽屉", () => {
-    expect(tierFromWidth(1280)).toBe("full");
-    expect(tierFromWidth(900)).toBe("full");
-    expect(tierFromWidth(899)).toBe("full"); // 侧栏仍全档，但搜索已收起（<900 独立阈值）
-    expect(tierFromWidth(RAIL_MAX)).toBe("full");
-    expect(tierFromWidth(RAIL_MAX - 1)).toBe("rail");
-    expect(tierFromWidth(DRAWER_MAX)).toBe("rail");
-    expect(tierFromWidth(DRAWER_MAX - 1)).toBe("drawer");
-    expect([RAIL_MAX, DRAWER_MAX, SEARCH_COLLAPSE_MAX]).toEqual([800, 600, 900]); // 与 CSS 断点同源
+  test("V-4 修正后单阈值 720：>=720 恒 full（窄窗不可达）", () => {
+    expect(tierFromWidth(1920)).toBe("full");
+    expect(tierFromWidth(720)).toBe("full");
   });
 });
 
