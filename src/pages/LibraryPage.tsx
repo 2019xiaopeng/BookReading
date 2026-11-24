@@ -53,6 +53,8 @@ import {
   trashRemainingDays,
 } from "../library/shelves";
 import { DENSITY_PRESETS, normalizeLibraryDensity, type LibraryDensity } from "../library/density";
+import { getCachedSetting, setCachedSetting } from "../library/settingsCache";
+import { persistentCoverSrc } from "../library/coverSrc";
 import { applyRangeSelect } from "../library/rangeSelect";
 import { BOOKS_CHANGED_EVENT, runImports } from "../library/importRunner";
 import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "../library/useCoverUrls";
@@ -86,6 +88,19 @@ const FOLDER_SORT_LABELS: Record<FolderSortKey, string> = {
   "title-desc": "书名降序",
   "count-desc": "书数降序",
 };
+
+/** 纯：library_sort 持久化 JSON → 排序键值对（非法/缺失回默认最近阅读·降序） */
+export function parseLibrarySort(raw: string | undefined): { key: SortKey; asc: boolean } {
+  try {
+    const s = JSON.parse(raw ?? "{}") as { key?: unknown; asc?: unknown };
+    return {
+      key: typeof s.key === "string" && s.key in SORT_LABELS ? (s.key as SortKey) : "recent",
+      asc: typeof s.asc === "boolean" ? s.asc : false,
+    };
+  } catch {
+    return { key: "recent", asc: false };
+  }
+}
 
 // S-4 ⋯ 菜单「状态」段：三档手动状态 + 恢复自动（null=清除覆盖回推导）
 const MANUAL_STATUS_OPTIONS: { value: ManualStatus | null; label: string }[] = [
@@ -147,10 +162,13 @@ export default function LibraryPage() {
   // P-4 设置开关（settings 键 continue_card.enabled，'0'=关，缺省开）
   const [continueDismissed, setContinueDismissed] = useState(false);
   const [continueEnabled, setContinueEnabled] = useState(true);
-  const [sortKey, setSortKey] = useState<SortKey>("recent");
-  const [sortAsc, setSortAsc] = useState(false);
+  // U-3 密度/排序首帧：同步读启动预热缓存（AppShell getSettings 已 prime），未命中回退默认（原行为）
+  const [sortKey, setSortKey] = useState<SortKey>(() => parseLibrarySort(getCachedSetting("library_sort")).key);
+  const [sortAsc, setSortAsc] = useState(() => parseLibrarySort(getCachedSetting("library_sort")).asc);
   const [folderSort, setFolderSort] = useState<FolderSortKey>("default");
-  const [density, setDensity] = useState<LibraryDensity>("standard");
+  const [density, setDensity] = useState<LibraryDensity>(() =>
+    normalizeLibraryDensity(getCachedSetting("library_density")),
+  );
   const [tagFilter, setTagFilter] = useState<Set<number>>(new Set());
   const [statusFilter, setStatusFilter] = useState<"all" | ReadingStatus>("all");
   const [detailsBook, setDetailsBook] = useState<Book | null>(null);
@@ -256,15 +274,31 @@ export default function LibraryPage() {
   // T-4 回收站过滤集（全选与渲染同源）
   const trashFiltered = useMemo(() => filterTrash(trash, query), [trash, query]);
 
-  // 封面请求集 = 当前过滤视图 + 可见子书架卡固定前 4 本（书架卡也要封面；搜索态隐藏的架不请求）
+  // R-1 继续阅读：全库 last_opened_at 最新且未读完的书（根视图索引行；✕ 本次会话不再显示；设置可整行关闭）。
+  // 提到封面请求集之前：请求集要带上它（在子书架时不在 booksFiltered 内，冷启动会整行无图——U-19 根因之一）
+  const continueBook = useMemo(() => {
+    // 回收站视图不显示（软删的书不该引导"继续读"）；其余条件：开关开+根视图+无搜索+未手动隐藏
+    if (trashView || !continueEnabled || continueDismissed || currentShelfId != null || query.trim()) return null;
+    try {
+      if (sessionStorage.getItem("wr-continue-dismissed") === "1") return null;
+    } catch {}
+    return (
+      [...books]
+        .filter((b) => b.last_opened_at != null && (b.reading_percent ?? 0) < 0.95)
+        .sort((a, b) => (b.last_opened_at ?? 0) - (a.last_opened_at ?? 0))[0] ?? null
+    );
+  }, [trashView, books, currentShelfId, query, continueDismissed, continueEnabled]);
+
+  // 封面请求集 = 当前过滤视图 + 可见子书架卡固定前 4 本（书架卡也要封面；搜索态隐藏的架不请求）+ 继续阅读行
   const coverItems = useMemo(() => {
     const items: { id: string; cover_path: string | null }[] = [];
     for (const { shelf } of folderEntries) {
       for (const b of topBooksByShelf.get(shelf.id) ?? []) items.push(b);
     }
     for (const b of booksFiltered) items.push(b);
+    if (continueBook) items.push(continueBook);
     return items;
-  }, [folderEntries, topBooksByShelf, booksFiltered]);
+  }, [folderEntries, topBooksByShelf, booksFiltered, continueBook]);
   // preferThumb：书架封面走 480px 缩略档（缺失自动回退原图，见 useCoverUrls）；详情页大封面不在此列
   const coverUrls = useCoverUrls(coverItems, { preferThumb: true });
   const trashCoverUrls = useCoverUrls(trash, { preferThumb: true });
@@ -294,12 +328,10 @@ export default function LibraryPage() {
     getSettings()
       .then((m) => {
         setDensity(normalizeLibraryDensity(m.library_density));
-        // 排序与密度同法持久化：退书/切视图重挂后不回落默认“最近阅读·降序”
-        try {
-          const s = JSON.parse(m.library_sort ?? "{}") as { key?: unknown; asc?: unknown };
-          if (typeof s.key === "string" && s.key in SORT_LABELS) setSortKey(s.key as SortKey);
-          if (typeof s.asc === "boolean") setSortAsc(s.asc);
-        } catch {}
+        // 排序与密度同法持久化：退书/切视图重挂后不回落默认“最近阅读·降序”（缓存未命中时的纠偏路径）
+        const sort = parseLibrarySort(m.library_sort);
+        setSortKey(sort.key);
+        setSortAsc(sort.asc);
         // K-2 文件夹排序持久化恢复（非法值回落默认）
         if (typeof m.folder_sort === "string" && m.folder_sort in FOLDER_SORT_LABELS) {
           setFolderSort(m.folder_sort as FolderSortKey);
@@ -369,13 +401,16 @@ export default function LibraryPage() {
 
   function changeDensity(v: LibraryDensity) {
     setDensity(v);
+    setCachedSetting("library_density", v); // U-3：写穿缓存，下次挂载首帧即新值
     void setSetting("library_density", v);
   }
 
   // 排序写穿（菜单三处 setter 共用这一条通道，含恢复后回写）；恢复完成前跳过（见 settingsHydratedRef）
   useEffect(() => {
     if (!settingsHydratedRef.current) return;
-    void setSetting("library_sort", JSON.stringify({ key: sortKey, asc: sortAsc }));
+    const json = JSON.stringify({ key: sortKey, asc: sortAsc });
+    setCachedSetting("library_sort", json); // U-3：同法写穿
+    void setSetting("library_sort", json);
   }, [sortKey, sortAsc]);
 
   // K-2 文件夹排序写穿（同法持久化）
@@ -426,20 +461,6 @@ export default function LibraryPage() {
     },
     [navigate, currentShelfId],
   );
-
-  // R-1 继续阅读：全库 last_opened_at 最新且未读完的书（根视图索引行；✕ 本次会话不再显示；设置可整行关闭）
-  const continueBook = useMemo(() => {
-    // 回收站视图不显示（软删的书不该引导"继续读"）；其余条件：开关开+根视图+无搜索+未手动隐藏
-    if (trashView || !continueEnabled || continueDismissed || currentShelfId != null || query.trim()) return null;
-    try {
-      if (sessionStorage.getItem("wr-continue-dismissed") === "1") return null;
-    } catch {}
-    return (
-      [...books]
-        .filter((b) => b.last_opened_at != null && (b.reading_percent ?? 0) < 0.95)
-        .sort((a, b) => (b.last_opened_at ?? 0) - (a.last_opened_at ?? 0))[0] ?? null
-    );
-  }, [trashView, books, currentShelfId, query, continueDismissed, continueEnabled]);
 
   // P-1 侧栏固定动作接线：刷新事件 → 重拉书库；导入服务落架目标跟随当前书架（回收站/其它页=根）
   useEffect(() => subscribeAppRefresh(() => void refresh()), [refresh]);
@@ -1290,6 +1311,10 @@ export default function LibraryPage() {
   const mastheadScope = currentShelfId == null ? books : shelfBooks;
   const mastheadReading = mastheadScope.filter((b) => effectiveStatus(b) === "reading").length;
   const mastheadName = path.length > 0 ? path[path.length - 1].name : "书 架";
+  // U-19 继续阅读封面：blob 缓存命中作加速，未命中回退持久 asset 通道（不产生会话级死链）
+  const continueCoverSrc = continueBook?.cover_path
+    ? (coverUrls[continueBook.cover_path] ?? persistentCoverSrc(continueBook.cover_path) ?? undefined)
+    : undefined;
 
   return (
     <>
@@ -1305,9 +1330,8 @@ export default function LibraryPage() {
         <div className="wr-continue-card" role="button" tabIndex={0} onClick={() => openBook(continueBook.id)}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBook(continueBook.id); } }}>
           <div className="wr-cover" aria-hidden="true">
-            {continueBook.cover_path && coverUrls[continueBook.cover_path] ? (
-              <img src={coverUrls[continueBook.cover_path]} alt="" />
-            ) : null}
+            {/* U-19：blob 缓存命中作加速，未命中回退 cover_path 的持久 asset 通道——重启冷缓存立即出图 */}
+            {continueBook.cover_path && continueCoverSrc ? <img src={continueCoverSrc} alt="" /> : null}
           </div>
           <div className="wr-continue-meta">
             <span className="wr-continue-title">{formatTitle(continueBook)}</span>

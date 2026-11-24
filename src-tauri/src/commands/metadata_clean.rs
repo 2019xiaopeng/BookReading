@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::db;
 
@@ -14,6 +14,77 @@ const RELEASE_WORDS: &[&str] = &[
 
 /// 第 4 步水印前缀额外词（与发布词表叠加，`【...】` 开头命中即剥离）
 const WATERMARK_EXTRA: &[&str] = &["韭菜盒子", "禁转载", "禁轉載", "仅供个人学习"];
+
+// ---- D-1 汉化组模式识别（v3.1 U-4 清洗 v2）----
+// 词表命中降为加分项：组名主要靠形态（括号短组 + 特征词）识别，词表不再单打独斗。
+
+/// 组名特征词（多字）：`[..]`/`(..)` 短组含其一即剥入 source_tags。
+/// ASCII 词（production/scanlation/subs）按整词边界匹配，防 Reproduction 类误中。
+const GROUP_FEATURES: &[&str] = &[
+    "汉化", "漢化", "翻訳", "翻译", "翻譯", "字幕", "制作", "製作", "出品", "发布", "發布",
+    "工作室", "同好会", "同盟", "联盟", "聯盟", "搬运", "搬運", "扫图", "掃圖", "录入", "錄入",
+    "嵌字", "修图", "修圖", "校对", "压制", "production", "scanlation", "subs",
+];
+
+/// 单字后缀：仅对 2-8 字纯汉字短组生效——含假名的短组几乎必是日文标题片段（如「この世で会った日」）
+const GROUP_SINGLE_SUFFIXES: &[char] = &['組', '组', '會', '会'];
+
+/// 中日文字符（平/片假名、々、长音符、汉字扩展 A/基本区/兼容区）
+pub(crate) fn is_cjk_char(c: char) -> bool {
+    matches!(c,
+        '\u{3041}'..='\u{30FF}'
+        | '\u{3005}'
+        | 'ー'
+        | '\u{3400}'..='\u{4DBF}'
+        | '\u{4E00}'..='\u{9FFF}'
+        | '\u{F900}'..='\u{FAFF}'
+    )
+}
+
+fn is_han_char(c: char) -> bool {
+    matches!(c, '\u{3005}' | '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}')
+}
+
+/// 2-8 字纯中日文短组（trim 后）：组名识别与清洗 v2 抽样报告的残留判据共用
+pub(crate) fn is_cjk_short_group(inner: &str) -> bool {
+    let t = inner.trim();
+    let n = t.chars().count();
+    (2..=8).contains(&n) && t.chars().all(is_cjk_char)
+}
+
+/// 组名特征命中：非 ASCII 词子串匹配；ASCII 词整词边界，另认 CamelCase 尾缀
+/// （ChihiroSubs 的 Subs 以大写开头——大小写敏感，防 Reproduction 尾缀误中 production）
+pub(crate) fn has_group_feature(inner: &str) -> bool {
+    let t = inner.trim();
+    let lower = t.to_lowercase();
+    GROUP_FEATURES.iter().any(|w| {
+        if !w.is_ascii() {
+            return lower.contains(w);
+        }
+        if word_match(&lower, w) {
+            return true;
+        }
+        let mut cap = String::with_capacity(w.len());
+        cap.push_str(&w[..1].to_uppercase());
+        cap.push_str(&w[1..]);
+        t.ends_with(&cap)
+    })
+}
+
+/// D-1 规则：括号段是发布组名 → 剥。纯中日文组限 2-8 字（超出按普通括号注保留，防吞书名段）；
+/// 混排短组（≤24 字）认多字特征词；纯汉字短组另认单字后缀（組/组/會/会）。
+fn is_group_name(inner: &str) -> bool {
+    let t = inner.trim();
+    let n = t.chars().count();
+    if n == 0 || n > 24 {
+        return false;
+    }
+    if t.chars().all(is_cjk_char) && !(2..=8).contains(&n) {
+        return false;
+    }
+    has_group_feature(t)
+        || (t.chars().all(is_han_char) && t.chars().any(|c| GROUP_SINGLE_SUFFIXES.contains(&c)))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CleanedTitle {
@@ -80,7 +151,7 @@ fn strip_square_brackets(s: &str, tags: &mut Vec<String>) -> String {
             None => break, // 未闭合的 '[' 原样保留
         };
         out.push_str(&rest[..open]);
-        if matches_words(&rest[open + 1..close - 1], &[]) {
+        if matches_words(&rest[open + 1..close - 1], &[]) || is_group_name(&rest[open + 1..close - 1]) {
             tags.push(rest[open..close].to_string());
         } else {
             out.push_str(&rest[open..close]);
@@ -187,7 +258,7 @@ pub fn clean_title(raw: &str) -> CleanedTitle {
         .map(|seg| {
             let s = strip_square_brackets(seg, &mut tags);
             let s = strip_watermark_prefix(&s, &mut tags);
-            let s = strip_paren_groups(&s, &mut tags, is_source_marker);
+            let s = strip_paren_groups(&s, &mut tags, |inner| is_source_marker(inner) || is_group_name(inner));
             normalize_ws(&s)
         })
         .collect();
@@ -296,21 +367,42 @@ fn clean_preview(conn: &Connection) -> Result<Vec<CleanPreviewItem>, String> {
 }
 
 // core takes conn so tests run against an in-memory db
-fn clean_apply(conn: &Connection, updates: &[CleanApplyUpdate]) -> Result<u32, String> {
+pub(crate) fn clean_apply(conn: &Connection, updates: &[CleanApplyUpdate]) -> Result<u32, String> {
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| format!("failed to begin clean apply: {e}"))?;
     let mut n = 0u32;
     for u in updates {
+        // D-1 单本还原：首次清洗前快照原 title/subtitle/source_tags（COALESCE 只存第一次，重复清洗不覆盖）
+        let original = tx
+            .query_row(
+                "SELECT title, subtitle, source_tags FROM books
+                 WHERE id = ?1 AND deleted_at IS NULL
+                   AND (title_source IS NULL OR title_source <> 'manual')",
+                params![u.book_id],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| format!("failed to read book {}: {e}", u.book_id))?;
+        let Some((old_title, old_subtitle, old_tags)) = original else { continue };
         let subtitle = if u.subtitle.trim().is_empty() { None } else { Some(u.subtitle.clone()) };
         let author = if u.author.is_empty() { None } else { Some(u.author.clone()) };
         let tags_json = serde_json::to_string(&u.source_tags).ok().filter(|s| s != "[]");
         n += tx
             .execute(
-                "UPDATE books SET title = ?2, subtitle = ?3, author = ?4, source_tags = ?5
+                "UPDATE books SET title = ?2, subtitle = ?3, author = ?4, source_tags = ?5,
+                     original_title = COALESCE(original_title, ?6),
+                     original_subtitle = COALESCE(original_subtitle, ?7),
+                     original_source_tags = COALESCE(original_source_tags, ?8)
                  WHERE id = ?1 AND deleted_at IS NULL
                    AND (title_source IS NULL OR title_source <> 'manual')",
-                params![u.book_id, u.title, subtitle, author, tags_json],
+                params![u.book_id, u.title, subtitle, author, tags_json, old_title, old_subtitle, old_tags],
             )
             .map_err(|e| format!("failed to update book {}: {e}", u.book_id))? as u32;
     }
@@ -456,6 +548,89 @@ mod tests {
     fn ampersand_entity_not_double_decoded() {
         let c = clean_title("A&amp;#124;B");
         assert_eq!(c.title, "A&#124;B");
+    }
+
+    // ---- D-1 汉化组模式（v3.1 清洗 v2）：真实风格 fixture 组 ----
+
+    #[test]
+    fn group_features_beyond_wordlist_are_stripped() {
+        // 旧词表只认「汉化/翻訳/翻译」等少数字形，字幕/繁体漢化/組/製作 全漏网
+        for (raw, tag) in [
+            ("姉しかいない [神風字幕]", "[神風字幕]"),
+            ("夜の惑星 [逍遙漢化]", "[逍遙漢化]"),
+            ("本棚 (漫畫組)", "(漫畫組)"),
+            ("放課後 [白井製作]", "[白井製作]"),
+            ("境界 (輕小說翻譯)", "(輕小說翻譯)"),
+            ("流星 [琥珀工作室]", "[琥珀工作室]"),
+            ("深海 (忘憂搬運)", "(忘憂搬運)"),
+        ] {
+            let c = clean_title(raw);
+            let title = raw.split(['[', '(']).next().unwrap().trim();
+            assert_eq!(c.title, title, "{raw}");
+            assert_eq!(c.source_tags, vec![tag.to_string()], "{raw}");
+        }
+    }
+
+    #[test]
+    fn mixed_short_group_with_feature_stripped() {
+        // 混排短组（ASCII + 中日文）认多字特征词；production 走整词边界
+        for (raw, tag) in [
+            ("標題 [WT漢化組]", "[WT漢化組]"),
+            ("標題 (LHX翻譯)", "(LHX翻譯)"),
+            ("標題 [Alice production]", "[Alice production]"),
+            ("標題 [PureSubs]", "[PureSubs]"),
+        ] {
+            let c = clean_title(raw);
+            assert_eq!(c.title, "標題", "{raw}");
+            assert_eq!(c.source_tags, vec![tag.to_string()], "{raw}");
+        }
+    }
+
+    #[test]
+    fn single_char_suffix_requires_pure_han_group() {
+        // 会/組 单字后缀对含假名组不生效——「この世で会った日」是标题片段不是组名
+        let keep = clean_title("物語 (この世で会った日)");
+        assert_eq!(keep.title, "物語 (この世で会った日)");
+        assert!(keep.source_tags.is_empty());
+        // 纯汉字短组 + 单字后缀 → 组名
+        let c = clean_title("標題 (同人組)");
+        assert_eq!(c.title, "標題");
+        assert_eq!(c.source_tags, vec!["(同人組)".to_string()]);
+        let c2 = clean_title("標題 [百合會]");
+        assert_eq!(c2.title, "標題");
+        assert_eq!(c2.source_tags, vec!["[百合會]".to_string()]);
+    }
+
+    #[test]
+    fn edition_and_semantic_groups_are_kept() {
+        // 版次/卷话/番外类括号注是标题本体，无特征词不剥
+        for raw in [
+            "タイトル (新装版)",
+            "書名 [番外篇]",
+            "小説 (上巻)",
+            "コミック (特典)",
+            "黎明 (完結篇)",
+        ] {
+            let c = clean_title(raw);
+            assert_eq!(c.title, raw, "{raw}");
+            assert!(c.source_tags.is_empty(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn ascii_feature_word_respects_boundary() {
+        // Reproduction 不含整词 production → 保留（词中匹配不算）
+        let keep = clean_title("標題 [Reproduction]");
+        assert_eq!(keep.title, "標題 [Reproduction]");
+        assert!(keep.source_tags.is_empty());
+    }
+
+    #[test]
+    fn pure_cjk_group_longer_than_eight_chars_is_kept() {
+        // 超 2-8 字的纯中日文括号段按普通括号注保留——防吞书名段（组名极少超 8 字）
+        let keep = clean_title("物語 (この世界で僕らが会うまでの話)");
+        assert_eq!(keep.title, "物語 (この世界で僕らが会うまでの話)");
+        assert!(keep.source_tags.is_empty());
     }
 
     #[test]

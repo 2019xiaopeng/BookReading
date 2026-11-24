@@ -81,7 +81,11 @@ export default function CleanTitleDialog({ onClose, onChanged }: { onClose: () =
           )}
         </div>
         <div className="wr-prompt-actions">
-          <button className="wr-btn" style={{ marginRight: "auto" }} disabled={applying} onClick={onClose}>
+          {/* D-1：应用即快照原文（original_title 等），单本书随时可还原——还原入口批次3 接 UI */}
+          <span className="wr-muted" style={{ marginRight: "auto", fontSize: 12 }}>
+            应用后可单本还原原标题
+          </span>
+          <button className="wr-btn" disabled={applying} onClick={onClose}>
             取消
           </button>
           <button

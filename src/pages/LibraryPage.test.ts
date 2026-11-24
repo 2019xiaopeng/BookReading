@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { Book } from "../tauri/invoke";
-import { filterTrash, viewKey } from "./LibraryPage";
+import { filterTrash, parseLibrarySort, viewKey } from "./LibraryPage";
 
 describe("viewKey（F1-5 滚动记忆视图键）", () => {
   test("回收站 / 根书架 / 各书架互不串位", () => {
@@ -33,6 +33,20 @@ describe("filterTrash（T-4 回收站过滤=全选口径）", () => {
     expect(filterTrash(list, "白").map((b) => b.id)).toEqual(["a", "c"]);
     expect(filterTrash(list, "乙").map((b) => b.id)).toEqual(["b"]);
     expect(filterTrash(list, "SAN TI").map((b) => b.id)).toEqual([]);
+  });
+});
+
+describe("parseLibrarySort（U-3 首帧同步读的解析半）", () => {
+  test("合法 JSON 取 key/asc", () => {
+    expect(parseLibrarySort('{"key":"title","asc":true}')).toEqual({ key: "title", asc: true });
+    expect(parseLibrarySort('{"key":"custom","asc":false}')).toEqual({ key: "custom", asc: false });
+  });
+
+  test("缺失/非法键回默认最近阅读·降序", () => {
+    expect(parseLibrarySort(undefined)).toEqual({ key: "recent", asc: false });
+    expect(parseLibrarySort("{}")).toEqual({ key: "recent", asc: false });
+    expect(parseLibrarySort('{"key":"bogus","asc":"yes"}')).toEqual({ key: "recent", asc: false });
+    expect(parseLibrarySort("not json")).toEqual({ key: "recent", asc: false });
   });
 });
 

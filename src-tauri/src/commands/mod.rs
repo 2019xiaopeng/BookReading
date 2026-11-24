@@ -12,3 +12,4 @@ pub mod tags;
 pub mod update;
 pub mod metadata_clean;
 pub mod wenku8;
+pub mod cleaning_v2;

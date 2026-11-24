@@ -2,12 +2,15 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getVersion } from "@tauri-apps/api/app";
-import { IconBook, IconCloud, IconImage, IconPalette, IconRefresh, IconSearch, IconSettings, IconStar, IconTrash } from "./icons";
+import { IconBook, IconCloud, IconImage, IconPalette, IconRefresh, IconSearch, IconSettings, IconStar, IconTrash, IconClose } from "./icons";
 import { getCachedBackgroundUrl, getBackgroundUrl, subscribeBackground } from "./appBackground";
 import { emitAppRefresh } from "./appActions";
 import { importBooks, importImages } from "./importService";
 import { applyPersistedTheme, setTheme, THEME_SWATCHES, useThemeSelection } from "./theme";
 import { getSettings, listBooks, listShelves, setSetting, type Book, type Shelf } from "../tauri/invoke";
+import { getAppDataBase } from "../tauri/appDataPaths";
+import { primeSettingsCache } from "../library/settingsCache";
+import { primeCoverLibraryRoot } from "../library/coverSrc";
 import { normalizeBgVeil, normalizeReaderBackground } from "../reader/settings/normalize";
 import { countByShelf, descendantIds, shelfTreeRows, type ShelfTreeRow } from "../library/shelves";
 import type { ReadingStatus } from "../library/readingStatus";
@@ -200,6 +203,8 @@ export default function AppShell(props: {
   const [importProgress, setImportProgress] = useState<ImportProgress>(null);
   const themeBtnRef = useRef<HTMLButtonElement | null>(null);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
+  // U-18 搜索清理叉：清空后回焦输入框（mousedown preventDefault 保住鼠标路径的焦点）
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [searchParams] = useSearchParams();
   const activeShelf = props.active === "library" ? searchParams.get("shelf") : null;
   const trashActive = props.active === "library" && searchParams.get("trash") === "1";
@@ -216,6 +221,10 @@ export default function AppShell(props: {
       try {
         const map = await getSettings();
         if (cancelled) return;
+        // U-3 密度闪帧：settings 到达即预热模块缓存——LibraryPage 等首帧初始化同步读，不再回退默认档
+        primeSettingsCache(map);
+        // U-19 持久封面通道：库根（settings.library_root 自定义根，缺省 appdata）随同一次读取预热
+        primeCoverLibraryRoot(map.library_root || (await getAppDataBase()));
         applyPersistedTheme(map.theme);
         primeCloseAction(map.close_action); // C-1：✕ 行为记忆与主题共用这一次 settings 读
         setVeil(parseBgVeil(map.bg_veil));
@@ -511,11 +520,12 @@ export default function AppShell(props: {
       <div className="wr-panel wr-main">
         <div className="wr-main-topbar">
           {props.search ? (
-            <div className="wr-search">
+            <div className={props.search.value ? "wr-search wr-search--clearable" : "wr-search"}>
               <span className="wr-search-icon" aria-hidden>
                 <IconSearch />
               </span>
               <input
+                ref={searchInputRef}
                 className="wr-search-input"
                 value={props.search.value}
                 onChange={(e) => props.search?.onChange(e.currentTarget.value)}
@@ -525,6 +535,21 @@ export default function AppShell(props: {
                 placeholder={props.search.placeholder}
                 aria-label={props.search.placeholder}
               />
+              {props.search.value ? (
+                <button
+                  type="button"
+                  className="wr-search-clear"
+                  aria-label="清空搜索"
+                  title="清空搜索"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    props.search?.onChange("");
+                    searchInputRef.current?.focus();
+                  }}
+                >
+                  <IconClose />
+                </button>
+              ) : null}
             </div>
           ) : (
             <h1 style={{ fontWeight: 750, margin: 0, fontSize: "inherit" }}>{props.title}</h1>

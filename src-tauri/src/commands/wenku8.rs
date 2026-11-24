@@ -21,11 +21,17 @@ use crate::db;
 use crate::models::ImportBookRequest;
 
 const RELAY_URL: &str = "https://wenku8-relay.mewx.org/";
+// C-2 直连备胎：源站原生 API，方言与中继不同（niuhuan/wild 实测）
+const DIRECT_URL: &str = "http://app.wenku8.com/api.php";
 const UA: &str = "Dalvik/2.1.0 (Linux; U; Android 7.1.2; unknown Build/NZH54D)";
 // settings 表键
 const KEY_COOKIE: &str = "wenku8.cookie";
 const KEY_USER: &str = "wenku8.user";
 const KEY_PASS: &str = "wenku8.pass";
+const KEY_ENDPOINT: &str = "wenku8.endpoint"; // auto | relay | direct（缺省 auto）
+const KEY_PROXY_HOST: &str = "proxy.host"; // C-3 代理三键（update.rs 老下载命令共用）
+const KEY_PROXY_PORT: &str = "proxy.port";
+const KEY_PROXY_ENABLED: &str = "proxy.enabled";
 
 /// 登录结果。ok=true 时 session cookie 已存入 settings（key: wenku8.cookie）。
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -199,36 +205,139 @@ fn current_appver() -> String {
     v
 }
 
-// ---- HTTP ----
+// ---- HTTP（C-2 双端点 + C-3 可配代理）----
 
-fn client() -> &'static reqwest::blocking::Client {
-    static C: OnceLock<reqwest::blocking::Client> = OnceLock::new();
-    C.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(5))
-            // blocking 构建器无独立 read_timeout，30s 总超时近似读超时
-            .timeout(Duration::from_secs(30))
-            // 系统代理探测在 Tauri 进程内可能挂起（update.rs 先例）；中继直连可达
-            .no_proxy()
-            .build()
-            .expect("wenku8 relay client build")
-    })
+/// 接入地址。两方言见 relay_body/direct_body。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Endpoint {
+    Relay,
+    Direct,
 }
 
-/// 发一个 action（明文 → base64 → 中继根路径 POST）。cookie 可选。
-fn send_action(action: &str, cookie: Option<&str>) -> Result<reqwest::blocking::Response, String> {
-    let body = format!(
-        "&appver={}&request={}&timetoken={}",
-        current_appver(),
-        b64_encode(action.as_bytes()),
-        now_ms()
-    );
-    let mut req = client()
-        .post(RELAY_URL)
+impl Endpoint {
+    fn url(self) -> &'static str {
+        match self {
+            Endpoint::Relay => RELAY_URL,
+            Endpoint::Direct => DIRECT_URL,
+        }
+    }
+    fn other(self) -> Self {
+        match self {
+            Endpoint::Relay => Endpoint::Direct,
+            Endpoint::Direct => Endpoint::Relay,
+        }
+    }
+    fn as_str(self) -> &'static str {
+        match self {
+            Endpoint::Relay => "relay",
+            Endpoint::Direct => "direct",
+        }
+    }
+}
+
+/// auto 模式会话记忆：本进程内记住网络层切换后可用的端点（不落库）
+static SESSION_ENDPOINT: Mutex<Option<Endpoint>> = Mutex::new(None);
+
+/// 纯函数：settings 值 → 固定端点（None = auto；未设置/非法值均归 auto）
+fn fixed_endpoint(setting: Option<&str>) -> Option<Endpoint> {
+    match setting.map(str::trim) {
+        Some(s) if s.eq_ignore_ascii_case("relay") => Some(Endpoint::Relay),
+        Some(s) if s.eq_ignore_ascii_case("direct") => Some(Endpoint::Direct),
+        _ => None,
+    }
+}
+
+/// 纯函数：auto 首选端点 = 会话记忆，无记忆默认中继
+fn auto_first(remembered: Option<Endpoint>) -> Endpoint {
+    remembered.unwrap_or(Endpoint::Relay)
+}
+
+/// 纯函数：代理三键 → "http://host:port"。enabled 真值（1/true）且 host 非空、port 合法 u16 才启用。
+pub(crate) fn parse_proxy(host: Option<&str>, port: Option<&str>, enabled: Option<&str>) -> Option<String> {
+    let on = matches!(enabled.map(str::trim), Some(v) if v == "1" || v.eq_ignore_ascii_case("true"));
+    if !on {
+        return None;
+    }
+    let host = host?.trim();
+    if host.is_empty() {
+        return None;
+    }
+    let port = port?.trim().parse::<u16>().ok()?;
+    Some(format!("http://{host}:{port}"))
+}
+
+/// 读 settings 得代理地址（update.rs 老下载命令共用）
+pub(crate) fn proxy_url(app: &tauri::AppHandle) -> Result<Option<String>, String> {
+    Ok(parse_proxy(
+        setting_get(app, KEY_PROXY_HOST)?.as_deref(),
+        setting_get(app, KEY_PROXY_PORT)?.as_deref(),
+        setting_get(app, KEY_PROXY_ENABLED)?.as_deref(),
+    ))
+}
+
+fn build_client(proxy: Option<&str>, timeout: Duration) -> Result<reqwest::blocking::Client, String> {
+    let mut b = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
+        // blocking 构建器无独立 read_timeout，总超时近似读超时
+        .timeout(timeout)
+        // 系统代理探测在 Tauri 进程内可能挂起（update.rs 先例）；中继直连可达。
+        // 显式 .proxy() 不受 no_proxy 影响（update.rs 同款已在生产验证）
+        .no_proxy();
+    if let Some(p) = proxy {
+        b = b.proxy(reqwest::Proxy::all(p).map_err(|e| format!("代理配置无效：{e}"))?);
+    }
+    b.build().map_err(|e| format!("构建 HTTP 客户端失败：{e}"))
+}
+
+/// 主客户端：按当前代理配置缓存（Client 内部是 Arc，克隆廉价）；代理配置变更后下一次请求生效
+fn client_for(app: &tauri::AppHandle) -> Result<reqwest::blocking::Client, String> {
+    static CACHE: Mutex<Option<(Option<String>, reqwest::blocking::Client)>> = Mutex::new(None);
+    let proxy = proxy_url(app)?;
+    let mut g = CACHE.lock().unwrap();
+    if let Some((p, c)) = g.as_ref() {
+        if *p == proxy {
+            return Ok(c.clone());
+        }
+    }
+    let c = build_client(proxy.as_deref(), Duration::from_secs(30))?;
+    *g = Some((proxy, c.clone()));
+    Ok(c)
+}
+
+// ---- 请求 body（两方言）----
+
+/// 中继方言：前导 &、HMAC appver、timetoken 毫秒；request 值为原始 base64 不 urlencode（协议实测）
+fn relay_body(action: &str, ms: i64) -> String {
+    format!("&appver={}&request={}&timetoken={}", current_appver(), b64_encode(action.as_bytes()), ms)
+}
+
+/// 直连方言（niuhuan/wild 实测）：无前导 &、固定 appver=1.21、timestamp 秒
+fn direct_body(action: &str, ms: i64) -> String {
+    format!("request={}&appver=1.21&timestamp={}", b64_encode(action.as_bytes()), ms / 1000)
+}
+
+fn endpoint_body(ep: Endpoint, action: &str, ms: i64) -> String {
+    match ep {
+        Endpoint::Relay => relay_body(action, ms),
+        Endpoint::Direct => direct_body(action, ms),
+    }
+}
+
+/// 用给定客户端向端点发一个 action。Err = 网络层失败（send 错误/HTTP 非 2xx）；
+/// 业务 errcode 在成功响应的 body 文本里，由调用方解析。
+fn post_action(
+    client: &reqwest::blocking::Client,
+    ep: Endpoint,
+    action: &str,
+    cookie: Option<&str>,
+) -> Result<reqwest::blocking::Response, String> {
+    let body = endpoint_body(ep, action, now_ms());
+    let mut req = client
+        .post(ep.url())
         .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
         .header("User-Agent", UA)
-        .body(body); // request 值为原始 base64，不做 urlencode（协议实测要求）
+        .body(body);
     if let Some(c) = cookie {
         req = req.header("Cookie", c);
     }
@@ -237,6 +346,34 @@ fn send_action(action: &str, cookie: Option<&str>) -> Result<reqwest::blocking::
         return Err(format!("wenku8 服务返回 HTTP {}", resp.status()));
     }
     Ok(resp)
+}
+
+fn try_endpoint(app: &tauri::AppHandle, ep: Endpoint, action: &str, cookie: Option<&str>) -> Result<reqwest::blocking::Response, String> {
+    post_action(&client_for(app)?, ep, action, cookie)
+}
+
+/// 发一个 action（自动选端点）。固定模式（relay/direct）不切换；
+/// auto 先用会话记忆（默认中继），网络层失败（非 errcode）换另一端点重试一次并记住可用者（仅本会话）。
+fn send_action(app: &tauri::AppHandle, action: &str, cookie: Option<&str>) -> Result<reqwest::blocking::Response, String> {
+    let fixed = fixed_endpoint(setting_get(app, KEY_ENDPOINT)?.as_deref());
+    let first = match fixed {
+        Some(ep) => ep,
+        None => auto_first(*SESSION_ENDPOINT.lock().unwrap()),
+    };
+    match try_endpoint(app, first, action, cookie) {
+        Ok(r) => Ok(r),
+        Err(e1) if fixed.is_none() => {
+            let alt = first.other();
+            match try_endpoint(app, alt, action, cookie) {
+                Ok(r) => {
+                    *SESSION_ENDPOINT.lock().unwrap() = Some(alt);
+                    Ok(r)
+                }
+                Err(e2) => Err(format!("{e1}；切换备用地址重试仍失败：{e2}")),
+            }
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// settings 表读写（与 reading.rs 同款 SQL）
@@ -265,7 +402,7 @@ fn setting_set(app: &tauri::AppHandle, key: &str, value: &str) -> Result<(), Str
 /// 登录核心：发 login action，成功则收下全部 Set-Cookie 存表，同时记住账密供自动重登。
 fn do_login(app: &tauri::AppHandle, username: &str, password: &str) -> Result<Wenku8LoginResult, String> {
     let action = format!("action=login&username={}&password={}", pct_encode(username), pct_encode(password));
-    let resp = send_action(&action, None)?;
+    let resp = send_action(app, &action, None)?;
     // text() 会消费 Response，先取 Set-Cookie
     let cookies: Vec<String> = resp
         .headers()
@@ -302,7 +439,7 @@ fn do_login(app: &tauri::AppHandle, username: &str, password: &str) -> Result<We
 /// 带 cookie 发请求；返回 "4"（未登录）时用存着的账密自动重登一次并原样重试。
 fn wenku8_action(app: &tauri::AppHandle, action: &str) -> Result<String, String> {
     let cookie = setting_get(app, KEY_COOKIE)?;
-    let body = send_action(action, cookie.as_deref())?
+    let body = send_action(app, action, cookie.as_deref())?
         .text()
         .map_err(|e| format!("读取响应失败：{e}"))?;
     if body.trim() != "4" {
@@ -317,7 +454,7 @@ fn wenku8_action(app: &tauri::AppHandle, action: &str) -> Result<String, String>
     if !re.ok {
         return Err(format!("wenku8 自动重登失败：{}", re.message));
     }
-    let body2 = send_action(action, setting_get(app, KEY_COOKIE)?.as_deref())?
+    let body2 = send_action(app, action, setting_get(app, KEY_COOKIE)?.as_deref())?
         .text()
         .map_err(|e| format!("读取响应失败：{e}"))?;
     if body2.trim() == "4" {
@@ -477,6 +614,42 @@ fn logout_inner(app: &tauri::AppHandle) -> Result<(), String> {
     setting_set(app, KEY_USER, "")?;
     setting_set(app, KEY_PASS, "")?;
     Ok(())
+}
+
+/// C-2 端点状态：当前选择 + auto 会话记忆 + 两地址连通探测（短超时轻量请求，结果不落库）。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Wenku8EndpointStatus {
+    pub setting: String, // settings 实际值："auto" | "relay" | "direct"（缺省 auto）
+    pub session: String, // auto 会话记忆："relay" | "direct" | ""（本会话未发生过切换）
+    pub relay_ok: bool,
+    pub direct_ok: bool,
+}
+
+#[tauri::command(async)]
+pub fn wenku8_endpoint_status(app: tauri::AppHandle) -> Result<Wenku8EndpointStatus, String> {
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Wenku8EndpointStatus, String>>();
+    std::thread::spawn(move || {
+        let _ = tx.send(endpoint_status_inner(&app));
+    });
+    rx.recv().map_err(|_| "端点探测线程异常退出".to_string())?
+}
+
+fn endpoint_status_inner(app: &tauri::AppHandle) -> Result<Wenku8EndpointStatus, String> {
+    let setting = setting_get(app, KEY_ENDPOINT)?
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "auto".into());
+    let session = SESSION_ENDPOINT.lock().unwrap().map(Endpoint::as_str).unwrap_or("").to_string();
+    // 探测：短超时客户端发一个轻量 action，拿到 2xx 即连通；不解析 body、不落库
+    let cookie = setting_get(app, KEY_COOKIE)?.filter(|c| !c.is_empty());
+    let probe_client = build_client(proxy_url(app)?.as_deref(), Duration::from_secs(8));
+    let (relay_ok, direct_ok) = match probe_client {
+        Ok(c) => (
+            post_action(&c, Endpoint::Relay, "action=bookcase&do=list", cookie.as_deref()).is_ok(),
+            post_action(&c, Endpoint::Direct, "action=bookcase&do=list", cookie.as_deref()).is_ok(),
+        ),
+        Err(_) => (false, false),
+    };
+    Ok(Wenku8EndpointStatus { setting, session, relay_ok, direct_ok })
 }
 
 #[tauri::command(async)]
@@ -663,7 +836,7 @@ fn download_inner(app: &tauri::AppHandle, aid: i64, shelf_id: Option<i64>) -> Re
     std::fs::write(&tmp, book.as_bytes()).map_err(|e| format!("写临时文件失败：{e}"))?;
 
     let cover_url = format!("http://img.wenku8.com/image/{}/{aid}/{aid}s.jpg", aid / 1000);
-    let cover = client()
+    let cover = client_for(app)?
         .get(&cover_url)
         .send()
         .ok()
@@ -749,6 +922,62 @@ mod tests {
     fn appver_matches_openssl_vectors() {
         assert_eq!(appver_for(30477000), "1.29-digital-bento-eeefb41a");
         assert_eq!(appver_for(0), "1.29-digital-bento-dd6b7b47");
+    }
+
+    #[test]
+    fn relay_body_leading_amp_timestoken_ms() {
+        let b = relay_body("action=book&do=list", 1_725_000_000_123);
+        // 前导 &（中继方言）
+        assert!(b.starts_with('&'));
+        assert!(!b.starts_with("request="));
+        // timetoken 毫秒原样透传；request 原始 base64；HMAC appver
+        assert!(b.contains("&timetoken=1725000000123"));
+        assert!(b.contains(&format!("&request={}", b64_encode(b"action=book&do=list"))));
+        assert!(b.starts_with("&appver=1.29-digital-bento-"));
+        assert_eq!(b.matches('&').count(), 3);
+    }
+
+    #[test]
+    fn direct_body_no_amp_timestamp_seconds() {
+        let b = direct_body("action=book&do=list", 1_725_000_000_123);
+        // 直连方言：无前导 &、固定 appver=1.21、timestamp 秒（字段名不同于中继的 timetoken）
+        assert_eq!(
+            b,
+            format!("request={}&appver=1.21&timestamp=1725000000", b64_encode(b"action=book&do=list"))
+        );
+    }
+
+    #[test]
+    fn endpoint_selection_pure_fns() {
+        // settings 值 → 固定端点；未设置/auto/非法值归 auto
+        assert_eq!(fixed_endpoint(None), None);
+        assert_eq!(fixed_endpoint(Some("auto")), None);
+        assert_eq!(fixed_endpoint(Some("bogus")), None);
+        assert_eq!(fixed_endpoint(Some(" relay ")), Some(Endpoint::Relay));
+        assert_eq!(fixed_endpoint(Some("DIRECT")), Some(Endpoint::Direct));
+        // auto 首选 = 会话记忆，无记忆默认中继；切换取另一端
+        assert_eq!(auto_first(None), Endpoint::Relay);
+        assert_eq!(auto_first(Some(Endpoint::Direct)), Endpoint::Direct);
+        assert_eq!(Endpoint::Relay.other(), Endpoint::Direct);
+        assert_eq!(Endpoint::Direct.other(), Endpoint::Relay);
+        assert_eq!(Endpoint::Relay.as_str(), "relay");
+        assert_eq!(Endpoint::Relay.url(), RELAY_URL);
+        assert_eq!(Endpoint::Direct.url(), DIRECT_URL);
+    }
+
+    #[test]
+    fn proxy_settings_parsing() {
+        let url = "http://127.0.0.1:7897".to_string();
+        assert_eq!(parse_proxy(Some("127.0.0.1"), Some("7897"), Some("1")), Some(url.clone()));
+        assert_eq!(parse_proxy(Some("127.0.0.1"), Some("7897"), Some("true")), Some(url.clone()));
+        assert_eq!(parse_proxy(Some(" 127.0.0.1 "), Some(" 7897 "), Some("1")), Some(url));
+        // 关闭 / 未设置 / 缺 host / 空 host / 非法端口 / 超范围端口 → 不走代理
+        assert_eq!(parse_proxy(Some("h"), Some("1"), Some("0")), None);
+        assert_eq!(parse_proxy(Some("h"), Some("1"), None), None);
+        assert_eq!(parse_proxy(None, Some("1"), Some("1")), None);
+        assert_eq!(parse_proxy(Some(""), Some("1"), Some("1")), None);
+        assert_eq!(parse_proxy(Some("h"), Some("abc"), Some("1")), None);
+        assert_eq!(parse_proxy(Some("h"), Some("99999"), Some("1")), None);
     }
 
     #[test]

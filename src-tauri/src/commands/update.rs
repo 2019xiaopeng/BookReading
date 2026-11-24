@@ -1,5 +1,6 @@
 // v2.7 U-1/U-2/U-5 应用内更新：GitHub Releases 检查 + 一键下载安装（NSIS 原地升级，半自动方案）。
-// 网络尝试顺序：直连(6s) → 本地代理 127.0.0.1:7897 → 7890；版本比较在前端复核，Rust 侧只给字符串与布尔。
+// 网络尝试顺序：用户代理(settings proxy.*，下载命令) → 直连(6s) → 本地代理 127.0.0.1:7897 → 7890；
+// 版本比较在前端复核，Rust 侧只给字符串与布尔。
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -44,25 +45,35 @@ fn client(proxy: Option<&str>, timeout: Duration) -> Result<reqwest::blocking::C
         .timeout(timeout)
         .connect_timeout(timeout)
         .no_proxy();
-    if let Some(port) = proxy {
-        b = b.proxy(
-            reqwest::Proxy::all(format!("http://127.0.0.1:{port}")).map_err(|e| e.to_string())?,
-        );
+    if let Some(url) = proxy {
+        b = b.proxy(reqwest::Proxy::all(url).map_err(|e| e.to_string())?);
     }
     let b = b.user_agent(concat!("BookReading/", env!("CARGO_PKG_VERSION"))); // GitHub API 必须带 UA
     b.build().map_err(|e| e.to_string())
 }
 
-// 直连与两个本地代理依次尝试；任一成功即用。
+/// C-3：尝试链 = 用户代理（settings proxy.*，可选）→ 直连 → 本地代理 7897 → 7890。
+/// 纯函数，供测试。
+fn attempt_proxies(user_proxy: Option<&str>) -> Vec<Option<String>> {
+    let mut v: Vec<Option<String>> = user_proxy.map(|u| Some(u.to_string())).into_iter().collect();
+    v.push(None);
+    v.push(Some(format!("http://127.0.0.1:{}", PROXY_PORTS[0])));
+    v.push(Some(format!("http://127.0.0.1:{}", PROXY_PORTS[1])));
+    v
+}
+
+fn attempt_clients(user_proxy: Option<&str>) -> Vec<Result<reqwest::blocking::Client, String>> {
+    attempt_proxies(user_proxy)
+        .into_iter()
+        .map(|p| client(p.as_deref(), if p.is_some() { PROXY_TIMEOUT } else { DIRECT_TIMEOUT }))
+        .collect()
+}
+
+// 用户代理→直连→两个本地代理依次尝试；任一成功即用。
 // 代理 403=出口 IP 被 GitHub 限流也算失败，继续尝试（f 回调校验 status）。
-fn with_fallback<T>(mut f: impl FnMut(&reqwest::blocking::Client) -> Result<T, String>) -> Result<T, String> {
-    let attempts: Vec<Result<reqwest::blocking::Client, String>> = vec![
-        client(None, DIRECT_TIMEOUT),
-        client(Some(PROXY_PORTS[0]), PROXY_TIMEOUT),
-        client(Some(PROXY_PORTS[1]), PROXY_TIMEOUT),
-    ];
+fn with_fallback<T>(user_proxy: Option<&str>, mut f: impl FnMut(&reqwest::blocking::Client) -> Result<T, String>) -> Result<T, String> {
     let mut last = String::new();
-    for c in attempts.into_iter().flatten() {
+    for c in attempt_clients(user_proxy).into_iter().flatten() {
         match f(&c) {
             Ok(v) => return Ok(v),
             Err(e) => last = e,
@@ -95,11 +106,7 @@ pub fn check_app_update() -> Result<UpdateInfo, String> {
 }
 
 fn check_app_update_inner() -> Result<UpdateInfo, String> {
-    let attempts: Vec<Result<reqwest::blocking::Client, String>> = vec![
-        client(None, DIRECT_TIMEOUT),
-        client(Some(PROXY_PORTS[0]), PROXY_TIMEOUT),
-        client(Some(PROXY_PORTS[1]), PROXY_TIMEOUT),
-    ];
+    let attempts = attempt_clients(None);
     let mut last_err = String::new();
     let mut release: Option<GhRelease> = None;
     for c in attempts.into_iter().flatten() {
@@ -176,8 +183,9 @@ fn download_app_update_inner(app: tauri::AppHandle, asset_url: String) -> Result
         .unwrap_or("update.exe");
     let path = dir.join(name);
 
-    // 直连/代理依次尝试下载（下载体量大，代理超时放宽到 10s 只管建连）
-    let mut response = with_fallback(|c| {
+    // C-3：下载优先走用户配置的代理（settings proxy.*），失败回落直连+本地代理链
+    let user_proxy = crate::commands::wenku8::proxy_url(&app).ok().flatten();
+    let mut response = with_fallback(user_proxy.as_deref(), |c| {
         let resp = c.get(&asset_url).timeout(Duration::from_secs(30)).send().map_err(|e| e.to_string())?;
         if !resp.status().is_success() {
             return Err(format!("HTTP {}", resp.status()));
@@ -268,6 +276,19 @@ mod tests {
     fn installer_path_must_be_exe_inside_update_dir() {
         assert!(run_update_installer(update_dir().join("x.exe").to_string_lossy().into_owned()).is_err());
         assert!(run_update_installer("C:\\Windows\\notepad.exe".into()).is_err());
+    }
+
+    #[test]
+    fn user_proxy_goes_first_in_attempt_chain() {
+        let v = attempt_proxies(Some("http://10.0.0.2:8888"));
+        assert_eq!(v.len(), 4);
+        assert_eq!(v[0].as_deref(), Some("http://10.0.0.2:8888"));
+        assert_eq!(v[1], None); // 直连兜底仍在用户代理之后
+        assert_eq!(v[2].as_deref(), Some("http://127.0.0.1:7897"));
+        assert_eq!(v[3].as_deref(), Some("http://127.0.0.1:7890"));
+        let v2 = attempt_proxies(None);
+        assert_eq!(v2.len(), 3);
+        assert_eq!(v2[0], None);
     }
 }
 

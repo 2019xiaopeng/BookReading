@@ -573,6 +573,7 @@
   padding: 11px 14px 11px 40px;
   outline: none;
   color: var(--wr-ink);
+  transition: border-color 0.15s ease;
 }
 
 [data-theme="dark"] .wr-search-input,
@@ -580,9 +581,36 @@
   background: rgba(var(--wr-ink-rgb), 0.06);
 }
 
+/* U-18 聚焦态：碳墨细 accent 线——border-color 过渡，无外扩黑环/变色圈 */
 .wr-search-input:focus {
-  border-color: rgba(var(--wr-accent-rgb), 0.35);
-  box-shadow: 0 0 0 4px rgba(var(--wr-accent-rgb), 0.12);
+  border-color: rgba(var(--wr-accent-rgb), 0.55);
+}
+
+/* U-18 一键清空：非空才出现（父级 wr-search--clearable），给输入文字让出右侧 */
+.wr-search--clearable .wr-search-input {
+  padding-right: 36px;
+}
+
+.wr-search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--wr-muted);
+  cursor: pointer;
+}
+
+.wr-search-clear:hover {
+  color: var(--wr-ink);
+  background: rgba(var(--wr-ink-rgb), 0.06);
 }
 
 /* M2 评审：UA 默认 placeholder #757575 在八主题 2.8–4.3:1 均低于 AA，统一取墨阶次级色（各主题实测 ≥4.58:1） */
@@ -696,7 +724,7 @@
 .wr-nav-btn:focus-visible,
 .wr-seg-btn:focus-visible,
 .wr-small-btn:focus-visible,
-.wr-search-input:focus-visible,
+/* U-18：搜索框移出本组——聚焦改细 accent 线（见 .wr-search-input:focus），不再外扩黑环 */
 .wr-toc-item:focus-visible {
   outline: 2px solid var(--wr-ink);
   outline-offset: 2px;

@@ -19,9 +19,10 @@ use commands::library::{
     update_book_metadata,
 };
 use commands::metadata_clean::{clean_title_apply, clean_title_preview};
+use commands::cleaning_v2::{clean_sample_report, revert_title};
 use commands::wenku8::{
-    wenku8_book_info, wenku8_bookshelf, wenku8_catalog, wenku8_download, wenku8_login,
-    wenku8_logout, wenku8_status,
+    wenku8_book_info, wenku8_bookshelf, wenku8_catalog, wenku8_download, wenku8_endpoint_status,
+    wenku8_login, wenku8_logout, wenku8_status,
 };
 use commands::images::{
     import_image_folder, list_image_page_meta, list_image_pages, list_image_subdirs,
@@ -171,6 +172,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        // C-1：官方更新器（Builder 默认；Windows installMode=passive 在 tauri.conf plugins.updater.windows）。
+        // 插件自身不支持代理，走系统直连——弱网环境说明留给前端/文档层（老 update.rs 命令仍可作代理下载备胎）。
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             list_books,
             get_book,
@@ -199,9 +203,12 @@ pub fn run() {
             update_book_metadata,
             clean_title_preview,
             clean_title_apply,
+            clean_sample_report,
+            revert_title,
             wenku8_login,
             wenku8_logout,
             wenku8_status,
+            wenku8_endpoint_status,
             wenku8_bookshelf,
             wenku8_book_info,
             wenku8_download,

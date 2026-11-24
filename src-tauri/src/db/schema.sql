@@ -31,7 +31,11 @@ CREATE TABLE IF NOT EXISTS books (
   manual_status TEXT NULL,
   subtitle TEXT NULL,
   source_tags TEXT NULL,
-  title_source TEXT NULL DEFAULT 'import'
+  title_source TEXT NULL DEFAULT 'import',
+  -- v3.1 D-1 单本还原：clean_apply 首次清洗前快照（与 ensure_book_columns 加列保持同步）
+  original_title TEXT NULL,
+  original_subtitle TEXT NULL,
+  original_source_tags TEXT NULL
 );
 
 CREATE TABLE IF NOT EXISTS reading_state (
