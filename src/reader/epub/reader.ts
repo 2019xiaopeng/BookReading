@@ -458,7 +458,12 @@ export async function createReader(opts: {
         [`body.${t} p`]: pRules,
       });
     }
-    rendition.themes.select(currentTheme);
+    // 防御：字体切换时 rendition 可能已销毁或 iframe 未就绪——themes.select 内部 insertRule 对 null sheet 直接崩
+    try {
+      rendition.themes.select(currentTheme);
+    } catch {
+      // 静默降级：主题注入失败不阻断阅读（下次重排/重开自然修复）
+    }
   };
   registerThemes();
   rendition.themes.fontSize("120%");

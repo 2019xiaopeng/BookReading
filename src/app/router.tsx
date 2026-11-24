@@ -37,6 +37,18 @@ export function AppLayout() {
 export const router = createBrowserRouter([
   {
     element: <LogicalBackLayer />,
+    errorElement: (
+      <div style={{ padding: 48, fontFamily: "Segoe UI, sans-serif", color: "#333" }}>
+        <h2>页面出错了</h2>
+        <p style={{ fontSize: 14, color: "#666" }}>阅读器内部发生异常，请返回书架重新打开这本书。切换字体/排版时偶发的此错误不影响书库数据。</p>
+        <button
+          style={{ marginTop: 20, padding: "10px 24px", cursor: "pointer" }}
+          onClick={() => window.location.assign("/")}
+        >
+          返回书架
+        </button>
+      </div>
+    ),
     children: [
       {
         element: <AppLayout />,

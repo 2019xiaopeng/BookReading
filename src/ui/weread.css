@@ -4002,113 +4002,17 @@ body::after {
 
 /* V-4 窄窗体系已永久移除（用户 2026-11-24 裁定：固定完整侧栏+常驻搜索框，不做图标化折叠） */
 
-/* <900：搜索收为图标钮，点击展开浮层输入框（Ctrl+F 任何宽度唤起） */
-@media (max-width: 899px) {
-  .wr-main-topbar {
-    position: relative;
-  }
+/* V-4 已删：<900 搜索收起 */
 
   }
 
-/* 600–799：侧栏 56px 图标栏（宽度由 --wr-sidebar-w=56 给出；文字隐、图标居中、Tooltip 补词） */
-/* V-4 修正：rail 档仅在 <720 理论触发（minWidth=720 不可达，布局恒完整） */
-@media (max-width: 719px) {
-  .wr-side-top {
-    min-height: 0;
-    padding: 12px 6px;
-    justify-content: center;
-  }
-
-  .wr-brand,
-  .wr-pill {
-    display: none;
-  }
-
-  .wr-nav {
-    padding: 8px 4px;
-  }
-
-  .wr-nav-btn {
-    display: flex;
-    justify-content: center;
-    padding: 10px 0;
-  }
-
-  .wr-nav-title {
-    justify-content: center;
-  }
-
-  .wr-nav-label,
-  .wr-nav-sub {
-    display: none;
-  }
-
-  .wr-nav-tree-tools,
-  .wr-nav-count {
-    display: none;
-  }
-
-  .wr-nav-groups {
-    padding-left: 0;
-  }
-
-  /* 底部四钮 2×2 图标宫格（Tooltip 提示） */
-  .wr-side-bottom {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .wr-small-btn {
-    padding: 9px 0;
-  }
-
-  .wr-small-btn > span {
-    display: none;
-  }
-}
+/* V-4 已删：侧栏图标栏 */
 
 /* <600：侧栏整个转抽屉（汉堡钮开关 + overlay；当前窗口 minWidth=720，档位待放宽即生效） */
-.wr-nav-drawer-btn {
-  display: none;
-}
 
-.wr-side-drawer-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: calc(var(--wr-z-overlay) - 1);
-  background: var(--wr-scrim);
-  animation: wr-fade-in 160ms ease both;
-}
 
-@media (max-width: 599px) {
-  .wr-shell-body {
-    grid-template-columns: 1fr;
-    gap: 0;
-    padding: 0 10px 10px;
-  }
+/* V-4 已删：抽屉 <600 */
 
-  /* 抽屉内恢复完整侧栏（56px 图标栏规则用 600–799 区间断点，此处天然不命中） */
-  .wr-side {
-    position: fixed;
-    left: 0;
-    top: 32px;
-    bottom: 0;
-    width: 270px;
-    border-radius: 0 var(--wr-radius-xl) var(--wr-radius-xl) 0;
-    box-shadow: var(--wr-shadow-pop);
-    transform: translateX(-102%);
-    transition: transform 180ms ease;
-    z-index: var(--wr-z-overlay);
-  }
-
-  .wr-side[data-open="true"] {
-    transform: none;
-  }
-
-  .wr-nav-drawer-btn {
-    display: inline-flex;
-  }
-}
 
 @media (prefers-reduced-motion: reduce) {
   .wr-side {
