@@ -1,3 +1,6 @@
+/* 弹窗锁定滚动时滚动条消失会引起 ~17px 布局右移——gutter 预留防跳 */
+html { scrollbar-gutter: stable; }
+
 :root {
   color-scheme: light;
   --wr-bg: #f6f4ef;
