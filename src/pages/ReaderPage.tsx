@@ -1513,7 +1513,7 @@ export default function ReaderPage() {
       fold: null as FoldHandle | null,
       interrupt: () => {
         turn.interrupted = true;
-        turn.fold?.finish();
+        turn.fold?.accelerate(); // V-1：中断=3倍速完成而非跳终态，保底折页动作可见
       },
       steal: () => {
         const o = turn.overlay;

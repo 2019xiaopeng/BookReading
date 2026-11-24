@@ -2179,6 +2179,9 @@ input[type="range"] {
   overflow: hidden;
   will-change: transform;
   backface-visibility: hidden; /* 过 90° 后见书页背面（镜像文字）——直接隐藏，露下方已就绪的新页 */
+  /* V-1 修正：EPUB iframe 克隆因 blob URL 失效常为透明——给实底色兜底，
+     至少翻页中间看到的是纸色而非白色闪光 */
+  background: var(--wr-paper, #f5f0e8);
 }
 .wr-fold-layer::before {
   content: "";

@@ -21,7 +21,7 @@ export function foldCrease(p: number): number {
   return Math.sin(Math.PI * Math.min(1, Math.max(0, p)));
 }
 
-export type FoldHandle = { finish: () => void; done: Promise<void> };
+export type FoldHandle = { finish: () => void; accelerate: () => void; done: Promise<void> };
 
 /** rAF 驱动覆盖层 0→±180° 折页；finish()=立即跳到终态（快速连按中断用），done 在自然结束与中断两种路径都 resolve */
 export function playFold(el: HTMLElement, opts: { durationMs: number; spec: FoldSpec }): FoldHandle {
@@ -31,6 +31,8 @@ export function playFold(el: HTMLElement, opts: { durationMs: number; spec: Fold
   const done = new Promise<void>((r) => {
     resolve = r;
   });
+  // V-1 修正：快速连按不再直接跳终态（生硬闪烁），而是加速到 3 倍速完成剩余动画
+  // ——保底看到折页动作，同时确保 100ms 内结束不阻塞下一次翻页
   const finish = () => {
     if (finished) return;
     finished = true;
@@ -42,9 +44,10 @@ export function playFold(el: HTMLElement, opts: { durationMs: number; spec: Fold
   el.style.transformOrigin = `${opts.spec.originX} center`;
   el.dataset.foldAxis = opts.spec.originX; // 折痕渐变方向随轴（CSS ::before/::after 按 data-fold-axis 取向）
   const t0 = performance.now();
+  let speed = 1;
   const frame = (now: number) => {
     if (finished) return;
-    const t = Math.min(1, (now - t0) / Math.max(1, opts.durationMs));
+    const t = Math.min(1, ((now - t0) * speed) / Math.max(1, opts.durationMs));
     const p = smoothFold(t);
     el.style.transform = `perspective(1800px) rotateY(${(opts.spec.to * p).toFixed(2)}deg)`;
     el.style.setProperty("--fold-crease", foldCrease(p).toFixed(3));
@@ -55,7 +58,9 @@ export function playFold(el: HTMLElement, opts: { durationMs: number; spec: Fold
     raf = requestAnimationFrame(frame);
   };
   raf = requestAnimationFrame(frame);
-  return { finish, done };
+  // accelerate=中断时加速而非跳终态（保底折页可见）；finish 仅在清理时用
+  const accelerate = () => { speed = 3 };
+  return { finish, accelerate, done };
 }
 
 /**
