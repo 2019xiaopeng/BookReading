@@ -187,6 +187,7 @@ const ReaderTopBar = memo(function ReaderTopBar(props: {
     <div
       className="wr-topbar wr-reader-topbar"
       style={chromeBarStyle(props.visible, -8)}
+      data-tauri-drag-region=""
       onMouseEnter={props.onEnter}
       onMouseLeave={props.onLeave}
     >
@@ -194,14 +195,15 @@ const ReaderTopBar = memo(function ReaderTopBar(props: {
         <IconChevronLeft />
         <span className="wr-topbar-label">返回书库</span>
       </button>
-      {/* U-23：书名与中段空隙=拖动区（双击最大化由 Tauri drag-region 处理） */}
+      {/* U-23：书名与中段空隙=拖动区（双击最大化由 Tauri drag-region 处理）；
+           窄窗按钮挤满时书名区保底 80px 可拖，spacer 保底 12px */}
       <div
         data-tauri-drag-region=""
-        style={{ fontSize: 16, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        style={{ fontSize: 16, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 80, flexShrink: 1 }}
       >
         {props.title}
       </div>
-      <div data-tauri-drag-region="" style={{ flex: 1 }} />
+      <div data-tauri-drag-region="" style={{ flex: 1, minWidth: 12 }} />
       {props.showEpubTools ? (
         <>
           <button className="wr-btn wr-icon-btn" title="目录" onClick={() => props.onOpenDrawer("toc")}>

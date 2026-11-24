@@ -12,7 +12,6 @@ import {
   deleteShelf,
   getSettings,
   listBooks,
-  listImageSubdirs,
   listReadingTimes,
   listShelves,
   listTags,
@@ -56,7 +55,7 @@ import { DENSITY_PRESETS, normalizeLibraryDensity, type LibraryDensity } from ".
 import { getCachedSetting, setCachedSetting } from "../library/settingsCache";
 import { persistentCoverSrc } from "../library/coverSrc";
 import { applyRangeSelect } from "../library/rangeSelect";
-import { BOOKS_CHANGED_EVENT, runImports } from "../library/importRunner";
+import { BOOKS_CHANGED_EVENT } from "../library/importRunner";
 import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "../library/useCoverUrls";
 import { notifyBackgroundChanged, resetBackgroundCache } from "../ui/appBackground";
 import { subscribeAppRefresh } from "../ui/appActions";
@@ -568,27 +567,6 @@ export default function LibraryPage() {
     if (!v && !p.allowEmpty) return;
     setPrompt(null);
     p.onConfirm(v);
-  }
-
-  // 批量导入：选父目录 → 每个一级子文件夹各导入一本漫画（空/无图目录服务端已过滤）；
-  // 单本导入（图书/漫画）已上提 importService，与侧栏固定导入钮共用
-  async function onBatchImportImages() {
-    if (loading) return;
-    const parent = await open({ directory: true, multiple: false, title: "选择漫画父目录（每个一级子文件夹导入一本）" });
-    if (!parent || Array.isArray(parent)) return;
-    setLoading(true);
-    try {
-      const dirs = await listImageSubdirs(parent);
-      if (dirs.length === 0) {
-        await showAlert("批量导入", "父目录下没有包含图片的一级子文件夹");
-        return;
-      }
-      await runImports(dirs, { targetShelfId: currentShelfId });
-    } catch (e) {
-      await showAlert("批量导入失败", String(e));
-    } finally {
-      setLoading(false);
-    }
   }
 
   // 全局背景：链路复用阅读器（saveReaderBackground→resetBackgroundCache→写 settings），应用即预览
@@ -1317,7 +1295,15 @@ export default function LibraryPage() {
     : undefined;
 
   return (
-    <>
+    <div
+      style={{ display: "flex", flexDirection: "column", minHeight: "100%" }}
+      onContextMenu={(e) => {
+        if (trashView) return;
+        if ((e.target as HTMLElement).closest(".wr-book-card, input, textarea, [contenteditable], .wr-menu")) return;
+        e.preventDefault();
+        openMenu({ kind: "grid", x: e.clientX, y: e.clientY }, e.currentTarget);
+      }}
+    >
       <div className="wr-masthead">
         <h1 className="wr-masthead-name">{trashView ? "回 收 站" : mastheadName}</h1>
         <div className="wr-masthead-stats">
@@ -1565,11 +1551,6 @@ export default function LibraryPage() {
         <div
           className={density === "standard" ? "wr-book-grid" : `wr-book-grid wr-book-grid--${density}`}
           style={{ gridTemplateColumns: DENSITY_PRESETS[density].grid }}
-          onContextMenu={(e) => {
-            if ((e.target as HTMLElement).closest(".wr-book-card")) return;
-            e.preventDefault();
-            openMenu({ kind: "grid", x: e.clientX, y: e.clientY }, e.currentTarget);
-          }}
         >
           {/* K-1 置顶=无视分组的真最顶：置顶书 → 新建卡 → 书架组 → 普通书 */}
           {pinnedBooks.map((b) => (
@@ -1856,9 +1837,6 @@ export default function LibraryPage() {
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void importImages(); }}>
                 导入漫画
               </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onBatchImportImages(); }}>
-                批量导入漫画
-              </button>
               <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onSetGlobalBackground(); }}>
                 设置全局背景
               </button>
@@ -2096,6 +2074,6 @@ export default function LibraryPage() {
       {manageTagsOpen ? (
         <ManageTagsDialog tags={tags} onClose={() => setManageTagsOpen(false)} onChanged={() => void refresh()} />
       ) : null}
-    </>
+    </div>
   );
 }
