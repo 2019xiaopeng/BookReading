@@ -1,13 +1,13 @@
 import type { ReactNode } from "react";
 
 export default function Drawer(props: { open: boolean; title: string; onClose: () => void; children: ReactNode }) {
-  if (!props.open) return null;
-
+  // 始终挂载 + CSS 隐藏/显示——条件渲染挂载瞬间 absolute 定位未生效会挤一帧阅读区
   return (
     <div
       className="wr-drawer-overlay"
+      style={props.open ? undefined : { display: "none" }}
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) props.onClose();
+        if (e.target === e.currentTarget && props.open) props.onClose();
       }}
     >
       <div
