@@ -1245,6 +1245,9 @@ export default function ReaderPage() {
         // Esc 顺序语义：关抽屉 > 解除锁定 > 唤醒栏 > 无操作
         if (drawerOpen) {
           e.preventDefault();
+          window.clearTimeout(animTimerRef.current);
+          const p = containerRef.current;
+          if (p) { p.style.transition = "none"; p.style.transform = ""; p.style.opacity = ""; }
           setDrawerOpen(false);
           return;
         }
@@ -1512,6 +1515,10 @@ export default function ReaderPage() {
 
   const openDrawer = useCallback(
     (tab: SideTab) => {
+      // 开抽屉前清掉翻页动画残留（定时器+样式），防阅读区"弹一下"
+      window.clearTimeout(animTimerRef.current);
+      const p = containerRef.current;
+      if (p) { p.style.transition = "none"; p.style.transform = ""; p.style.opacity = ""; }
       changeSideTab(tab);
       setDrawerOpen(true);
       if (tab === "search") requestAnimationFrame(() => searchInputRef.current?.focus());
