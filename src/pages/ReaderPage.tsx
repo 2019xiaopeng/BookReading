@@ -1474,31 +1474,33 @@ export default function ReaderPage() {
     // 3. 等新页真正上屏（display resolve ≠ 已绘制，双 rAF 保险）
     await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 
-    // 4. 唯一一段动画：微幅滑入+渐显（内容从翻页方向 8px 偏移+90% 透明度滑到正中）
+    // 4. 唯一一段动画：整页滑入——新页从翻页方向完整滑入正中（用户处方：先画完再滑入）
     if (anim === "slide" && !reduced && paper) {
-      const inMs = Math.round(180 * k);
-      paper.style.transform = `translateX(${direction === "next" ? 24 : -24}px)`;
-      paper.style.opacity = "0.85";
-      void paper.offsetHeight; // 强制 reflow 提交入场起点
-      paper.style.transition = `transform ${inMs}ms ease-out, opacity ${inMs}ms ease-out`;
+      const inMs = Math.round(260 * k);
+      // 隐藏→偏移到翻页方向外侧→reflow→滑入（新页已画好，只演这一段，零空白）
+      paper.style.transition = "none";
+      paper.style.transform = `translateX(${direction === "next" ? "100%" : "-100%"})`;
+      paper.style.opacity = "0";
+      void paper.offsetHeight; // reflow 提交起点
+      paper.style.transition = `transform ${inMs}ms cubic-bezier(0.2, 0, 0, 1), opacity ${Math.round(inMs * 0.4)}ms ease-out`;
       paper.style.transform = "translateX(0)";
       paper.style.opacity = "1";
-      // 定时器清样式（下次翻页第一步会 clearTimeout 抢占）
       animTimerRef.current = window.setTimeout(() => {
         paper.style.transition = "";
         paper.style.transform = "";
         paper.style.opacity = "";
       }, inMs + 50);
     } else if (anim === "fade" && !reduced && el) {
-      // 渐显：从 30% 透明度渐入（单段，无出场）
-      el.style.opacity = "0.3";
+      // 渐显：从透明渐入（单段，无出场）
+      el.style.transition = "none";
+      el.style.opacity = "0";
       void el.offsetHeight;
-      el.style.transition = `opacity ${Math.round(180 * k)}ms ease`;
+      el.style.transition = `opacity ${Math.round(200 * k)}ms ease`;
       el.style.opacity = "1";
       animTimerRef.current = window.setTimeout(() => {
         el.style.transition = "";
         el.style.opacity = "";
-      }, Math.round(180 * k) + 50);
+      }, Math.round(200 * k) + 50);
     }
     // "none" 或 reduced-motion：不加任何动画，run() 完即终态
   }, []);
