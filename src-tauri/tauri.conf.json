@@ -17,11 +17,12 @@
         "height": 600,
         "minWidth": 720,
         "minHeight": 480,
-        "center": true
+        "center": true,
+        "backgroundColor": "#FAFAF7"
       }
     ],
     "security": {
-      "csp": "default-src 'self' tauri: asset:; img-src 'self' asset: blob: data: http://img.wenku8.com https://img.wenku8.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost;"
+      "csp": "default-src 'self' tauri: asset:; img-src 'self' asset: blob: data: http://img.wenku8.com https://img.wenku8.com; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-aickr4PGcvaJR9KQAybpGec0xJo0vgJ0xXnpKmwdXpE='; connect-src 'self' ipc: http://ipc.localhost;"
     }
   },
   "bundle": {
@@ -29,7 +30,7 @@
     "targets": ["nsis"],
     "windows": {
       "webviewInstallMode": {
-        "type": "offlineInstaller"
+        "type": "downloadBootstrapper"
       },
       "nsis": {
         "installerIcon": "icons/icon.ico"

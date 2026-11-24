@@ -2,6 +2,22 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <!-- U-9 启动闪白：首帧先落纸墨底色（与窗口 backgroundColor 同值），再由内联脚本按 localStorage 同步主题；
+         脚本内容的 sha256 必须同步进 tauri.conf.json 的 CSP script-src（改此脚本需重算 hash） -->
+    <style>
+      html{background:#FAFAF7}
+    </style>
+    <script>
+      try{
+        var t=(localStorage.getItem("wr-theme")||"").trim().toLowerCase();
+        if(t!=="light"&&t!=="dark"&&t!=="sepia"&&t!=="green"&&t!=="gray"&&t!=="darkcontrast"&&t!=="ink"&&t!=="ink-dark")t="ink";
+        if(t==="auto")t=matchMedia("(prefers-color-scheme: dark)").matches?"ink-dark":"ink";
+        var bg={light:"#f7f7fa",sepia:"#f4efe6",green:"#eef3ec",gray:"#e3e3e0",dark:"#0b0d10",darkcontrast:"#000000",ink:"#FAFAF7","ink-dark":"#191816"}[t]||"#FAFAF7";
+        document.documentElement.dataset.theme=t;
+        document.documentElement.style.background=bg;
+        document.documentElement.style.colorScheme=(t==="dark"||t==="darkcontrast"||t==="ink-dark")?"dark":"light";
+      }catch(e){}
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="本地 EPUB、TXT 与漫画阅读器" />

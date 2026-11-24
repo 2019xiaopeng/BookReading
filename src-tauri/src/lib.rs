@@ -138,6 +138,24 @@ pub fn run() {
             }
             tray.build(app)?;
 
+            // U-15：关 WebView2 默认浏览器行为——右键菜单/浏览器加速键(Ctrl+F/P/S、F5 等)/Ctrl+滚轮缩放。
+            // webview2-com 与 wry 锁同一版本，controller() 返回值类型才一致；个别 Set 失败只降级不阻启动。
+            #[cfg(windows)]
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.with_webview(|webview| unsafe {
+                    let _ = (|| -> windows::core::Result<()> {
+                        use windows::core::Interface;
+                        let settings = webview.controller().CoreWebView2()?.Settings()?;
+                        settings.SetAreDefaultContextMenusEnabled(false)?;
+                        settings.SetIsZoomControlEnabled(false)?;
+                        settings
+                            .cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3>()?
+                            .SetAreBrowserAcceleratorKeysEnabled(false)?;
+                        Ok(())
+                    })();
+                });
+            }
+
             append_startup_log(&handle, "startup: ready");
             Ok(())
         })

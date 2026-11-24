@@ -40,3 +40,13 @@ trash = "5"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "default-tls"] }
 hmac = "0.12"
 sha2 = "0.10"
+# U-15：直接引用 wry 已锁定的 WebView2 COM 绑定（版本必须与 Cargo.lock 单例一致，否则 controller() 类型对不上）
+webview2-com = "0.39"
+windows = "0.62"
+
+# U-21 安装包瘦身：strip 符号 + 全链接期优化 + 最小体积优先（构建时间换体积）
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "s"
