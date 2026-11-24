@@ -233,7 +233,7 @@
 /* U-23 标题栏叠加后的壳体两段式：标题栏全宽贴顶，body=原 270/1fr 栅格（侧栏 76px 与主栏 76px
    顶线仍同栅格行起点，对齐基线不变）；三档窄窗断点改挂在 body 上（见 M2 U7 段） */
 .wr-shell-body {
-  /* V-4 断点对齐：侧栏宽度统一走变量（270 → <1200:210 → <800:56 图标栏 → <600 抽屉单列） */
+  /* 侧栏宽度变量（270 → <1200:210，恒完整形态） */
   --wr-sidebar-w: 270px;
   flex: 1;
   min-height: 0;
@@ -1084,49 +1084,12 @@ textarea,
   background: rgba(var(--wr-ink-rgb), 0.1);
 }
 
-.wr-drawer-overlay {
-  position: absolute;
-  inset: 0;
-  background: var(--wr-scrim);
-  display: grid;
-  justify-items: end;
-  z-index: var(--wr-z-drawer);
-  animation: wr-fade-in 160ms ease both;
-}
 
-.wr-drawer {
-  width: 390px;
-  height: 100%;
-  /* M2 U5：圆角统一 8px——右缘贴屏幕不卷，只卷自由的左缘 */
-  border-radius: var(--wr-radius-xs) 0 0 var(--wr-radius-xs);
-  border-left: 1px solid var(--wr-hairline);
-  /* B2a：抽屉实色化——半透明面板上文字发虚，--panel-solid 六主题自适配 */
-  background: var(--panel-solid);
-  box-shadow: var(--wr-shadow);
-  display: grid;
-  grid-template-rows: 62px 1fr;
-  animation: wr-slide-in 180ms ease both;
-}
 
 /* B11：抽屉头部独立类，自建布局（grid 首行定高 62px），不继承任何 reader-topbar 规则 */
-.wr-drawer-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--m2-line);
-}
 
 /* M2 U5：抽屉内外壳级文字（分组标签等 wr-muted）换 m2 墨阶，内部控件不受影响 */
-.wr-drawer .wr-muted {
-  color: var(--m2-ink-soft);
-}
 
-.wr-drawer-content {
-  padding: 14px;
-  overflow: auto;
-  min-height: 0;
-}
 
 @keyframes wr-fade-in {
   from {
@@ -3198,7 +3161,7 @@ body::after {
    窗口 minWidth 720（tauri.conf.json），默认 800 宽落中档而非小窗；
    侧栏 156/210/270、gap·padding 10/12/18 均沿用批次11b 的既有收紧值。
    原 640 详情弹窗单列规则并入最窄档：minWidth 720 后 640 不可达，并入可保持纯 min-width 结构不留死分支。
-   V-4 起 <800 侧栏收 56px 图标栏（--wr-sidebar-w 变量按档切换，见文末 V-4 段） */
+   V-4 已移除：恒完整布局（--wr-sidebar-w 仅 210/270 两档） */
 @media (max-width: 1199px) {
   .wr-shell-body {
     --wr-sidebar-w: 210px; /* V-4 修正：完整布局恒 210+ */
@@ -3987,7 +3950,7 @@ body::after {
   }
 }
 
-/* ───────────────────────── V-4 窄窗体系（书库页+阅读页；断点 900/800/600） ───────────────────────── */
+/* V-4 窄窗体系已永久移除（用户 2026-11-24 裁定：固定完整侧栏+常驻搜索框，不做图标化折叠） */
 
 /* <900：搜索收为图标钮，点击展开浮层输入框（Ctrl+F 任何宽度唤起） */
 @media (max-width: 899px) {
@@ -3995,16 +3958,7 @@ body::after {
     position: relative;
   }
 
-  .wr-search--float {
-    position: absolute;
-    left: 16px;
-    right: 16px;
-    top: 12px;
-    bottom: 12px;
-    z-index: 20;
-    flex: none;
   }
-}
 
 /* 600–799：侧栏 56px 图标栏（宽度由 --wr-sidebar-w=56 给出；文字隐、图标居中、Tooltip 补词） */
 /* V-4 修正：rail 档仅在 <720 理论触发（minWidth=720 不可达，布局恒完整） */
