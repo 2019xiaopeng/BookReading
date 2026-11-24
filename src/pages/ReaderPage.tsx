@@ -1477,8 +1477,8 @@ export default function ReaderPage() {
     // 4. 唯一一段动画：微幅滑入+渐显（内容从翻页方向 8px 偏移+90% 透明度滑到正中）
     if (anim === "slide" && !reduced && paper) {
       const inMs = Math.round(180 * k);
-      paper.style.transform = `translateX(${direction === "next" ? 8 : -8}px)`;
-      paper.style.opacity = "0.9";
+      paper.style.transform = `translateX(${direction === "next" ? 24 : -24}px)`;
+      paper.style.opacity = "0.85";
       void paper.offsetHeight; // 强制 reflow 提交入场起点
       paper.style.transition = `transform ${inMs}ms ease-out, opacity ${inMs}ms ease-out`;
       paper.style.transform = "translateX(0)";

@@ -3925,6 +3925,7 @@ body::after {
   transform: translate(-50%, -50%);
   z-index: var(--wr-z-overlay);
   max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 64px);
 }
 
 /* Tooltip（V-4 窄窗图标栏悬停提示）：碳墨小墨签 */
