@@ -43,7 +43,18 @@ export default function useLogicalBack(): void {
       const target = logicalBackTarget(location.pathname, location.search, getShelvesCache(), location.state);
       if (target !== null) navigate(target);
     };
+    // U-2：WebView2 把侧键默认回退执行在松手相——mousedown 吞掉按下后 mouseup 仍触发 history.back，
+    // 把逻辑导航 push 进去的上级退回最深层。松手相同样捕获吞掉，两相都不放行默认回退。
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button !== 3 && e.button !== 4) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
     window.addEventListener("mousedown", onMouseDown, { capture: true });
-    return () => window.removeEventListener("mousedown", onMouseDown, { capture: true });
+    window.addEventListener("mouseup", onMouseUp, { capture: true });
+    return () => {
+      window.removeEventListener("mousedown", onMouseDown, { capture: true });
+      window.removeEventListener("mouseup", onMouseUp, { capture: true });
+    };
   }, [location, navigate]);
 }

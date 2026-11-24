@@ -51,6 +51,7 @@ import MediaPanel from "../reader/components/MediaPanel";
 import SearchPanel from "../reader/components/SearchPanel";
 import SettingsPanel from "../reader/components/SettingsPanel";
 import SelectionToolbar from "../reader/components/SelectionToolbar";
+import TocPanel from "../reader/components/TocPanel";
 import ImageReader, { type ImageReaderApi } from "../reader/image/ImageReader";
 import ImageSettingsPanel from "../reader/image/ImageSettingsPanel";
 import PagesPanel from "../reader/image/PagesPanel";
@@ -187,8 +188,9 @@ const ReaderTopBar = memo(function ReaderTopBar(props: {
       onMouseEnter={props.onEnter}
       onMouseLeave={props.onLeave}
     >
-      <button className="wr-btn" onClick={props.onBack}>
-        返回书库
+      <button className="wr-btn wr-icon-btn" title="返回书库" onClick={props.onBack}>
+        <IconChevronLeft />
+        <span className="wr-topbar-label">返回书库</span>
       </button>
       <div style={{ fontSize: 16, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {props.title}
@@ -196,30 +198,30 @@ const ReaderTopBar = memo(function ReaderTopBar(props: {
       <div style={{ flex: 1 }} />
       {props.showEpubTools ? (
         <>
-          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("toc")}>
+          <button className="wr-btn wr-icon-btn" title="目录" onClick={() => props.onOpenDrawer("toc")}>
             <IconList />
-            目录
+            <span className="wr-topbar-label">目录</span>
           </button>
-          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("bookmarks")}>
+          <button className="wr-btn wr-icon-btn" title="书签" onClick={() => props.onOpenDrawer("bookmarks")}>
             <IconBookmark />
-            书签
+            <span className="wr-topbar-label">书签</span>
           </button>
-          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("highlights")}>
+          <button className="wr-btn wr-icon-btn" title="标注" onClick={() => props.onOpenDrawer("highlights")}>
             <IconHighlight />
-            标注
+            <span className="wr-topbar-label">标注</span>
           </button>
-          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("favorites")}>
+          <button className="wr-btn wr-icon-btn" title="收藏句子" onClick={() => props.onOpenDrawer("favorites")}>
             <IconQuote />
-            收藏
+            <span className="wr-topbar-label">收藏</span>
           </button>
-          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("search")}>
+          <button className="wr-btn wr-icon-btn" title="搜索" onClick={() => props.onOpenDrawer("search")}>
             <IconSearch />
-            搜索
+            <span className="wr-topbar-label">搜索</span>
           </button>
           {props.showMedia ? (
-            <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("media")}>
+            <button className="wr-btn wr-icon-btn" title="媒体" onClick={() => props.onOpenDrawer("media")}>
               <IconVideo />
-              媒体
+              <span className="wr-topbar-label">媒体</span>
             </button>
           ) : null}
         </>
@@ -233,28 +235,33 @@ const ReaderTopBar = memo(function ReaderTopBar(props: {
           onClick={props.onToggleSpeak}
         >
           <IconSpeaker />
-          朗读
+          <span className="wr-topbar-label">朗读</span>
         </button>
       ) : null}
       {props.showVisualTools ? (
         <>
-          <button className="wr-btn wr-icon-btn" aria-pressed={props.isFavorite} onClick={props.onToggleFavorite}>
+          <button
+            className="wr-btn wr-icon-btn"
+            aria-pressed={props.isFavorite}
+            title={props.isFavorite ? "取消收藏本书" : "收藏本书"}
+            onClick={props.onToggleFavorite}
+          >
             <IconHeart fill={props.isFavorite ? "currentColor" : "none"} aria-hidden />
-            收藏
+            <span className="wr-topbar-label">收藏</span>
           </button>
-          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("bookmarks")}>
+          <button className="wr-btn wr-icon-btn" title="书签" onClick={() => props.onOpenDrawer("bookmarks")}>
             <IconBookmark />
-            书签
+            <span className="wr-topbar-label">书签</span>
           </button>
-          <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("pages")}>
+          <button className="wr-btn wr-icon-btn" title="页面" onClick={() => props.onOpenDrawer("pages")}>
             <IconImage />
-            页面
+            <span className="wr-topbar-label">页面</span>
           </button>
         </>
       ) : null}
-      <button className="wr-btn wr-icon-btn" onClick={() => props.onOpenDrawer("settings")}>
+      <button className="wr-btn wr-icon-btn" title="设置" onClick={() => props.onOpenDrawer("settings")}>
         <IconSettings />
-        设置
+        <span className="wr-topbar-label">设置</span>
       </button>
       <button
         className="wr-btn wr-icon-btn"
@@ -262,7 +269,7 @@ const ReaderTopBar = memo(function ReaderTopBar(props: {
         onClick={props.onLock}
       >
         <IconLock />
-        锁定
+        <span className="wr-topbar-label">锁定</span>
       </button>
       <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
         {props.percentText}
@@ -1813,35 +1820,7 @@ export default function ReaderPage() {
                     <div className="wr-state-title">暂无目录</div>
                   </div>
                 ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {toc.map((item) => {
-                      // R-3 当前章判定：先剥 hash 再按末段比对（toc 常带 #anchor，relocated 已剥）
-                      const stripHash = (h: string) => h.split("#")[0];
-                      const isActive =
-                        chapterHref !== "" &&
-                        (stripHash(item.href) === chapterHref ||
-                          stripHash(item.href).split("/").pop() === chapterHref.split("/").pop());
-                      return (
-                        <button
-                          key={item.href}
-                          className="wr-toc-item"
-                          data-active={isActive ? "true" : undefined}
-                          aria-current={isActive ? "true" : undefined}
-                          ref={
-                            isActive
-                              ? (el) => {
-                                  // R-3 打开目录滚到当前章（居中），仅挂载时执行一次
-                                  if (el) requestAnimationFrame(() => el.scrollIntoView({ block: "center" }));
-                                }
-                              : undefined
-                          }
-                          onClick={() => locate(item.href)}
-                        >
-                          {item.label}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <TocPanel toc={toc} chapterHref={chapterHref} onOpen={locate} />
                 )}
               </div>
             ) : null}

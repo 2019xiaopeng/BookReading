@@ -841,6 +841,38 @@
   background: linear-gradient(to bottom, transparent, var(--wr-chrome-bg) 22%);
   backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--wr-hairline);
+  /* U-16 窄窗基档（对齐 M2 U7 壳层 min-width 三档 720/800/1200，基础态=最窄档）：
+     去文字留图标（title 提示仍在）——全部按钮常驻可达，不折叠不藏钮不换行（62px 定高带，换行会盖正文）；
+     按钮不可压缩，唯一可收缩的是书名（ellipsis）；中档 800–1199 标签回归、收紧间距。 */
+  gap: 8px;
+}
+
+.wr-reader-topbar .wr-btn {
+  flex: 0 0 auto;
+}
+
+.wr-reader-topbar .wr-topbar-label {
+  display: none;
+}
+
+.wr-reader-topbar .wr-icon-btn {
+  padding: 10px 8px;
+  gap: 6px;
+}
+
+@media (min-width: 800px) {
+  .wr-reader-topbar {
+    gap: 12px;
+  }
+
+  .wr-reader-topbar .wr-topbar-label {
+    display: inline;
+  }
+
+  .wr-reader-topbar .wr-icon-btn {
+    padding: 10px 12px;
+    gap: 8px;
+  }
 }
 
 .wr-reader-footer {
@@ -1782,6 +1814,31 @@ body.wr-card-dragging * {
 
 .wr-toc-item:active {
   transform: translateY(0);
+}
+
+/* B-1 目录分层：卷=分组头（chevron 右向=折叠、旋转 90°=展开），章=叶子按深度缩进 */
+.wr-toc-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wr-toc-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.wr-toc-group-head .wr-toc-chevron {
+  flex: 0 0 auto;
+  color: var(--wr-muted);
+  transform: rotate(90deg);
+  transition: transform 160ms ease;
+}
+
+.wr-toc-group-head[aria-expanded="false"] .wr-toc-chevron {
+  transform: rotate(0deg);
 }
 
 input[type="range"] {

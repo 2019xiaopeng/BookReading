@@ -270,6 +270,15 @@ export type TypographyParams = {
   justify: boolean;
 };
 
+/**
+ * U-8 页边距默认档自适应：未手动调过（=默认 24px）时随纸面宽 clamp——窄窗边距收窄、正文区放大；
+ * 手动档（含 epuset 书级钉住的值）保持固定 px。vw 在 epubjs iframe 内解析=纸面宽（非窗口宽），
+ * 纸面有 760/1100 上限，故 ≥~800px 窗口恒为 24px 上限=大屏维持现有观感。
+ */
+export function pageMarginCss(pageMargin: number, defaultMargin: number): string {
+  return pageMargin === defaultMargin ? "clamp(12px, 3.2vw, 24px)" : `${pageMargin}px`;
+}
+
 export async function createReader(opts: {
   container: HTMLElement;
   libraryPath: string;
@@ -412,8 +421,8 @@ export async function createReader(opts: {
         [scrollbar("::-webkit-scrollbar-thumb:hover")]: { background: `rgba(${s.inkRgb}, 0.45)` },
         [`body.${t}`]: {
           margin: "0 auto",
-          // #2 纸面四边内边距（pageMargin，12-48px）
-          padding: `${typo.pageMargin}px`,
+          // #2 纸面四边内边距（pageMargin，12-48px）；默认档走 U-8 自适应 clamp
+          padding: pageMarginCss(typo.pageMargin, DEFAULT_TYPO.pageMargin),
           "line-height": String(typo.lineHeight),
           "font-family": `${FONT_STACKS[typo.fontFamily]} !important`,
           "word-break": "break-word",
@@ -662,12 +671,13 @@ export async function createReader(opts: {
   void (async () => {
     try {
       const navigation: any = await withTimeout<any>(book.loaded.navigation as Promise<any>, 30_000);
-      const toc: TocItem[] =
-        navigation?.toc?.map((i: any) => ({
-          label: i.label,
-          href: i.href,
-          subitems: i.subitems?.map((s: any) => ({ label: s.label, href: s.href, subitems: [] })),
-        })) ?? [];
+      // B-1：保留 epub.js 嵌套层级（ncx parseNcx / epub3 parseNav 均有 subitems）——递归全深度映射
+      const mapNav = (i: any): TocItem => ({
+        label: i.label,
+        href: i.href,
+        subitems: i.subitems?.length ? i.subitems.map(mapNav) : undefined,
+      });
+      const toc: TocItem[] = navigation?.toc?.map(mapNav) ?? [];
       opts.onTocLoaded?.(toc);
     } catch (e) {
       opts.onError?.(`目录解析失败：${String(e)}`);

@@ -5,6 +5,7 @@ import {
   cfiRangesOverlap,
   lazyImagesForFlow,
   locationsCacheKey,
+  pageMarginCss,
   sameRelocatedPayload,
   scrollEdgeDirection,
   spineIndexFromCfi,
@@ -20,6 +21,16 @@ describe("lazyImagesForFlow（E-4 懒加载仅滚动模式）", () => {
   test("未知/异常值按分页处理（宁可不懒加载，不可破图）", () => {
     expect(lazyImagesForFlow("")).toBe(false);
     expect(lazyImagesForFlow("scroll")).toBe(false);
+  });
+});
+
+describe("pageMarginCss（U-8 页边距默认档自适应）", () => {
+  test("默认档 24px → clamp(12px, 3.2vw, 24px)（vw 相对 iframe 纸面宽）；手动档固定 px", () => {
+    expect(pageMarginCss(24, 24)).toBe("clamp(12px, 3.2vw, 24px)");
+    expect(pageMarginCss(12, 24)).toBe("12px");
+    expect(pageMarginCss(48, 24)).toBe("48px");
+    // epuset 书级钉住的 24 与默认不可区分 → 同走自适应（见 U-8 取舍）
+    expect(pageMarginCss(24, 30)).toBe("24px");
   });
 });
 
