@@ -102,7 +102,6 @@ import {
 } from "../reader/settings/epuset";
 import { speak, stop as ttsStop, subscribeTts, ttsSpeaking, ttsSupported } from "../reader/tts";
 import { calcPaperStage } from "../reader/ui/paperStage";
-import { createPageSnapshot, type FoldHandle } from "../reader/ui/foldTurn";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
 import { showAlert, showConfirm } from "../ui/dialog";
@@ -443,7 +442,7 @@ export default function ReaderPage() {
   const [noteText, setNoteText] = useState("");
   const [chapterHref, setChapterHref] = useState("");
   const [pageBadge, setPageBadge] = useState<{ left: { page: number; total: number } | null; right: { page: number; total: number } | null }>({ left: null, right: null });
-  // B12 全局“位置页”（估算，1024 字/页粒度）：locations 就绪后 X/Y 全书页码；未就绪回退章内页码
+  // B12 全局"位置页"（估算，1024 字/页粒度）：locations 就绪后 X/Y 全书页码；未就绪回退章内页码
   const [locPage, setLocPage] = useState<{ index: number; total: number } | null>(null);
   const [lockToast, setLockToast] = useState(false);
   const [speedToast, setSpeedToast] = useState<number | null>(null);
@@ -473,16 +472,8 @@ export default function ReaderPage() {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const wheelCooldownRef = useRef(0);
   const wheelAccumRef = useRef(0);
-  const turningRef = useRef(false);
-  // V-1 翻页双缓冲：进行中的翻页——interrupt=新请求到达立即终态；steal=覆盖层所有权移交（接力或撤下）
-  const turnRef = useRef<{
-    overlay: HTMLElement | null;
-    displayDone: boolean;
-    interrupted: boolean;
-    fold: FoldHandle | null;
-    interrupt: () => void;
-    steal: () => HTMLElement | null;
-  } | null>(null);
+  // "先画完再滑入"翻页：入场动画的清理定时器（连按时第一步 clearTimeout 抢占，消灭定时器打架）
+  const animTimerRef = useRef(0);
   const imageApiRef = useRef<PageReaderApi | null>(null);
   // B-2：大书守卫的生成等待次数（生成失败也发 done==total → 无限重试死循环，2 次后放行直开走错误态）
   const optRetriesRef = useRef(0);
@@ -492,7 +483,7 @@ export default function ReaderPage() {
   const epuOverrideTouchedRef = useRef(false);
   const epuOverrideRef = useRef<EpubSettingsOverride>({});
   const epubSettingsRef = useRef<ReaderSettings>(defaultSettings);
-  // 漫画/PDF 皆为“视觉书”：webtoon=原生滚动容器（条漫/PDF 连续滚动共用 webtoon 枚举，滚轮转发不翻页）；
+  // 漫画/PDF 皆为"视觉书"：webtoon=原生滚动容器（条漫/PDF 连续滚动共用 webtoon 枚举，滚轮转发不翻页）；
   // 批次15 起空格自动滚动对 PDF 连续滚动同样开放
   const imageCtxRef = useRef({ active: false, rtl: false, webtoon: false, autoscroll: false });
   const progressRef = useRef<HTMLDivElement | null>(null);
@@ -819,7 +810,7 @@ export default function ReaderPage() {
         if (typeof percent === "number") setPercent(percent);
         setDragPct(null);
         setSelection(null);
-        // 视觉页码徽标：优先全局“位置页”（B12，locations 估算 1024 字/页）；paginated 无 locPage 时回退章内页码
+        // 视觉页码徽标：优先全局"位置页"（B12，locations 估算 1024 字/页）；paginated 无 locPage 时回退章内页码
         setLocPage(payload.locPage ?? null);
         if (settingsRef.current.readingMode === "paginated" && !payload.locPage) {
           const left = payload.pageStart;
@@ -967,10 +958,8 @@ export default function ReaderPage() {
         window.clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
       }
-      // V-1：换书/重开清掉进行中的翻页覆盖层（controller 销毁后 run() 不会再 resolve）
-      turnRef.current?.interrupt();
-      turnRef.current?.steal()?.remove();
-      turnRef.current = null;
+      // 换书/重开清掉翻页动画定时器（controller 销毁后 run() 不会再 resolve）
+      window.clearTimeout(animTimerRef.current);
       controllerRef.current?.destroy();
       controllerRef.current = null;
     };
@@ -1462,108 +1451,56 @@ export default function ReaderPage() {
     };
     const anim = settingsRef.current.pageAnimation;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    // 翻页速度可调：turnSpeedMs=260 时 fade 180 / slide 入240 / 兜底260（slide 出场见批次17：并行 + 120ms 上限）
     const k = settingsRef.current.turnSpeedMs / 260;
+    const paper = containerRef.current;
 
-    if (anim === "slide") {
-      // 整页平移：动画节点为 epub 渲染容器（纸框/背景纱不动，内容整页滑出+滑入）
-      const paper = containerRef.current;
-      if (!paper) {
-        await run();
-        return;
-      }
-      // 快速连翻：动画进行中直接瞬时跳页，不排队、永不卡死
-      if (turningRef.current) {
-        await run();
-        return;
-      }
-      turningRef.current = true;
-      try {
-        const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
-        // 批次17：出场段与 display 并行（display 异步渲染新页，旧页滑出的同时后台已在画），
-        // 空窗从“出场时长+display 耗时”缩到 max(0, display-出场)；出场再上限 120ms 收紧顺序等待
-        const outMs = Math.min(Math.round(settingsRef.current.turnSpeedMs * 0.4), 120);
-        const inMs = Math.round(240 * k);
-        paper.style.transition = `transform ${outMs}ms ease-in`;
-        paper.style.transform = `translateX(${direction === "next" ? "-100%" : "100%"})`;
-        const displaying = run();
-        await Promise.all([wait(outMs), displaying]);
-        paper.style.transition = "none";
-        paper.style.transform = `translateX(${direction === "next" ? "100%" : "-100%"})`;
-        void paper.offsetHeight; // 强制 reflow 提交入场起点
-        paper.style.transition = `transform ${inMs}ms cubic-bezier(0.2, 0, 0, 1)`;
-        paper.style.transform = "translateX(0)";
-        await wait(Math.round(260 * k)); // 兜底等待，不依赖 transitionend
+    // ═══ "先画完、再滑入"（用户 2026-11-24 处方）═══
+    // 按下方向键时画面先稳住不动 → epub.js 完成排版并上屏 → 唯一一段微幅滑入。
+    // 章内翻页 epub.js 只平移视野（无空白），旧"出场+入场双动画"在空窗期播=空白根因，已删。
+    // 快速连按：每次先清定时器+重置样式（消灭"隐身瞬移+定时器打架"），然后直接 run。
+
+    // 1. 抢占：清上一帧的定时器和样式（连按时=跳到终态再继续，无 opacity:0 隐身）
+    window.clearTimeout(animTimerRef.current);
+    if (paper) {
+      paper.style.transition = "none";
+      paper.style.transform = "";
+      paper.style.opacity = "";
+    }
+    if (el) el.style.opacity = "";
+
+    // 2. 先画完（epub.js 处理翻页——章内=视野平移，跨章=重新排版）
+    await run();
+
+    // 3. 等新页真正上屏（display resolve ≠ 已绘制，双 rAF 保险）
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+
+    // 4. 唯一一段动画：微幅滑入+渐显（内容从翻页方向 8px 偏移+90% 透明度滑到正中）
+    if (anim === "slide" && !reduced && paper) {
+      const inMs = Math.round(180 * k);
+      paper.style.transform = `translateX(${direction === "next" ? 8 : -8}px)`;
+      paper.style.opacity = "0.9";
+      void paper.offsetHeight; // 强制 reflow 提交入场起点
+      paper.style.transition = `transform ${inMs}ms ease-out, opacity ${inMs}ms ease-out`;
+      paper.style.transform = "translateX(0)";
+      paper.style.opacity = "1";
+      // 定时器清样式（下次翻页第一步会 clearTimeout 抢占）
+      animTimerRef.current = window.setTimeout(() => {
         paper.style.transition = "";
         paper.style.transform = "";
-      } finally {
-        turningRef.current = false;
-      }
-      return;
+        paper.style.opacity = "";
+      }, inMs + 50);
+    } else if (anim === "fade" && !reduced && el) {
+      // 渐显：从 30% 透明度渐入（单段，无出场）
+      el.style.opacity = "0.3";
+      void el.offsetHeight;
+      el.style.transition = `opacity ${Math.round(180 * k)}ms ease`;
+      el.style.opacity = "1";
+      animTimerRef.current = window.setTimeout(() => {
+        el.style.transition = "";
+        el.style.opacity = "";
+      }, Math.round(180 * k) + 50);
     }
-
-    // V-1 双缓冲视觉快照：所有动画模式每次翻页都挂覆盖层——用户实测章内也闪白
-    // （epubjs rendition.next() 分页模式每次重渲染，非纯 CSS 列平移，A 线初始假设有误已修正）
-    const prevTurn = turnRef.current;
-    prevTurn?.interrupt();
-    const turn = {
-      overlay: null as HTMLElement | null,
-      displayDone: false,
-      interrupted: false,
-      fold: null as FoldHandle | null,
-      interrupt: () => {
-        turn.interrupted = true;
-        turn.fold?.accelerate(); // V-1：中断=3倍速完成而非跳终态，保底折页动作可见
-      },
-      steal: () => {
-        const o = turn.overlay;
-        turn.overlay = null;
-        return o;
-      },
-    };
-    if (prevTurn) {
-      const held = prevTurn.steal();
-      // 上一次仍在等渲染：容器正被清空，其覆盖层=当前视觉页，接力持有（别对半空容器截图）；
-      // 已渲染完（动画中被打断）：覆盖层内容已过期，撤下重新快照
-      if (!prevTurn.displayDone && held?.isConnected) turn.overlay = held;
-      else held?.remove();
-    }
-    turnRef.current = turn;
-    try {
-      if (!turn.overlay && el && containerRef.current) {
-        turn.overlay = createPageSnapshot(containerRef.current);
-      }
-      if (!turn.overlay) {
-        // 快照失败兜底：直接跑（旧 fade 压暗路径保留）
-        if (anim === "fade" && !reduced && el) {
-          el.style.transition = `opacity ${Math.round(180 * k)}ms ease`;
-          el.style.opacity = "0.35";
-          await run();
-          requestAnimationFrame(() => {
-            el.style.opacity = "1";
-          });
-        } else {
-          await run();
-        }
-        return;
-      }
-      await run();
-      turn.displayDone = true;
-      if (turn.interrupted) return; // 新翻页已接管（覆盖层已移交）
-      // display resolve 时浏览器尚未上屏：双 rAF 等新页真画完，动画才不在空窗期开演
-      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
-      if (turn.interrupted) return;
-      if (anim === "fade" && !reduced) {
-        // 跨章 fade：旧页快照淡出，下方新页已就绪（交叉过渡，无空白画布空窗）
-        const ms = Math.round(180 * k);
-        turn.overlay.style.transition = `opacity ${ms}ms ease`;
-        turn.overlay.style.opacity = "0";
-        await new Promise<void>((r) => window.setTimeout(r, ms));
-      }
-    } finally {
-      if (turnRef.current === turn) turnRef.current = null;
-      turn.overlay?.remove();
-    }
+    // "none" 或 reduced-motion：不加任何动画，run() 完即终态
   }, []);
 
   /** footer 上一章/下一章（epub 两模式统一；image 书 footer 仍是页翻，走 animateTurn） */
@@ -1582,7 +1519,7 @@ export default function ReaderPage() {
     [changeSideTab],
   );
 
-  // B4: 书签统一入口——image 书记 img:N、PDF 记 pdf:N + “第N页”，epub 记 CFI + 章名
+  // B4: 书签统一入口——image 书记 img:N、PDF 记 pdf:N + "第N页"，epub 记 CFI + 章名
   function addBookmarkHere() {
     const cfi = lastCfiRef.current;
     if (!book || !cfi) return;
@@ -1840,7 +1777,7 @@ export default function ReaderPage() {
     setImgOverride({});
     void setSetting(imageSettingsKey(bookId ?? ""), "");
   }, [bookId]);
-  // E4 标注导出：save 对话框（默认“标注-<书名>.md”）→ exportAnnotations 写出 Markdown
+  // E4 标注导出：save 对话框（默认"标注-<书名>.md"）→ exportAnnotations 写出 Markdown
   const exportHighlights = useCallback(() => {
     void (async () => {
       if (!book) return;
@@ -2264,7 +2201,7 @@ export default function ReaderPage() {
                 >
                   {bgUrl ? <div className="wr-reader-bg-veil" aria-hidden="true" style={{ opacity: bgVeil / 100 }} /> : null}
                   <div ref={containerRef} style={{ height: "100%", position: "relative" }} />
-                  {/* B12 页码徽标：locations 就绪显示全书“位置页” X / Y（1024 字/页估算；双页两角 X 与 X+1 近似）；未就绪回退章内页码 */}
+                  {/* B12 页码徽标：locations 就绪显示全书"位置页" X / Y（1024 字/页估算；双页两角 X 与 X+1 近似）；未就绪回退章内页码 */}
                   {locPage ? (
                     <div aria-hidden="true" className="wr-page-badge-layer">
                       {pageBadge.right ? (
