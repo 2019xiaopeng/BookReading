@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
+import * as Menu from "@radix-ui/react-menu";
 
 import type { Book, ManualStatus, Shelf, Tag, UpdateBookMetadataRequest } from "../tauri/invoke";
 import {
@@ -64,6 +65,7 @@ import { setPageMeta } from "../ui/pageMeta";
 import type { ReaderBackground } from "../reader/settings/types";
 import { logFrontend } from "../tauri/frontendLog";
 import { setShelvesCache, useShellShelves } from "../ui/AppShell";
+import { Modal, PointMenu, WrSelect } from "../ui/radix";
 import { showAlert, showConfirm } from "../ui/dialog";
 import { showToast } from "../ui/toast";
 import { IconBook, IconCheckSquare, IconClose, IconDensity, IconFolder, IconReveal, IconShelf, IconSort, IconTrash } from "../ui/icons";
@@ -183,7 +185,6 @@ export default function LibraryPage() {
   // DnD 载荷（HTML5 dataTransfer 在 dragover 里读不到自定义类型，拖拽中用 state 旁路）
   const [dragBookId, setDragBookId] = useState<string | null>(null);
   const [dragShelfId, setDragShelfId] = useState<number | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
   const menuTriggerRef = useRef<HTMLElement | null>(null);
   const repairingRef = useRef<Set<string>>(new Set());
   const attemptedRef = useRef<Set<string>>(new Set());
@@ -434,17 +435,7 @@ export default function LibraryPage() {
     });
   }, [trashView, query, statusFilter, retentionDays, trash.length]);
 
-  // H-1：Ctrl+F 聚焦搜索框（AppShell 顶栏 .wr-search-input；阅读器书内搜索路由隔离不受影响）
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
-        e.preventDefault();
-        document.querySelector<HTMLInputElement>(".wr-search-input")?.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  // H-1 Ctrl+F 已上移 AppShell（V-4：<900 需先展开图标版搜索，页面侧看不到输入框）
 
   // 状态过滤写穿（"all" 不落盘，等于默认态）；恢复完成前跳过
   useEffect(() => {
@@ -496,7 +487,7 @@ export default function LibraryPage() {
     };
   }, [books, refresh]);
 
-  // menu keyboard semantics: open moves focus in, arrows cycle, close returns focus to the trigger
+  // V-2：菜单行为层（外点/Esc/方向键循环/焦点管理/视口碰撞）全交 Radix Menu；这里只留开与关
   function openMenu(next: MenuState, trigger: EventTarget | null) {
     menuTriggerRef.current = trigger instanceof HTMLElement ? trigger : null;
     setMenu(next);
@@ -507,58 +498,6 @@ export default function LibraryPage() {
     menuTriggerRef.current?.focus?.();
     menuTriggerRef.current = null;
   }
-
-  function onMenuKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>("button") ?? []);
-      if (items.length === 0) return;
-      const cur = items.indexOf(document.activeElement as HTMLElement);
-      const next =
-        cur < 0
-          ? e.key === "ArrowDown"
-            ? items[0]
-            : items[items.length - 1]
-          : e.key === "ArrowDown"
-            ? items[(cur + 1) % items.length]
-            : items[(cur - 1 + items.length) % items.length];
-      next.focus();
-    } else if (e.key === "Tab") {
-      closeMenu();
-    }
-  }
-
-  // close the popup menu on outside pointerdown / Escape
-  useEffect(() => {
-    if (!menu) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (menuRef.current?.contains(e.target as Node)) return;
-      closeMenu();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeMenu();
-    };
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [menu]);
-
-  // clamp menu into the viewport before paint, then focus the first item (ARIA menu pattern); resize re-clamps
-  useLayoutEffect(() => {
-    if (!menu || !menuRef.current) return;
-    const el = menuRef.current;
-    const clamp = () => {
-      el.style.left = `${Math.max(8, Math.min(menu.x, window.innerWidth - el.offsetWidth - 8))}px`;
-      el.style.top = `${Math.max(8, Math.min(menu.y, window.innerHeight - el.offsetHeight - 8))}px`;
-    };
-    clamp();
-    el.querySelector<HTMLElement>("button")?.focus();
-    window.addEventListener("resize", clamp);
-    return () => window.removeEventListener("resize", clamp);
-  }, [menu]);
 
   function submitPrompt() {
     const p = prompt;
@@ -1365,21 +1304,20 @@ export default function LibraryPage() {
               <IconCheckSquare />
             </button>
           </div>
-          <label htmlFor="trash-retention" className="wr-muted" style={{ fontSize: 13 }}>
+          <span className="wr-muted" style={{ fontSize: 13 }}>
             保留期
-          </label>
-          <select
-            id="trash-retention"
-            className="wr-select"
-            style={{ padding: "6px 10px" }}
+          </span>
+          <WrSelect
+            ariaLabel="回收站保留期"
+            className="wr-select--retention"
             value={retentionDays}
-            aria-label="回收站保留期"
-            onChange={(e) => onChangeRetention(Number(e.currentTarget.value))}
-          >
-            <option value={7}>7 天</option>
-            <option value={30}>30 天</option>
-            <option value={0}>永不</option>
-          </select>
+            onChange={(v) => onChangeRetention(Number(v))}
+            options={[
+              { value: "7", label: "7 天" },
+              { value: "30", label: "30 天" },
+              { value: "0", label: "永不" },
+            ]}
+          />
           <button
             className="wr-btn wr-btn-danger"
             style={{ marginLeft: "auto" }}
@@ -1759,287 +1697,199 @@ export default function LibraryPage() {
       ) : null}
 
       {menu ? (
-        <div ref={menuRef} className="wr-menu" role="menu" style={{ left: menu.x, top: menu.y }} onKeyDown={onMenuKeyDown}>
+        <PointMenu point={menu} onClose={closeMenu} label="书库菜单">
           {menu.kind === "sort" ? (
             <>
-              {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
-                <button
-                  key={k}
-                  className="wr-menu-item"
-                  role="menuitemradio"
-                  aria-checked={sortKey === k}
-                  data-checked={sortKey === k}
-                  title={k === "custom" ? "拖动卡片调整顺序" : undefined}
-                  onClick={() => {
-                    closeMenu();
-                    setSortKey(k);
-                  }}
-                >
-                  {SORT_LABELS[k]}
-                </button>
-              ))}
-              <button
-                className="wr-menu-item"
-                role="menuitemradio"
-                aria-checked={sortAsc}
-                data-checked={sortAsc}
-                onClick={() => {
-                  closeMenu();
-                  setSortAsc(true);
-                }}
-              >
-                升序
-              </button>
-              <button
-                className="wr-menu-item"
-                role="menuitemradio"
-                aria-checked={!sortAsc}
-                data-checked={!sortAsc}
-                onClick={() => {
-                  closeMenu();
-                  setSortAsc(false);
-                }}
-              >
-                降序
-              </button>
+              <Menu.RadioGroup className="wr-menu-group" value={sortKey} onValueChange={(v) => setSortKey(v as SortKey)}>
+                {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+                  <Menu.RadioItem key={k} asChild value={k} data-checked={sortKey === k}>
+                    <button type="button" className="wr-menu-item" title={k === "custom" ? "拖动卡片调整顺序" : undefined}>
+                      {SORT_LABELS[k]}
+                    </button>
+                  </Menu.RadioItem>
+                ))}
+              </Menu.RadioGroup>
+              <Menu.RadioGroup className="wr-menu-group" value={sortAsc ? "asc" : "desc"} onValueChange={(v) => setSortAsc(v === "asc")}>
+                <Menu.RadioItem asChild value="asc" data-checked={sortAsc}>
+                  <button type="button" className="wr-menu-item">升序</button>
+                </Menu.RadioItem>
+                <Menu.RadioItem asChild value="desc" data-checked={!sortAsc}>
+                  <button type="button" className="wr-menu-item">降序</button>
+                </Menu.RadioItem>
+              </Menu.RadioGroup>
               {/* K-2 文件夹排序段：含子书架的视图才出现 */}
               {subShelves.length > 0 ? (
                 <>
-                  <div className="wr-menu-label" role="presentation" style={{ padding: "6px 10px 2px", fontSize: 12, color: "var(--wr-muted)", fontWeight: 600 }}>
-                    文件夹
-                  </div>
-                  {(Object.keys(FOLDER_SORT_LABELS) as FolderSortKey[]).map((k) => (
-                    <button
-                      key={k}
-                      className="wr-menu-item"
-                      role="menuitemradio"
-                      aria-checked={folderSort === k}
-                      data-checked={folderSort === k}
-                      onClick={() => {
-                        closeMenu();
-                        setFolderSort(k);
-                      }}
-                    >
-                      {FOLDER_SORT_LABELS[k]}
-                    </button>
-                  ))}
+                  <div className="wr-menu-label" role="presentation">文件夹</div>
+                  <Menu.RadioGroup className="wr-menu-group" value={folderSort} onValueChange={(v) => setFolderSort(v as FolderSortKey)}>
+                    {(Object.keys(FOLDER_SORT_LABELS) as FolderSortKey[]).map((k) => (
+                      <Menu.RadioItem key={k} asChild value={k} data-checked={folderSort === k}>
+                        <button type="button" className="wr-menu-item">{FOLDER_SORT_LABELS[k]}</button>
+                      </Menu.RadioItem>
+                    ))}
+                  </Menu.RadioGroup>
                 </>
               ) : null}
             </>
           ) : menu.kind === "grid" ? (
             <>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onNewShelf(); }}>
-                新建书架
-              </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void importBooks(); }}>
-                导入图书
-              </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void importImages(); }}>
-                导入漫画
-              </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onSetGlobalBackground(); }}>
-                设置全局背景
-              </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onResetGlobalBackground(); }}>
-                恢复默认背景
-              </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); setSortAsc((v) => !v); }}>
-                {sortAsc ? "切换为降序" : "切换为升序"}
-              </button>
+              <Menu.Item asChild onSelect={onNewShelf}>
+                <button type="button" className="wr-menu-item">新建书架</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={() => void importBooks()}>
+                <button type="button" className="wr-menu-item">导入图书</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={() => void importImages()}>
+                <button type="button" className="wr-menu-item">导入漫画</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={() => void onSetGlobalBackground()}>
+                <button type="button" className="wr-menu-item">设置全局背景</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={onResetGlobalBackground}>
+                <button type="button" className="wr-menu-item">恢复默认背景</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={() => setSortAsc((v) => !v)}>
+                <button type="button" className="wr-menu-item">{sortAsc ? "切换为降序" : "切换为升序"}</button>
+              </Menu.Item>
             </>
           ) : menu.kind === "book" ? (
             <>
-              <button
-                className="wr-menu-item"
-                role="menuitem"
-                onClick={() => { closeMenu(); onChipUpdate({ book_id: menu.book.id, pinned: !menu.book.pinned_at }); }}
-              >
-                {menu.book.pinned_at ? "取消置顶" : "置顶"}
-              </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); setDetailsBook(menu.book); }}>
-                详情
-              </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onRenameBook(menu.book); }}>
-                重命名
-              </button>
-              <button
-                className="wr-menu-item"
-                role="menuitem"
-                onClick={() => { closeMenu(); setMoveDialog({ kind: "books", bookIds: [menu.book.id] }); }}
-              >
-                移动到书架…
-              </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onNote(menu.book); }}>
-                备注
-              </button>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); void onSetCover(menu.book); }}>
-                设置封面
-              </button>
-              <button
-                className="wr-menu-item"
-                role="menuitem"
-                onClick={() => { closeMenu(); void onToggleFavorite(menu.book); }}
-              >
-                {menu.book.is_favorite ? "取消收藏" : "收藏"}
-              </button>
-              <button
-                className="wr-menu-item"
-                role="menuitem"
-                onClick={() => { closeMenu(); void onRevealBook(menu.book); }}
-              >
-                <IconReveal width={16} height={16} />
-                打开所在位置
-              </button>
-              <button
-                className="wr-menu-item"
-                role="menuitem"
-                data-danger="true"
-                onClick={() => { closeMenu(); void onDeleteBook(menu.book); }}
-              >
-                删除
-              </button>
-              <button
-                className="wr-menu-item"
-                role="menuitem"
-                data-danger="true"
-                onClick={() => {
-                  closeMenu();
+              <Menu.Item asChild onSelect={() => onChipUpdate({ book_id: menu.book.id, pinned: !menu.book.pinned_at })}>
+                <button type="button" className="wr-menu-item">{menu.book.pinned_at ? "取消置顶" : "置顶"}</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={() => setDetailsBook(menu.book)}>
+                <button type="button" className="wr-menu-item">详情</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={() => onRenameBook(menu.book)}>
+                <button type="button" className="wr-menu-item">重命名</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={() => setMoveDialog({ kind: "books", bookIds: [menu.book.id] })}>
+                <button type="button" className="wr-menu-item">移动到书架…</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={() => onNote(menu.book)}>
+                <button type="button" className="wr-menu-item">备注</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={() => void onSetCover(menu.book)}>
+                <button type="button" className="wr-menu-item">设置封面</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={() => void onToggleFavorite(menu.book)}>
+                <button type="button" className="wr-menu-item">{menu.book.is_favorite ? "取消收藏" : "收藏"}</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={() => void onRevealBook(menu.book)}>
+                <button type="button" className="wr-menu-item">
+                  <IconReveal width={16} height={16} />
+                  打开所在位置
+                </button>
+              </Menu.Item>
+              <Menu.Item asChild data-danger="true" onSelect={() => void onDeleteBook(menu.book)}>
+                <button type="button" className="wr-menu-item" data-danger="true">删除</button>
+              </Menu.Item>
+              <Menu.Item
+                asChild
+                onSelect={() =>
                   void onDeleteFromDisk(menu.book, async () => {
                     await refresh();
                     exitSelect();
-                  });
-                }}
+                  })
+                }
               >
-                <IconTrash width={16} height={16} />
-                从电脑删除
-              </button>
+                <button type="button" className="wr-menu-item" data-danger="true">
+                  <IconTrash width={16} height={16} />
+                  从电脑删除
+                </button>
+              </Menu.Item>
               {/* S-4 手动状态段：三档手动 + 恢复自动；勾选=当前合并口径（effectiveStatus）。
                   “恢复自动”在无覆盖时置灰——本就处于自动，无可恢复 */}
-              <div className="wr-menu-label" role="presentation" style={{ padding: "6px 10px 2px", fontSize: 12, color: "var(--wr-muted)", fontWeight: 600 }}>
-                状态
-              </div>
-              {MANUAL_STATUS_OPTIONS.map((opt) => {
-                const cur = effectiveStatus(menu.book);
-                return (
-                  <button
-                    key={opt.label}
-                    className="wr-menu-item"
-                    role="menuitemradio"
-                    aria-checked={opt.value != null && cur === opt.value}
-                    data-checked={opt.value != null && cur === opt.value}
-                    disabled={opt.value == null && menu.book.manual_status == null}
-                    title={opt.value == null ? "清除手动覆盖，回到按打开记录与进度推导" : undefined}
-                    onClick={() => {
-                      closeMenu();
-                      void onSetManualStatus(menu.book, opt.value);
-                    }}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
+              <div className="wr-menu-label" role="presentation">状态</div>
+              <Menu.RadioGroup
+                className="wr-menu-group"
+                value={effectiveStatus(menu.book) ?? "auto"}
+                onValueChange={(v) => void onSetManualStatus(menu.book, v === "auto" ? null : (v as ManualStatus))}
+              >
+                {MANUAL_STATUS_OPTIONS.map((opt) => {
+                  const cur = effectiveStatus(menu.book);
+                  return (
+                    <Menu.RadioItem
+                      key={opt.label}
+                      asChild
+                      value={opt.value ?? "auto"}
+                      data-checked={opt.value != null && cur === opt.value}
+                      disabled={opt.value == null && menu.book.manual_status == null}
+                    >
+                      <button
+                        type="button"
+                        className="wr-menu-item"
+                        title={opt.value == null ? "清除手动覆盖，回到按打开记录与进度推导" : undefined}
+                      >
+                        {opt.label}
+                      </button>
+                    </Menu.RadioItem>
+                  );
+                })}
+              </Menu.RadioGroup>
             </>
           ) : (
             <>
-              <button className="wr-menu-item" role="menuitem" onClick={() => { closeMenu(); onRenameShelf(menu.shelf); }}>
-                重命名书架
-              </button>
-              <button
-                className="wr-menu-item"
-                role="menuitem"
-                onClick={() => { closeMenu(); setMoveDialog({ kind: "shelf", shelfId: menu.shelf.id }); }}
-              >
-                移动到…
-              </button>
-              <button
-                className="wr-menu-item"
-                role="menuitem"
-                data-danger="true"
-                onClick={() => { closeMenu(); void onDeleteShelf(menu.shelf); }}
-              >
-                删除书架
-              </button>
+              <Menu.Item asChild onSelect={() => onRenameShelf(menu.shelf)}>
+                <button type="button" className="wr-menu-item">重命名书架</button>
+              </Menu.Item>
+              <Menu.Item asChild onSelect={() => setMoveDialog({ kind: "shelf", shelfId: menu.shelf.id })}>
+                <button type="button" className="wr-menu-item">移动到…</button>
+              </Menu.Item>
+              <Menu.Item asChild data-danger="true" onSelect={() => void onDeleteShelf(menu.shelf)}>
+                <button type="button" className="wr-menu-item" data-danger="true">删除书架</button>
+              </Menu.Item>
             </>
           )}
-        </div>
+        </PointMenu>
       ) : null}
 
       {moveDialog ? (
-        <div
-          className="wr-prompt-overlay"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setMoveDialog(null);
-          }}
-        >
-          <div
-            className="wr-panel wr-prompt wr-move-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="移动到书架"
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setMoveDialog(null);
-            }}
-          >
-            <div style={{ fontWeight: 700 }}>移动到书架</div>
-            <div className="wr-shelf-tree" role="listbox" aria-label="选择目标书架">
-              <button onClick={() => void onMoveDialogPick(null)}>全部（根）</button>
-              {shelfTreeRows(shelves)
-                .filter((row) => !moveExclude?.has(row.id))
-                .map((row) => (
-                  <button
-                    key={row.id}
-                    style={{ paddingLeft: 12 + row.depth * 14 }}
-                    onClick={() => void onMoveDialogPick(row.id)}
-                  >
-                    {row.name}
-                  </button>
-                ))}
-            </div>
+        <Modal label="移动到书架" onClose={() => setMoveDialog(null)} panelClassName="wr-panel wr-prompt wr-move-dialog">
+          <div style={{ fontWeight: 700 }}>移动到书架</div>
+          <div className="wr-shelf-tree" role="listbox" aria-label="选择目标书架">
+            <button onClick={() => void onMoveDialogPick(null)}>全部（根）</button>
+            {shelfTreeRows(shelves)
+              .filter((row) => !moveExclude?.has(row.id))
+              .map((row) => (
+                <button
+                  key={row.id}
+                  style={{ paddingLeft: 12 + row.depth * 14 }}
+                  onClick={() => void onMoveDialogPick(row.id)}
+                >
+                  {row.name}
+                </button>
+              ))}
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {prompt ? (
-        <div
-          className="wr-prompt-overlay"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setPrompt(null);
-          }}
-        >
-          <div
-            className="wr-panel wr-prompt"
-            role="dialog"
-            aria-modal="true"
+        <Modal label={prompt.title} onClose={() => setPrompt(null)}>
+          <div style={{ fontWeight: 700 }}>{prompt.title}</div>
+          <input
+            className="wr-input"
+            autoFocus
             aria-label={prompt.title}
+            value={prompt.value}
+            onChange={(e) => { const v = e.currentTarget.value; setPrompt((prev) => (prev ? { ...prev, value: v } : prev)); }}
             onKeyDown={(e) => {
-              if (e.key === "Escape") setPrompt(null);
+              if (e.key === "Enter") submitPrompt();
             }}
-          >
-            <div style={{ fontWeight: 700 }}>{prompt.title}</div>
-            <input
-              className="wr-input"
-              autoFocus
-              aria-label={prompt.title}
-              value={prompt.value}
-              onChange={(e) => { const v = e.currentTarget.value; setPrompt((prev) => (prev ? { ...prev, value: v } : prev)); }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submitPrompt();
-              }}
-            />
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button className="wr-btn" onClick={() => setPrompt(null)}>
-                取消
-              </button>
-              <button
-                className="wr-btn wr-btn-primary"
-                onClick={submitPrompt}
-                disabled={!prompt.allowEmpty && !prompt.value.trim()}
-              >
-                确定
-              </button>
-            </div>
+          />
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button className="wr-btn" onClick={() => setPrompt(null)}>
+              取消
+            </button>
+            <button
+              className="wr-btn wr-btn-primary"
+              onClick={submitPrompt}
+              disabled={!prompt.allowEmpty && !prompt.value.trim()}
+            >
+              确定
+            </button>
           </div>
-        </div>
+        </Modal>
       ) : null}
       {detailsBook ? (
         <BookDetailsDialog

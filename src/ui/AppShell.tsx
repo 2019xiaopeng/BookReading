@@ -1,8 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getVersion } from "@tauri-apps/api/app";
-import { IconBook, IconCloud, IconImage, IconPalette, IconRefresh, IconSearch, IconSettings, IconStar, IconTrash, IconClose } from "./icons";
+import * as Menu from "@radix-ui/react-menu";
+import { IconBook, IconCloud, IconImage, IconMenu, IconPalette, IconRefresh, IconSearch, IconSettings, IconStar, IconTrash, IconClose } from "./icons";
+import { PointMenu, Tooltip, TooltipProvider } from "./radix";
+import { useCompactSearch, useViewportTier } from "./viewportTier";
 import { getCachedBackgroundUrl, getBackgroundUrl, subscribeBackground } from "./appBackground";
 import { emitAppRefresh } from "./appActions";
 import { importBooks, importImages } from "./importService";
@@ -24,7 +27,7 @@ import { getAppDataBase } from "../tauri/appDataPaths";
 import { primeSettingsCache } from "../library/settingsCache";
 import { primeCoverLibraryRoot } from "../library/coverSrc";
 import { normalizeBgVeil, normalizeReaderBackground } from "../reader/settings/normalize";
-import { countByShelf, descendantIds, shelfTreeRows, type ShelfTreeRow } from "../library/shelves";
+import { countByShelf, descendantIds, shelfPath, shelfTreeRows, type ShelfTreeRow } from "../library/shelves";
 import type { ReadingStatus } from "../library/readingStatus";
 import { BOOKS_CHANGED_EVENT, runImports, subscribeImportProgress, type ImportProgress } from "../library/importRunner";
 import { primeCloseAction } from "./closeAction";
@@ -215,11 +218,14 @@ export default function AppShell(props: {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [importProgress, setImportProgress] = useState<ImportProgress>(null);
-  const themeBtnRef = useRef<HTMLButtonElement | null>(null);
-  const themeMenuRef = useRef<HTMLDivElement | null>(null);
-  const shelfMenuRef = useRef<HTMLDivElement | null>(null);
+  // V-4 窄窗：档位（JS 驱动树过滤/抽屉/搜索收起；宽度与视觉由 CSS 断点接管）+ 抽屉开关 + 紧凑搜索展开态
+  const tier = useViewportTier();
+  const compactSearch = useCompactSearch();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [searchExpanded, setSearchExpanded] = useState(false);
   // U-18 搜索清理叉：清空后回焦输入框（mousedown preventDefault 保住鼠标路径的焦点）
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const searchToggleRef = useRef<HTMLButtonElement | null>(null);
   const [searchParams] = useSearchParams();
   const activeShelf = props.active === "library" ? searchParams.get("shelf") : null;
   const trashActive = props.active === "library" && searchParams.get("trash") === "1";
@@ -300,56 +306,41 @@ export default function AppShell(props: {
     };
   }, [dropShelfId]);
 
-  // close the theme menu on outside pointerdown / Escape
-  useEffect(() => {
-    if (!themeMenu) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (themeBtnRef.current?.contains(e.target as Node)) return;
-      if (themeMenuRef.current?.contains(e.target as Node)) return;
-      setThemeMenu(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setThemeMenu(null);
-        themeBtnRef.current?.focus();
-      }
-    };
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [themeMenu]);
-
-  useLayoutEffect(() => {
-    if (themeMenu) themeMenuRef.current?.querySelector<HTMLElement>("button")?.focus();
-  }, [themeMenu]);
-
   // E 线全局纯化（右键/拖影/残留快捷键）：壳与阅读页各装一次，幂等（全会话一条）
   useEffect(() => installDesktopChrome(), []);
 
-  // E-1 侧栏书架树菜单：外部 pointerdown / Escape 关闭；打开即聚焦首项（键盘可达尽力，F-1 基座在 3.2）
+  // V-4：<900 Ctrl+F 展开图标版搜索并聚焦；≥900 直接聚焦常驻输入框（阅读器书内搜索路由隔离不受影响）
   useEffect(() => {
-    if (!shelfMenu) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (shelfMenuRef.current?.contains(e.target as Node)) return;
-      setShelfMenu(null);
-    };
+    if (!props.search) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setShelfMenu(null);
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        if (compactSearch) {
+          setSearchExpanded(true);
+          window.setTimeout(() => searchInputRef.current?.focus(), 0);
+        } else {
+          searchInputRef.current?.focus();
+        }
+      }
     };
-    window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [shelfMenu]);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [props.search, compactSearch]);
 
-  useLayoutEffect(() => {
-    if (shelfMenu) shelfMenuRef.current?.querySelector<HTMLElement>("button")?.focus();
-  }, [shelfMenu]);
+  // 回到宽屏：展开态归位（常驻输入框一直在 DOM）
+  useEffect(() => {
+    if (!compactSearch) setSearchExpanded(false);
+  }, [compactSearch]);
+
+  // V-4 抽屉：Esc 关闭
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawerOpen]);
 
   function onMenuNewShelf(parent: Shelf) {
     setShelfMenu(null);
@@ -389,8 +380,8 @@ export default function AppShell(props: {
     }
   }
 
-  function openThemeMenu() {
-    const r = themeBtnRef.current?.getBoundingClientRect();
+  function openThemeMenu(btn: HTMLElement | null) {
+    const r = btn?.getBoundingClientRect();
     setThemeMenu(
       r
         ? { x: Math.max(8, r.right - THEME_MENU_WIDTH), y: r.bottom + 6 }
@@ -419,11 +410,25 @@ export default function AppShell(props: {
       }
     : undefined;
 
+  // V-4 图标栏（600–799）：书架树只留根级 + 当前激活链（根→当前书架路径），其余折叠
+  const railMode = tier === "rail";
+  const activeShelfNum = activeShelf != null && Number.isFinite(Number(activeShelf)) ? Number(activeShelf) : null;
+  const activeChain = new Set<number>(shelfPath(shelves, activeShelfNum).map((s) => s.id));
+  const navRows = filterCollapsedRows(shelfTreeRows(shelves), collapsed).filter(
+    (r) => !railMode || r.depth === 0 || activeChain.has(r.id),
+  );
+  // 抽屉档点任何导航即收抽屉
+  const nav = (to: string) => {
+    setDrawerOpen(false);
+    navigate(to);
+  };
+
   return (
+    <TooltipProvider>
     <div className={`wr-shell${bgUrl ? " wr-shell--userbg" : ""}`} style={shellStyle}>
       <TitleBar title={props.title} />
       <div className="wr-shell-body">
-      <div className="wr-panel wr-side">
+      <div className="wr-panel wr-side" data-open={drawerOpen || undefined}>
         <div className="wr-side-top">
           <div className="wr-brand">
             <div className="wr-brand-name">BookReading</div>
@@ -479,20 +484,22 @@ export default function AppShell(props: {
         </div>
 
         <div className="wr-nav" role="navigation">
-          <button
-            className="wr-nav-btn"
-            data-drop="shelf"
-            data-shelf-id=""
-            data-active={props.active === "library" && !trashActive}
-            aria-current={props.active === "library" && !trashActive ? "page" : undefined}
-            onClick={() => navigate("/")}
-          >
-            <div className="wr-nav-title">
-              <IconBook />
-              书架
-            </div>
-            <div className="wr-nav-sub">层级书架、导入与管理</div>
-          </button>
+          <Tooltip content={railMode ? "书架" : null}>
+            <button
+              className="wr-nav-btn"
+              data-drop="shelf"
+              data-shelf-id=""
+              data-active={props.active === "library" && !trashActive}
+              aria-current={props.active === "library" && !trashActive ? "page" : undefined}
+              onClick={() => nav("/")}
+            >
+              <div className="wr-nav-title">
+                <IconBook />
+                <span className="wr-nav-label">书架</span>
+              </div>
+              <div className="wr-nav-sub">层级书架、导入与管理</div>
+            </button>
+          </Tooltip>
           {shelves.length > 0 ? (
             <>
               {/* S-2 全部收起/展开：有折叠 → 全部展开；否则全部收起（收起=折叠全部有子架的节点） */}
@@ -506,7 +513,7 @@ export default function AppShell(props: {
                 </button>
               </div>
               <div className="wr-nav-groups" role="group" aria-label="书架">
-                {filterCollapsedRows(shelfTreeRows(shelves), collapsed).map((row) => (
+                {navRows.map((row) => (
                   <button
                     key={row.id}
                     className="wr-nav-group-btn"
@@ -515,7 +522,7 @@ export default function AppShell(props: {
                     title={row.name}
                     aria-current={activeShelf === String(row.id) ? "page" : undefined}
                     style={{ paddingLeft: 10 + row.depth * 12 }}
-                    onClick={() => navigate(`/?shelf=${row.id}`)}
+                    onClick={() => nav(`/?shelf=${row.id}`)}
                     onContextMenu={(e) => {
                       // E-1：侧栏书架树右键 = 新建/重命名/删除（贴光标）
                       e.preventDefault();
@@ -547,96 +554,147 @@ export default function AppShell(props: {
               </div>
             </>
           ) : null}
-          <button className="wr-nav-btn" data-active={props.active === "favorites"} aria-current={props.active === "favorites" ? "page" : undefined} onClick={() => navigate("/favorites")}>
-            <div className="wr-nav-title">
-              <IconStar />
-              收藏
-            </div>
-            <div className="wr-nav-sub">书籍与收藏句子</div>
-          </button>
-          <button className="wr-nav-btn" data-active={props.active === "cloud"} aria-current={props.active === "cloud" ? "page" : undefined} onClick={() => navigate("/cloud-shelf")}>
-            <div className="wr-nav-title">
-              <IconCloud />
-              云书架
-            </div>
-            <div className="wr-nav-sub">wenku8 在线书架，可拉取入库</div>
-          </button>
-          <button
-            className="wr-nav-btn"
-            data-drop="trash"
-            data-active={trashActive}
-            aria-current={trashActive ? "page" : undefined}
-            onClick={() => navigate("/?trash=1")}
-          >
-            <div className="wr-nav-title">
-              <IconTrash />
-              回收站
-            </div>
-            <div className="wr-nav-sub">已删除书籍、保留期内可恢复</div>
-          </button>
+          <Tooltip content={railMode ? "收藏" : null}>
+            <button className="wr-nav-btn" data-active={props.active === "favorites"} aria-current={props.active === "favorites" ? "page" : undefined} onClick={() => nav("/favorites")}>
+              <div className="wr-nav-title">
+                <IconStar />
+                <span className="wr-nav-label">收藏</span>
+              </div>
+              <div className="wr-nav-sub">书籍与收藏句子</div>
+            </button>
+          </Tooltip>
+          <Tooltip content={railMode ? "云书架" : null}>
+            <button className="wr-nav-btn" data-active={props.active === "cloud"} aria-current={props.active === "cloud" ? "page" : undefined} onClick={() => nav("/cloud-shelf")}>
+              <div className="wr-nav-title">
+                <IconCloud />
+                <span className="wr-nav-label">云书架</span>
+              </div>
+              <div className="wr-nav-sub">wenku8 在线书架，可拉取入库</div>
+            </button>
+          </Tooltip>
+          <Tooltip content={railMode ? "回收站" : null}>
+            <button
+              className="wr-nav-btn"
+              data-drop="trash"
+              data-active={trashActive}
+              aria-current={trashActive ? "page" : undefined}
+              onClick={() => nav("/?trash=1")}
+            >
+              <div className="wr-nav-title">
+                <IconTrash />
+                <span className="wr-nav-label">回收站</span>
+              </div>
+              <div className="wr-nav-sub">已删除书籍、保留期内可恢复</div>
+            </button>
+          </Tooltip>
         </div>
 
         {/* P-1 底部动作区：写死的固定四钮（刷新/导入漫画/导入图书/设置），任何视图都不重挂载、不变色；
-            刷新走 appActions 事件由当前视图自消化，导入走 importService（落架=当前书架） */}
+            刷新走 appActions 事件由当前视图自消化，导入走 importService（落架=当前书架）。
+            V-4：<800 转 2×2 图标宫格（文字走 Tooltip） */}
         <div className="wr-side-bottom">
-          <button type="button" className="wr-small-btn" title="刷新当前视图" onClick={emitAppRefresh}>
-            <IconRefresh />
-            <span>刷新</span>
-          </button>
-          <button type="button" className="wr-small-btn wr-primary" title="选择漫画文件夹导入" onClick={() => void importImages()}>
-            <IconImage />
-            <span>导入漫画</span>
-          </button>
-          <button type="button" className="wr-small-btn wr-primary" title="选择 EPUB / TXT / CBZ / PDF 导入" onClick={() => void importBooks()}>
-            <IconBook />
-            <span>导入图书</span>
-          </button>
-          <button
-            className="wr-small-btn"
-            data-badge={updateAvailable ? "true" : undefined}
-            title={updateAvailable ? `发现新版本 v${updateAvailable.latest}，在设置中查看` : undefined}
-            onClick={() => setSettingsOpen(true)}
-          >
-            <IconSettings />
-            <span>设置</span>
-          </button>
+          <Tooltip content={railMode ? "刷新当前视图" : null}>
+            <button type="button" className="wr-small-btn" aria-label="刷新当前视图" onClick={emitAppRefresh}>
+              <IconRefresh />
+              <span>刷新</span>
+            </button>
+          </Tooltip>
+          <Tooltip content={railMode ? "导入漫画" : null}>
+            <button type="button" className="wr-small-btn wr-primary" aria-label="选择漫画文件夹导入" onClick={() => void importImages()}>
+              <IconImage />
+              <span>导入漫画</span>
+            </button>
+          </Tooltip>
+          <Tooltip content={railMode ? "导入图书" : null}>
+            <button type="button" className="wr-small-btn wr-primary" aria-label="选择 EPUB / TXT / CBZ / PDF 导入" onClick={() => void importBooks()}>
+              <IconBook />
+              <span>导入图书</span>
+            </button>
+          </Tooltip>
+          <Tooltip content={railMode ? (updateAvailable ? `设置（发现新版本 v${updateAvailable.latest}）` : "设置") : null}>
+            <button
+              className="wr-small-btn"
+              data-badge={updateAvailable ? "true" : undefined}
+              aria-label={updateAvailable ? `发现新版本 v${updateAvailable.latest}，在设置中查看` : "设置"}
+              onClick={() => setSettingsOpen(true)}
+            >
+              <IconSettings />
+              <span>设置</span>
+            </button>
+          </Tooltip>
         </div>
       </div>
 
       <div className="wr-panel wr-main">
         <div className="wr-main-topbar">
+          {/* V-4 <600：汉堡钮唤出侧栏抽屉（CSS 断点控制可见性） */}
+          {tier === "drawer" ? (
+            <button
+              type="button"
+              className="wr-btn wr-icon-btn wr-nav-drawer-btn"
+              aria-label="打开侧栏"
+              aria-expanded={drawerOpen}
+              onClick={() => setDrawerOpen(true)}
+            >
+              <IconMenu />
+            </button>
+          ) : null}
+
           {props.search ? (
-            <div className={props.search.value ? "wr-search wr-search--clearable" : "wr-search"}>
-              <span className="wr-search-icon" aria-hidden>
+            compactSearch && !searchExpanded ? (
+              /* V-4 <900：搜索收为图标钮，点击展开浮层输入框（Ctrl+F 同效） */
+              <button
+                ref={searchToggleRef}
+                type="button"
+                className="wr-btn wr-icon-btn"
+                aria-label="搜索"
+                onClick={() => setSearchExpanded(true)}
+              >
                 <IconSearch />
-              </span>
-              <input
-                ref={searchInputRef}
-                className="wr-search-input"
-                value={props.search.value}
-                onChange={(e) => props.search?.onChange(e.currentTarget.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") props.search?.onSubmit?.();
+              </button>
+            ) : (
+              <div
+                className={`wr-search${props.search.value ? " wr-search--clearable" : ""}${compactSearch ? " wr-search--float" : ""}`}
+                onBlur={(e) => {
+                  if (compactSearch && !e.currentTarget.contains(e.relatedTarget)) setSearchExpanded(false);
                 }}
-                placeholder={props.search.placeholder}
-                aria-label={props.search.placeholder}
-              />
-              {props.search.value ? (
-                <button
-                  type="button"
-                  className="wr-search-clear"
-                  aria-label="清空搜索"
-                  title="清空搜索"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    props.search?.onChange("");
-                    searchInputRef.current?.focus();
+              >
+                <span className="wr-search-icon" aria-hidden>
+                  <IconSearch />
+                </span>
+                <input
+                  ref={searchInputRef}
+                  className="wr-search-input"
+                  autoFocus={compactSearch}
+                  value={props.search.value}
+                  onChange={(e) => props.search?.onChange(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") props.search?.onSubmit?.();
+                    if (e.key === "Escape" && compactSearch) {
+                      setSearchExpanded(false);
+                      searchToggleRef.current?.focus();
+                    }
                   }}
-                >
-                  <IconClose />
-                </button>
-              ) : null}
-            </div>
+                  placeholder={props.search.placeholder}
+                  aria-label={props.search.placeholder}
+                />
+                {props.search.value ? (
+                  <button
+                    type="button"
+                    className="wr-search-clear"
+                    aria-label="清空搜索"
+                    title="清空搜索"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      props.search?.onChange("");
+                      searchInputRef.current?.focus();
+                    }}
+                  >
+                    <IconClose />
+                  </button>
+                ) : null}
+              </div>
+            )
           ) : (
             <h1 style={{ fontWeight: 750, margin: 0, fontSize: "inherit" }}>{props.title}</h1>
           )}
@@ -658,13 +716,12 @@ export default function AppShell(props: {
           ) : null}
 
           <button
-            ref={themeBtnRef}
             className="wr-btn wr-icon-btn"
             aria-label="切换主题"
             aria-expanded={!!themeMenu}
             title="切换主题"
             style={{ marginLeft: props.search ? undefined : "auto" }}
-            onClick={openThemeMenu}
+            onClick={(e) => openThemeMenu(e.currentTarget)}
           >
             <IconPalette />
           </button>
@@ -676,55 +733,56 @@ export default function AppShell(props: {
       </div>
 
       {themeMenu ? (
-        <div
-          ref={themeMenuRef}
-          className="wr-menu"
-          role="group"
-          aria-label="主题"
-          style={{ left: themeMenu.x, top: themeMenu.y, display: "grid", gridTemplateColumns: `repeat(${THEME_SWATCHES.length}, 30px)`, gap: 8 }}
+        <PointMenu
+          point={themeMenu}
+          onClose={() => setThemeMenu(null)}
+          label="主题"
+          contentStyle={{ display: "grid", gridTemplateColumns: `repeat(${THEME_SWATCHES.length}, 30px)`, gap: 8 }}
         >
           {THEME_SWATCHES.map((s) => (
-            <button
-              key={s.value}
-              type="button"
-              className="wr-swatch-btn"
-              data-selected={themeSelection === s.value}
-              aria-label={s.label}
-              aria-pressed={themeSelection === s.value}
-              title={s.label}
-              onClick={() => {
-                setTheme(s.value);
-                setThemeMenu(null);
-              }}
-              style={{ background: s.color }}
-            />
+            <Menu.Item asChild key={s.value}>
+              <button
+                type="button"
+                className="wr-swatch-btn"
+                data-selected={themeSelection === s.value}
+                aria-label={s.label}
+                aria-pressed={themeSelection === s.value}
+                onClick={() => setTheme(s.value)}
+                style={{ background: s.color }}
+              />
+            </Menu.Item>
           ))}
-        </div>
+        </PointMenu>
       ) : null}
 
       {shelfMenu ? (
-        <div
-          ref={shelfMenuRef}
-          className="wr-menu"
-          role="menu"
-          aria-label={`书架 ${shelfMenu.shelf.name}`}
-          style={{ left: shelfMenu.x, top: shelfMenu.y }}
-        >
-          <button className="wr-menu-item" role="menuitem" onClick={() => onMenuNewShelf(shelfMenu.shelf)}>
-            新建子书架
-          </button>
-          <button className="wr-menu-item" role="menuitem" onClick={() => onMenuRenameShelf(shelfMenu.shelf)}>
-            重命名书架
-          </button>
-          <button
-            className="wr-menu-item"
-            role="menuitem"
-            data-danger="true"
-            onClick={() => void onMenuDeleteShelf(shelfMenu.shelf)}
-          >
-            删除书架
-          </button>
-        </div>
+        <PointMenu point={shelfMenu} onClose={() => setShelfMenu(null)} label={`书架 ${shelfMenu.shelf.name}`}>
+          <Menu.Item asChild>
+            <button type="button" className="wr-menu-item" onClick={() => onMenuNewShelf(shelfMenu.shelf)}>
+              新建子书架
+            </button>
+          </Menu.Item>
+          <Menu.Item asChild>
+            <button type="button" className="wr-menu-item" onClick={() => onMenuRenameShelf(shelfMenu.shelf)}>
+              重命名书架
+            </button>
+          </Menu.Item>
+          <Menu.Item asChild>
+            <button
+              type="button"
+              className="wr-menu-item"
+              data-danger="true"
+              onClick={() => void onMenuDeleteShelf(shelfMenu.shelf)}
+            >
+              删除书架
+            </button>
+          </Menu.Item>
+        </PointMenu>
+      ) : null}
+
+      {/* V-4 抽屉遮罩（<600 档） */}
+      {tier === "drawer" && drawerOpen ? (
+        <div className="wr-side-drawer-scrim" aria-hidden="true" onClick={() => setDrawerOpen(false)} />
       ) : null}
 
       {dragOver ? (
@@ -749,5 +807,6 @@ export default function AppShell(props: {
 
       <ToastHost />
     </div>
+    </TooltipProvider>
   );
 }

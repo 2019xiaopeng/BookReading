@@ -15,6 +15,7 @@ import type { Theme } from "../settings/types";
 import { IconPause, IconPlay, IconRefresh } from "../../ui/icons";
 import { loadPdf, pdfLoadErrorMessage, renderPdfPage } from "./api";
 import { autoScrollStep, type ImageReaderSettings } from "../image/layout";
+import { foldSpec, playFold, type FoldHandle } from "../ui/foldTurn";
 import {
   clampPage,
   clampZoomScale,
@@ -40,6 +41,8 @@ type Props = {
   book: Book;
   settings: ImageReaderSettings;
   theme: Theme;
+  /** V-1：翻页动画时长（ms），与漫画/epub 同源 */
+  turnSpeedMs?: number;
   onRelocated: (page: number, pageCount: number) => void;
   onApi: (api: PdfReaderApi) => void;
 };
@@ -73,12 +76,14 @@ const PageCanvas = memo(function PageCanvas(props: {
   return <canvas ref={ref} style={props.style} aria-label={props.label} />;
 });
 
-function PdfReaderImpl({ book, theme, settings, onRelocated, onApi }: Props) {
+function PdfReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated, onApi }: Props) {
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null); // 身份标记：就绪/换书重画；实际渲染走 docRef
   const [pageCount, setPageCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [dims, setDims] = useState<Record<number, PageDim>>({});
-  const [page, setPage] = useState(0); // 分页模式当前页
+  const [page, setPage] = useState(0); // 分页模式目标页
+  // V-1：分页模式实际展示页——目标页位图就绪才前进（旧页保持，消除“清空→解码→再画”闪白）
+  const [shownPage, setShownPage] = useState(0);
   const [anchor, setAnchor] = useState(0); // 连续滚动当前页（可见最小页）
   const [failed, setFailed] = useState<Set<number>>(new Set());
   const [tick, setTick] = useState(0); // 位图缓存版本：缓存变动后触发重画
@@ -109,6 +114,7 @@ function PdfReaderImpl({ book, theme, settings, onRelocated, onApi }: Props) {
   const onRelocatedRef = useRef(onRelocated);
   const autoSpeedRef = useRef(settings.autoScrollSpeed);
   const autoScrollRef = useRef(false);
+  const turnSpeedRef = useRef(turnSpeedMs);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -119,6 +125,9 @@ function PdfReaderImpl({ book, theme, settings, onRelocated, onApi }: Props) {
   useEffect(() => {
     autoSpeedRef.current = settings.autoScrollSpeed;
   }, [settings.autoScrollSpeed]);
+  useEffect(() => {
+    turnSpeedRef.current = turnSpeedMs;
+  }, [turnSpeedMs]);
   useEffect(() => {
     autoScrollRef.current = autoScroll;
   }, [autoScroll]);
@@ -143,6 +152,7 @@ function PdfReaderImpl({ book, theme, settings, onRelocated, onApi }: Props) {
     setDoc(null);
     setPageCount(0);
     setPage(0);
+    setShownPage(0);
     setAnchor(0);
     setDims({});
     setFailed(new Set());
@@ -191,6 +201,7 @@ function PdfReaderImpl({ book, theme, settings, onRelocated, onApi }: Props) {
         const start = clampPage(parsePdfCfi(state?.cfi) ?? 0, d.numPages);
         currentPageRef.current = start;
         setPage(start);
+        setShownPage(start);
         setAnchor(start);
         // 先取首屏窗口尺寸（尽快开渲染），再后台补全其余页
         const win = Array.from({ length: d.numPages }, (_, i) => i).filter(
@@ -305,6 +316,55 @@ function PdfReaderImpl({ book, theme, settings, onRelocated, onApi }: Props) {
       if (!want.has(i)) bitmapsRef.current.delete(i);
     }
   }, [doc, page, anchor, settings.mode, dims, tick]);
+
+  // ---- V-1 分页模式双缓冲：目标页位图（或失败态）就绪才前进展示页；换页瞬间旧页定格为折页覆盖层 ----
+  useEffect(() => {
+    if (bitmapsRef.current.get(page) || failed.has(page)) setShownPage((p) => (p === page ? p : page));
+  }, [page, tick, failed, doc]);
+
+  const prevShownRef = useRef<number | null>(null);
+  const foldLayerRef = useRef<{ el: HTMLElement; h: FoldHandle } | null>(null);
+  // 分页模式 canvas 尺寸语义（提前声明——fold 覆盖层 effect 在下方使用）
+  const pagedCanvasStyle = useMemo<CSSProperties>(
+    () =>
+      settings.fit === "height"
+        ? { maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto" }
+        : settings.fit === "width"
+          ? { width: "100%", height: "auto" }
+          : { maxWidth: "none", maxHeight: "none", margin: "auto" },
+    [settings.fit],
+  );
+  useEffect(() => {
+    const prev = prevShownRef.current;
+    prevShownRef.current = shownPage;
+    const s = settingsRef.current;
+    if (prev === null) return; // 首个展示页（加载/恢复落位）无翻页语义
+    // 相邻换页 + 折影动画才挂覆盖层；跳页/换模式无折页语义
+    if (prev === shownPage || s.mode !== "paged" || s.pageAnimation !== "fold") return;
+    if (Math.abs(shownPage - prev) !== 1) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const bmp = bitmapsRef.current.get(prev);
+    const stage = stageRef.current;
+    if (!bmp || !stage) return;
+    // 快速连按：先立即终态上一张折页（覆盖层移除），再挂新一张
+    foldLayerRef.current?.h.finish();
+    const layer = document.createElement("div");
+    layer.className = "wr-fold-layer wr-image-fit";
+    layer.dataset.fit = s.fit;
+    const c = document.createElement("canvas");
+    c.width = bmp.width;
+    c.height = bmp.height;
+    if (bmp.width > 0 && bmp.height > 0) c.getContext("2d")?.drawImage(bmp, 0, 0);
+    Object.assign(c.style, pagedCanvasStyle);
+    layer.appendChild(c);
+    stage.appendChild(layer);
+    const h = playFold(layer, { durationMs: turnSpeedRef.current, spec: foldSpec(shownPage > prev ? "next" : "prev", false) });
+    foldLayerRef.current = { el: layer, h };
+    void h.done.then(() => {
+      layer.remove();
+      if (foldLayerRef.current?.el === layer) foldLayerRef.current = null;
+    });
+  }, [shownPage, pagedCanvasStyle]);
 
   // ---- 进度上报（relocated 语义对齐漫画）----
   const activePage = settings.mode === "webtoon" ? anchor : page;
@@ -614,18 +674,8 @@ function PdfReaderImpl({ book, theme, settings, onRelocated, onApi }: Props) {
 
   // 分页模式 canvas 尺寸语义 = 漫画 img 的 fit 三档（复用 .wr-image-fit 容器规则）；
   // useMemo 稳定引用（PageCanvas memo 依赖）
-  const pagedCanvasStyle = useMemo<CSSProperties>(
-    () =>
-      settings.fit === "height"
-        ? { maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto" }
-        : settings.fit === "width"
-          ? { width: "100%", height: "auto" }
-          : { maxWidth: "none", maxHeight: "none", margin: "auto" },
-    [settings.fit],
-  );
-
   // 单一根节点跨加载/错误/内容态常驻：stageRef 稳定，useElementSize 的 ResizeObserver 才能贯穿状态切换
-  const pagedBitmap = bitmapsRef.current.get(page);
+  const pagedBitmap = bitmapsRef.current.get(shownPage);
   return (
     <div
       className="wr-image-stage"
@@ -734,15 +784,15 @@ function PdfReaderImpl({ book, theme, settings, onRelocated, onApi }: Props) {
             }
           >
             {pagedBitmap ? (
-              <PageCanvas bitmap={pagedBitmap} style={pagedCanvasStyle} label={`第 ${page + 1} 页`} />
-            ) : failed.has(page) ? (
-              <button type="button" className="wr-image-loading wr-image-failed" onClick={() => retry(page)}>
+              <PageCanvas bitmap={pagedBitmap} style={pagedCanvasStyle} label={`第 ${shownPage + 1} 页`} />
+            ) : failed.has(shownPage) ? (
+              <button type="button" className="wr-image-loading wr-image-failed" onClick={() => retry(shownPage)}>
                 本页渲染失败，点击重试
               </button>
             ) : (
               <div
                 className="wr-image-loading"
-                style={dims[page] ? { aspectRatio: `${dims[page].w} / ${dims[page].h}`, width: "100%" } : undefined}
+                style={dims[shownPage] ? { aspectRatio: `${dims[shownPage].w} / ${dims[shownPage].h}`, width: "100%" } : undefined}
               />
             )}
           </div>

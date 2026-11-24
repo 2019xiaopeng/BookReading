@@ -8,6 +8,7 @@ import { relinkImageBook } from "../reader/image/api";
 import { BOOKS_CHANGED_EVENT } from "./importRunner";
 import { formatTitle } from "./bookFormat";
 import { showAlert, showConfirm } from "../ui/dialog";
+import { Modal } from "../ui/radix";
 import { IconAlert, IconBook, IconFolder, IconImage, IconLibraryAll, IconRefresh } from "../ui/icons";
 import BookDetailsDialog from "./BookDetailsDialog";
 
@@ -107,21 +108,7 @@ export default function HealthScanDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div
-      className="wr-prompt-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        className="wr-panel wr-prompt wr-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="书库体检"
-        onKeyDown={(e) => {
-          if (e.key === "Escape" && !busyId) onClose();
-        }}
-      >
+    <Modal label="书库体检" onClose={() => { if (!busyId) onClose(); }} panelClassName="wr-panel wr-prompt wr-dialog">
         <div className="wr-prompt-title">书库体检</div>
 
         {error ? (
@@ -261,7 +248,6 @@ export default function HealthScanDialog({ onClose }: { onClose: () => void }) {
             关闭
           </button>
         </div>
-      </div>
 
       {details ? (
         <BookDetailsDialog
@@ -272,6 +258,6 @@ export default function HealthScanDialog({ onClose }: { onClose: () => void }) {
           onChanged={() => void scan()}
         />
       ) : null}
-    </div>
+    </Modal>
   );
 }

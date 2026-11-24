@@ -152,6 +152,8 @@ export type ReaderController = {
   chapterNav: (delta: number) => void;
   /** B13 滚动模式翻屏（PageDown/PageUp）：章末/章首即时章导航，章中滚动一屏；返回触发的章方向或 null */
   scrollStep: (dir: 1 | -1) => 1 | -1 | null;
+  /** V-1：本次翻页是否跨章（闪白只发生在跨章清屏处——双缓冲快照按此判断是否需要挂） */
+  crossesSection: (direction: "next" | "prev") => boolean;
   progressCfi: (percentage: number) => string | null;
   setTheme: (theme: Theme) => void;
   setFontSizePercent: (percent: number) => void;
@@ -191,6 +193,22 @@ export function lazyImagesForFlow(flow: string): boolean {
  * spread 切换只改列度量不重绘当前内容，会留下按旧度量裁切的残影；
  * 统一路径：spread(mode) → clear() → display(target)。无 target（尚未渲染）时退回 resize。
  */
+/** V-1：本次翻页是否跨章（跨章 display 会先清屏重渲——闪白的唯一来源；章内翻页只是列平移不清屏） */
+export function turnCrossesSection(location: any, direction: "next" | "prev"): boolean {
+  const start = location?.start;
+  const end = location?.end;
+  const idx = typeof start?.index === "number" ? start.index : -1;
+  if (idx < 0) return true; // 位置未知按跨章兜底（多挂一次快照，不会闪白）
+  if (direction === "next") {
+    if (typeof end?.index === "number" && end.index > idx) return true;
+    const total = start?.displayed?.total;
+    const page = end?.displayed?.page ?? start?.displayed?.page;
+    return typeof total === "number" && total > 0 && typeof page === "number" && page >= total;
+  }
+  const page = start?.displayed?.page;
+  return typeof page !== "number" || page <= 1;
+}
+
 /** 滚动模式章末/章首判定（B13 章续读）：距端 <40px 视为到边；短章整章可见时按滚动方向续读。 */
 export function scrollEdgeDirection(scrollTop: number, clientHeight: number, scrollHeight: number, lastDelta: number): 1 | -1 | null {
   if (scrollHeight <= clientHeight) return lastDelta < 0 ? -1 : 1;
@@ -819,6 +837,7 @@ export async function createReader(opts: {
         return null;
       }
     },
+    crossesSection: (direction: "next" | "prev") => turnCrossesSection(rendition.currentLocation?.(), direction),
     progressCfi: (percentage: number) => {
       try {
         const p = Math.min(0.999, Math.max(0, percentage));

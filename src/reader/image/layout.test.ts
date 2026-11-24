@@ -159,8 +159,9 @@ describe("normalizeImageReaderSettings", () => {
     expect(normalizeImageReaderSettings({ doubleOffset: true }).doubleOffset).toBe(0);
   });
 
-  test("batch5: pageAnimation keeps only none/slide, missing falls back to slide", () => {
+  test("batch5: pageAnimation keeps only none/slide/fold, missing falls back to slide", () => {
     expect(normalizeImageReaderSettings({ pageAnimation: "none" }).pageAnimation).toBe("none");
+    expect(normalizeImageReaderSettings({ pageAnimation: "fold" }).pageAnimation).toBe("fold");
     expect(normalizeImageReaderSettings({ pageAnimation: "fade" }).pageAnimation).toBe("slide");
     expect(normalizeImageReaderSettings({}).pageAnimation).toBe("slide");
   });

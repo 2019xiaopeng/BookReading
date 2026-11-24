@@ -1,7 +1,7 @@
 export type ImageFit = "height" | "width" | "original";
 export type ImagePageLayout = "single" | "double";
 export type ImageReadMode = "paged" | "webtoon";
-export type ImagePageAnimation = "none" | "slide";
+export type ImagePageAnimation = "none" | "slide" | "fold";
 
 export type ImageReaderSettings = {
   fit: ImageFit;
@@ -46,7 +46,7 @@ export function normalizeImageReaderSettings(raw: unknown): ImageReaderSettings 
     layout: o.layout === "double" ? "double" : "single",
     rtl: o.rtl === true,
     mode: o.mode === "webtoon" ? "webtoon" : "paged",
-    pageAnimation: o.pageAnimation === "none" ? "none" : "slide",
+    pageAnimation: o.pageAnimation === "none" || o.pageAnimation === "fold" ? o.pageAnimation : "slide",
     webtoonWidth: Math.min(100, Math.max(40, width)),
     autoScrollSpeed: Math.min(240, Math.max(20, Math.round(speed))),
     doubleOffset: o.doubleOffset === 1 ? 1 : 0,

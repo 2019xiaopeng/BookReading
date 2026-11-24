@@ -342,12 +342,15 @@ export default function SettingsPanel(props: {
           style={{ opacity: scrolled ? 0.55 : 1, transition: "opacity 180ms ease" }}
           onChange={(e) => {
             const next = e.currentTarget.value;
-            if (next === "none" || next === "fade" || next === "slide") props.onChange({ ...v, pageAnimation: next });
+            if (next === "none" || next === "fade" || next === "slide" || next === "fold") {
+              props.onChange({ ...v, pageAnimation: next });
+            }
           }}
         >
           <option value="none">无</option>
           <option value="fade">淡入淡出</option>
           <option value="slide">滑动</option>
+          <option value="fold">纸页折影</option>
         </select>
       </div>
 

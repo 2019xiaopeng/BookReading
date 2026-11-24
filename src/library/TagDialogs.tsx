@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import * as Menu from "@radix-ui/react-menu";
 
 import type { Tag } from "../tauri/invoke";
 import { deleteTag, mergeTags, recolorTag, renameTag } from "../tauri/invoke";
 import { showAlert, showConfirm } from "../ui/dialog";
+import { anchorBelow, Modal, PointMenu, type MenuPoint } from "../ui/radix";
 import { TAG_COLORS, tagDotColor } from "./tags";
 
 function TagDot({ color }: { color: string | null }) {
@@ -43,7 +45,7 @@ export function TagToggleList({
   );
 }
 
-/** 筛选行标签下拉（多选，AND 语义） */
+/** 筛选行标签下拉（多选，AND 语义）。V-2：行为层交 Radix Menu（CheckboxItem 多选不关菜单）。 */
 export function TagFilterMenu({
   tags,
   selected,
@@ -53,56 +55,61 @@ export function TagFilterMenu({
   selected: Set<number>;
   onChange: (next: Set<number>) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  const [anchor, setAnchor] = useState<MenuPoint | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
 
   const activeNames = tags.filter((t) => selected.has(t.id)).map((t) => t.name);
 
   return (
-    <div ref={rootRef} style={{ position: "relative" }}>
+    <div style={{ position: "relative" }}>
       <button
+        ref={btnRef}
         type="button"
         className="wr-btn"
-        aria-expanded={open}
+        aria-expanded={!!anchor}
         aria-haspopup="true"
-        onClick={() => setOpen((v) => !v)}
+        // pointerdown 阶段拦外点（不冒泡到 Radix 的 document 监听），click 才翻转——避免“关了又开”
+        onPointerDown={(e) => {
+          if (anchor) e.stopPropagation();
+        }}
+        onClick={() => setAnchor((v) => (v ? null : anchorBelow(btnRef.current)))}
       >
         标签{selected.size > 0 ? ` · ${selected.size}` : ""}▾
       </button>
-      {open ? (
-        <div className="wr-tag-pop" role="dialog" aria-label="按标签筛选">
-          <TagToggleList
-            tags={tags}
-            selected={selected}
-            onToggle={(id) => {
-              const next = new Set(selected);
-              if (next.has(id)) next.delete(id);
-              else next.add(id);
-              onChange(next);
-            }}
-          />
+      {anchor ? (
+        <PointMenu point={anchor} onClose={() => setAnchor(null)} label="按标签筛选" contentClassName="wr-tag-pop">
+          {tags.length === 0 ? (
+            <div className="wr-muted" style={{ fontSize: 12, padding: "4px 2px" }}>还没有标签</div>
+          ) : (
+            tags.map((t) => (
+              <Menu.CheckboxItem
+                key={t.id}
+                asChild
+                checked={selected.has(t.id)}
+                onSelect={(e) => {
+                  e.preventDefault(); // 多选：点选不关菜单
+                  const next = new Set(selected);
+                  if (next.has(t.id)) next.delete(t.id);
+                  else next.add(t.id);
+                  onChange(next);
+                }}
+              >
+                <button type="button" className="wr-tag-item" aria-checked={selected.has(t.id)} data-checked={selected.has(t.id)}>
+                  <TagDot color={t.color} />
+                  <span className="wr-tag-item-name">{t.name}</span>
+                  <span className="wr-tag-item-count">{t.book_count}</span>
+                </button>
+              </Menu.CheckboxItem>
+            ))
+          )}
           {selected.size > 0 ? (
-            <button type="button" className="wr-btn" style={{ width: "100%", fontSize: 12 }} onClick={() => onChange(new Set())}>
-              清除标签筛选
-            </button>
+            <Menu.Item asChild>
+              <button type="button" className="wr-btn" style={{ width: "100%", fontSize: 12 }} onClick={() => onChange(new Set())}>
+                清除标签筛选
+              </button>
+            </Menu.Item>
           ) : null}
-        </div>
+        </PointMenu>
       ) : null}
       {activeNames.length > 0 ? (
         <span className="wr-muted" style={{ fontSize: 12, marginLeft: 6 }} title={activeNames.join(" + ")}>
@@ -127,21 +134,7 @@ export function BatchTagDialog({
 }) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   return (
-    <div
-      className="wr-prompt-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        className="wr-panel wr-prompt"
-        role="dialog"
-        aria-modal="true"
-        aria-label="批量打标签"
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
-        }}
-      >
+    <Modal label="批量打标签" onClose={onClose}>
         <div className="wr-prompt-title">给选中的 {bookCount} 本书打标签</div>
         <TagToggleList
           tags={tags}
@@ -161,8 +154,7 @@ export function BatchTagDialog({
             打标签
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -183,21 +175,7 @@ export function ManageTagsDialog({ tags, onChanged, onClose }: { tags: Tag[]; on
   }
 
   return (
-    <div
-      className="wr-prompt-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        className="wr-panel wr-prompt wr-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="管理标签"
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
-        }}
-      >
+    <Modal label="管理标签" onClose={onClose} panelClassName="wr-panel wr-prompt wr-dialog">
         <div className="wr-prompt-title">管理标签</div>
         {tags.length === 0 ? (
           <div className="wr-muted" style={{ fontSize: 13 }}>
@@ -329,7 +307,6 @@ export function ManageTagsDialog({ tags, onChanged, onClose }: { tags: Tag[]; on
             关闭
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

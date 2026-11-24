@@ -176,6 +176,14 @@ export function IconPin(props: P) {
   );
 }
 
+export function IconMenu(props: P) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" {...props}>
+      <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function IconMore(props: P) {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" {...props}>

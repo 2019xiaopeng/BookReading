@@ -1,4 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { Modal } from "./radix";
 
 /**
  * 统一对话框（批次7）：替代全部 window.alert / window.confirm。
@@ -121,21 +122,11 @@ export function DialogHost() {
   const promptEmpty = req.kind === "prompt" && !req.allowEmpty && !promptValue.trim();
 
   return (
-    <div
-      className="wr-prompt-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) finish("dismiss");
-      }}
+    <Modal
+      label={req.title}
+      onClose={() => finish("dismiss")}
+      panelClassName="wr-panel wr-prompt wr-prompt--sys"
     >
-      <div
-        className="wr-panel wr-prompt wr-prompt--sys"
-        role={req.kind === "confirm" ? "alertdialog" : "dialog"}
-        aria-modal="true"
-        aria-label={req.title}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") finish("dismiss");
-        }}
-      >
         <div className="wr-prompt-title">{req.title}</div>
         {req.body ? <div className="wr-prompt-body">{req.body}</div> : null}
         {req.kind === "prompt" ? (
@@ -183,7 +174,6 @@ export function DialogHost() {
             {req.confirmText ?? (req.kind === "alert" ? "知道了" : "确定")}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

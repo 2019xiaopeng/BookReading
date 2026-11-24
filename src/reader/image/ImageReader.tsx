@@ -16,6 +16,7 @@ import { IconPause, IconPlay, IconRefresh } from "../../ui/icons";
 import { showAlert } from "../../ui/dialog";
 import { BOOKS_CHANGED_EVENT } from "../../library/importRunner";
 import { listImagePageMeta, listImagePages, readImagePage, relinkImageBook, type ImagePageMeta } from "./api";
+import { foldSpec, playFold, type FoldHandle } from "../ui/foldTurn";
 import {
   WIDE_PAGE_RATIO,
   autoScrollStep,
@@ -85,7 +86,8 @@ function ImageReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated
   const [shownSpread, setShownSpread] = useState<number | null>(null);
   // 批次17：本次换页是否走“占位→成像”路径（初始载入/跳页）——只有它淡入；相邻翻页由 slide 转场，不叠加淡入
   const [reveal, setReveal] = useState(true);
-  const [snap, setSnap] = useState<{ pages: number[]; urls: Record<number, string>; dir: 1 | -1 } | null>(null);
+  // V-1：相邻翻页转场快照（旧页定格为覆盖层）；anim=slide 走 CSS keyframes，fold 走 rAF 折页
+  const [snap, setSnap] = useState<{ pages: number[]; urls: Record<number, string>; dir: 1 | -1; anim: "slide" | "fold" } | null>(null);
   const [zoom, setZoom] = useState<ZoomState>({ scale: 1, tx: 0, ty: 0 });
   const zoomed = zoom.scale !== 1;
   // B11 条漫自动滚动（webtoon 专属）：rAF 按帧距累积 scrollTop，速度存 image_reader_settings
@@ -245,7 +247,7 @@ function ImageReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated
     setReveal(!adjacent);
     if (
       adjacent &&
-      settings.pageAnimation === "slide" &&
+      (settings.pageAnimation === "slide" || settings.pageAnimation === "fold") &&
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
       const pages = spreads[prev] ?? [];
@@ -255,10 +257,32 @@ function ImageReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated
         if (u) snapUrls[p] = u;
       }
       if (pages.length > 0 && pages.every((p) => snapUrls[p])) {
-        setSnap({ pages, urls: snapUrls, dir: slideDirection(spreadIndex - prev, settings.rtl) as 1 | -1 });
+        setSnap({
+          pages,
+          urls: snapUrls,
+          dir: slideDirection(spreadIndex - prev, settings.rtl) as 1 | -1,
+          anim: settings.pageAnimation === "fold" ? "fold" : "slide",
+        });
       }
     }
   }, [spreadIndex, spreads, urls, failed, settings.mode, settings.rtl, settings.pageAnimation, snap]);
+
+  // V-1 纸页折影：快照元素上 rAF 折页；新翻页/卸载时 finish() 立即终态（覆盖层随下一次 setSnap 换新）
+  const snapElRef = useRef<HTMLDivElement | null>(null);
+  const snapFoldRef = useRef<FoldHandle | null>(null);
+  useEffect(() => {
+    snapFoldRef.current?.finish();
+    if (!snap || snap.anim !== "fold") return;
+    const node = snapElRef.current;
+    if (!node) return;
+    const h = playFold(node, {
+      durationMs: turnSpeedMs,
+      spec: foldSpec(snap.dir === 1 ? "next" : "prev", settings.layout === "double"),
+    });
+    snapFoldRef.current = h;
+    void h.done.then(() => setSnap((s) => (s === snap ? null : s)));
+    return () => h.finish();
+  }, [snap, turnSpeedMs, settings.layout]);
   function retry(index: number) {
     setFailed((prev) => {
       if (!prev.has(index)) return prev;
@@ -865,11 +889,12 @@ function ImageReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated
   >
     {snap ? (
       <div
-        className="wr-image-fit wr-image-fit--out"
+        ref={snapElRef}
+        className={snap.anim === "fold" ? "wr-image-fit wr-fold-layer" : "wr-image-fit wr-image-fit--out"}
         data-fit={settings.fit}
         aria-hidden="true"
         style={{ "--slide-dir": snap.dir, animationDuration: `${turnSpeedMs}ms` } as CSSProperties}
-        onAnimationEnd={() => setSnap(null)}
+        onAnimationEnd={snap.anim === "fold" ? undefined : () => setSnap(null)}
       >
         {displayOrder(snap.pages, settings.rtl).map((p) =>
           snap.urls[p] ? (

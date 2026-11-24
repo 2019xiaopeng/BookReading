@@ -16,6 +16,7 @@ import {
   installUpdateAndQuit,
 } from "./updater";
 import { showToast } from "./toast";
+import { Modal } from "./radix";
 
 type Phase = "checking" | "available" | "latest" | "downloading" | "finished" | "error";
 
@@ -145,22 +146,12 @@ export default function UpdateModal({ onClose }: { onClose: () => void }) {
   const remain = speed && total && total > downloaded ? (total - downloaded) / speed : null;
 
   return (
-    <div
-      className="wr-prompt-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && canClose) onClose();
-      }}
+    <Modal
+      label="软件更新"
+      onClose={() => { if (canClose) onClose(); }}
+      panelClassName="wr-panel wr-prompt wr-dialog"
+      panelStyle={{ maxWidth: 480 }}
     >
-      <div
-        className="wr-panel wr-prompt wr-dialog"
-        style={{ maxWidth: 480 }}
-        role="dialog"
-        aria-modal="true"
-        aria-label="软件更新"
-        onKeyDown={(e) => {
-          if (e.key === "Escape" && canClose) onClose();
-        }}
-      >
         <div className="wr-prompt-title">软件更新</div>
         <div className="wr-prompt-body">
           {phase === "checking" ? <div className="wr-muted">正在检查更新…</div> : null}
@@ -256,7 +247,6 @@ export default function UpdateModal({ onClose }: { onClose: () => void }) {
             </button>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

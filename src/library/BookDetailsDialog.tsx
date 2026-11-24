@@ -15,6 +15,7 @@ import {
   updateBookMetadata,
 } from "../tauri/invoke";
 import { showAlert, showConfirm } from "../ui/dialog";
+import { Modal } from "../ui/radix";
 import { invalidateCoverUrl, requestCoverUrl, useCoverUrls } from "./useCoverUrls";
 import { DEFAULT_TAG_COLOR, formatFileSize, tagDotColor } from "./tags";
 import { shelfPath } from "./shelves";
@@ -220,21 +221,7 @@ export default function BookDetailsDialog({
   }, [coverUrl]);
 
   return (
-    <div
-      className="wr-prompt-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        className="wr-panel wr-prompt wr-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`书籍详情 ${b.title ?? ""}`}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
-        }}
-      >
+    <Modal label={`书籍详情 ${b.title ?? ""}`} onClose={onClose} panelClassName="wr-panel wr-prompt wr-dialog">
         <div className="wr-prompt-title">书籍详情</div>
         <div className="wr-details">
           <div
@@ -437,7 +424,6 @@ export default function BookDetailsDialog({
             删除
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

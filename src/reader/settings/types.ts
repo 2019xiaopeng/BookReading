@@ -1,7 +1,7 @@
 import type { LayoutMode } from "./layoutMode";
 
 export type Theme = "light" | "sepia" | "green" | "gray" | "dark" | "darkcontrast" | "ink" | "ink-dark";
-export type PageAnimation = "none" | "slide" | "fade";
+export type PageAnimation = "none" | "slide" | "fade" | "fold";
 export type ReadingMode = "paginated" | "scrolled";
 export type FontFamily = "default" | "songti" | "heiti" | "kaiti" | "fangsong" | "custom";
 export type ReaderBackground = { type: "preset" } | { type: "image"; path: string };

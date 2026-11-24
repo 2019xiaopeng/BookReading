@@ -10,6 +10,7 @@ import CleanTitleDialog from "../library/CleanTitleDialog";
 import { invalidateAllCoverUrls } from "../library/useCoverUrls";
 import { notifyBackgroundChanged, resetBackgroundCache } from "./appBackground";
 import { showAlert, showConfirm } from "./dialog";
+import { Modal } from "./radix";
 import { IconUpdate } from "./icons";
 import { resolveCloseAction, setCloseBehavior, type CloseBehavior } from "./closeAction";
 import { getUpdateAvailable } from "./updater";
@@ -217,21 +218,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
     : [];
 
   return (
-    <div
-      className="wr-prompt-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        className="wr-panel wr-prompt wr-dialog wr-dialog--settings"
-        role="dialog"
-        aria-modal="true"
-        aria-label="设置"
-        onKeyDown={(e) => {
-          if (e.key === "Escape" && !busy) onClose();
-        }}
-      >
+    <Modal label="设置" onClose={() => { if (!busy) onClose(); }} panelClassName="wr-panel wr-prompt wr-dialog wr-dialog--settings">
         {/* SET-1 滚动移到内层：外层圆角框裁剪，滚动条不再凸出圆角边框 */}
         <div className="wr-settings-scroll" ref={scrollRef}>
         <div className="wr-prompt-title">设置</div>
@@ -485,11 +472,10 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
             关闭
           </button>
         </div>
-      </div>
 
       {healthOpen ? <HealthScanDialog onClose={() => setHealthOpen(false)} /> : null}
       {cleanOpen ? <CleanTitleDialog onClose={() => setCleanOpen(false)} onChanged={() => {}} /> : null}
       {updateOpen ? <UpdateModal onClose={() => setUpdateOpen(false)} /> : null}
-    </div>
+    </Modal>
   );
 }

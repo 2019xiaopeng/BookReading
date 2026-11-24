@@ -10,6 +10,7 @@ import {
 } from "../tauri/invoke";
 import { showAlert } from "../ui/dialog";
 import { showToast } from "../ui/toast";
+import { Modal } from "../ui/radix";
 
 export default function CleanTitleDialog({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
   const [items, setItems] = useState<CleanPreviewItem[] | null>(null);
@@ -77,8 +78,7 @@ export default function CleanTitleDialog({ onClose, onChanged }: { onClose: () =
   };
 
   return (
-    <div className="wr-prompt-overlay">
-      <div className="wr-panel wr-prompt wr-dialog wr-clean-dialog">
+    <Modal label="智能清洗标题预览" onClose={onClose} panelClassName="wr-panel wr-prompt wr-dialog wr-clean-dialog">
         <div className="wr-prompt-title">智能清洗标题预览</div>
         <div className="wr-prompt-body">
           {items === null ? (
@@ -137,7 +137,6 @@ export default function CleanTitleDialog({ onClose, onChanged }: { onClose: () =
             {applying ? `应用中…` : `应用清洗（${items?.length ?? 0} 本）`}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
