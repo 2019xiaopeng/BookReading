@@ -66,6 +66,11 @@ export async function checkForUpdateManually(): Promise<UpdateInfo> {
   return info;
 }
 
+/** F-1：插件通道确认最新后熄红点（与 checkForUpdateManually 的红点维护对称） */
+export function clearUpdateAvailable(): void {
+  setAvailable(null);
+}
+
 export type DownloadProgress = { downloaded: number; total: number };
 
 /** U-2 下载 NSIS 到临时目录：进度经 "update-download-progress" 事件回调，resolve 出安装包路径 */

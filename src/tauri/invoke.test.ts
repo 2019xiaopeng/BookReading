@@ -11,6 +11,7 @@ import {
   addFavoriteQuote,
   addHighlight,
   addTagsToBooks,
+  cleanSampleReport,
   computeBookStats,
   createShelf,
   createTag,
@@ -34,6 +35,7 @@ import {
   purgeBooks,
   recolorTag,
   renameShelf,
+  revertTitle,
   renameTag,
   repairBookMetadata,
   restoreBooks,
@@ -271,5 +273,17 @@ describe("v2.5 新增 wrapper 参数命名", () => {
     hoisted.invokeMock.mockResolvedValueOnce("F:/out/收藏摘录.md");
     await exportAnnotations(null, "F:/out/收藏摘录.md");
     expect(hoisted.invokeMock).toHaveBeenLastCalledWith("export_annotations", { bookId: null, destPath: "F:/out/收藏摘录.md" });
+  });
+});
+
+describe("v3.1 清洗 v2 wrapper", () => {
+  test("cleanSampleReport / revertTitle 命令名与 camelCase 键", async () => {
+    hoisted.invokeMock.mockResolvedValueOnce([]);
+    await cleanSampleReport();
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("clean_sample_report");
+
+    hoisted.invokeMock.mockResolvedValueOnce(true);
+    await revertTitle("b1");
+    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("revert_title", { bookId: "b1" });
   });
 });

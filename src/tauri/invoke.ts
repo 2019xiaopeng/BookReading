@@ -202,6 +202,25 @@ export async function cleanTitleApply(updates: CleanApplyItem[]): Promise<number
   return invoke<number>("clean_title_apply", { updates });
 }
 
+// ---- v3.1 清洗 v2（U-4/D-1）----
+
+/** 全库抽样报告：现行管线后仍可疑的条目（serde camelCase，与 cleaning_v2.rs 对齐） */
+export type SampleReportItem = {
+  bookId: string;
+  title: string;
+  cleaned: string;
+  residue: string[];
+  suspectTags: string[];
+};
+export async function cleanSampleReport(): Promise<SampleReportItem[]> {
+  return invoke<SampleReportItem[]>("clean_sample_report");
+}
+
+/** 单本还原批量清洗前快照的原标题；false=无快照（从未清洗过）或书不存在/已删 */
+export async function revertTitle(bookId: string): Promise<boolean> {
+  return invoke<boolean>("revert_title", { bookId });
+}
+
 // 应用内更新（U-1/U-2）：GitHub Releases 检查/下载/运行安装器
 export type UpdateInfo = {
   current: string;

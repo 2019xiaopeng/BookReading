@@ -2,26 +2,19 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
-
-import { clearCache, getSettings, migrateLibraryRoot, reextractAllCovers, removeOldLibrary, setSetting, storageStats, type ImportMode, type StorageStats, type UpdateInfo } from "../tauri/invoke";
+import { clearCache, getSettings, migrateLibraryRoot, reextractAllCovers, removeOldLibrary, setSetting, storageStats, type ImportMode, type StorageStats } from "../tauri/invoke";
 import { formatFileSize } from "../library/tags";
 import { BOOKS_CHANGED_EVENT } from "../library/importRunner";
 import HealthScanDialog from "../library/HealthScanDialog";
 import CleanTitleDialog from "../library/CleanTitleDialog";
 import { invalidateAllCoverUrls } from "../library/useCoverUrls";
 import { notifyBackgroundChanged, resetBackgroundCache } from "./appBackground";
-import { showAlert, showChoice, showConfirm } from "./dialog";
+import { showAlert, showConfirm } from "./dialog";
 import { IconUpdate } from "./icons";
 import { resolveCloseAction, setCloseBehavior, type CloseBehavior } from "./closeAction";
-import {
-  checkForUpdateManually,
-  downloadUpdateWithProgress,
-  installUpdateAndQuit,
-  releasePageFromAssetUrl,
-  RELEASES_URL,
-} from "./updater";
-import { showToast } from "./toast";
+import { getUpdateAvailable } from "./updater";
+import NetworkSettings from "./NetworkSettings";
+import UpdateModal from "./UpdateModal";
 
 const RETENTION_LABELS: Record<string, string> = { "7": "7 天", "30": "30 天", "0": "永不" };
 
@@ -61,15 +54,16 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
   const [cleanOpen, setCleanOpen] = useState(false);
+  // F-1：检查更新改开 UpdateModal（插件通道）；红点亮着时入口行提示版本，
+  // 且点红点（开设置）直接弹出更新弹窗——关掉弹窗仍留在设置里
+  const [updateOpen, setUpdateOpen] = useState(() => getUpdateAvailable() != null);
+  const badgeUpdate = getUpdateAvailable();
   // v2.7.0：导入方式（M-3）/ 关闭按钮行为（C-2）/ 自动检查更新（U-3）
   const [importMode, setImportMode] = useState<ImportMode>("copy");
   const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>("ask");
   const [autoUpdateCheck, setAutoUpdateCheck] = useState(true);
   // P-4 继续阅读卡开关（settings 键 continue_card.enabled，'0'=关，缺省开）
   const [continueCard, setContinueCard] = useState(true);
-  // U-1/U-2 手动检查更新：idle → checking →（弹窗确认后）downloading
-  const [updatePhase, setUpdatePhase] = useState<"idle" | "checking" | "downloading">("idle");
-  const [dlProgress, setDlProgress] = useState<{ downloaded: number; total: number } | null>(null);
   // H-5 后台插图优化进度：事件仅在优化进行中持续发，无事件/已完成时隐藏
   const [optProgress, setOptProgress] = useState<{ done: number; total: number } | null>(null);
   // SET-1 滚动归零：此前底部「关闭」钮 autoFocus 把滚动容器拽到底，改为外层归零兜底
@@ -158,68 +152,6 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
       await showAlert("迁移失败", String(e));
     } finally {
       setBusy(false);
-    }
-  }
-
-  // U-1/U-2：打开发布页（opener 插件；失败退复制链接）
-  async function openReleasePage(info: UpdateInfo): Promise<void> {
-    const url = info.assetUrl ? releasePageFromAssetUrl(info.assetUrl) : RELEASES_URL;
-    try {
-      await openUrl(url);
-    } catch {
-      try {
-        await navigator.clipboard.writeText(url);
-        showToast("已复制发布页链接");
-      } catch {
-        await showAlert("打开发布页失败", url);
-      }
-    }
-  }
-
-  // U-1/U-2：手动检查 → 已是最新 toast / 新版弹窗（下载并安装 · 打开发布页）；下载带进度，完成后确认重启安装
-  async function onUpdateCheck() {
-    if (busy || updatePhase !== "idle") return;
-    setUpdatePhase("checking");
-    try {
-      const info = await checkForUpdateManually();
-      if (!info.hasUpdate) {
-        showToast("当前已是最新版本");
-        return;
-      }
-      const notes = info.notes.trim().split("\n").slice(0, 8).join("\n");
-      const size = info.assetSize != null ? `（安装包约 ${formatFileSize(info.assetSize)}）` : "";
-      const act = await showChoice(`发现新版本 v${info.latest}`, `当前 ${info.current} → v${info.latest}${size}\n\n${notes}`, {
-        confirmText: "下载并安装",
-        secondaryText: "打开发布页",
-      });
-      if (act === "secondary") {
-        await openReleasePage(info);
-        return;
-      }
-      if (act !== "primary") return;
-      if (!info.assetUrl) {
-        await openReleasePage(info); // 无安装包资产（如仅源码发布）：只能去发布页
-        return;
-      }
-      setUpdatePhase("downloading");
-      setDlProgress(null);
-      const installerPath = await downloadUpdateWithProgress(info.assetUrl, setDlProgress);
-      const ok = await showConfirm("下载完成", `v${info.latest} 安装包已就绪，立即重启并安装？`, { confirmText: "立即重启安装" });
-      if (ok) {
-        setUpdatePhase("idle");
-        try {
-          await installUpdateAndQuit(installerPath); // 成功路径应用退出，弹窗无需回显
-        } catch (e) {
-          await showAlert("启动安装器失败", `${String(e)}\n\n可从发布页手动下载安装。`);
-        }
-        return;
-      }
-      showToast("安装包已下载，可稍后重新检查更新安装");
-    } catch (e) {
-      await showAlert("检查更新失败", String(e));
-    } finally {
-      setUpdatePhase("idle");
-      setDlProgress(null);
     }
   }
 
@@ -438,6 +370,9 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           <span className="wr-settings-value">{retention}（在回收站页修改）</span>
         </div>
 
+        {/* F-2（U-11/12）网络区：文库地址三选 + 代理三键（3.2 迁独立大页面） */}
+        <NetworkSettings />
+
         <div className="wr-settings-group">窗口</div>
         <div className="wr-settings-row">
           <span className="wr-settings-label">关闭按钮行为</span>
@@ -484,15 +419,15 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="wr-settings-row">
           <span className="wr-settings-label">检查更新</span>
           <span className="wr-settings-value">
-            {updatePhase === "downloading" && dlProgress
-              ? `下载中 ${(dlProgress.downloaded / 1048576).toFixed(1)}/${(dlProgress.total / 1048576).toFixed(1)} MB`
-              : updatePhase === "checking"
-                ? "正在检查…"
-                : "GitHub Releases"}
+            {badgeUpdate ? (
+              <span style={{ color: "var(--wr-accent)" }}>发现新版本 v{badgeUpdate.latest}</span>
+            ) : (
+              "GitHub Releases"
+            )}
           </span>
-          <button className="wr-btn wr-btn-primary" disabled={busy || updatePhase !== "idle"} onClick={() => void onUpdateCheck()}>
+          <button className="wr-btn wr-btn-primary" disabled={busy} onClick={() => setUpdateOpen(true)}>
             <IconUpdate />
-            {updatePhase === "idle" ? "检查更新" : updatePhase === "checking" ? "检查中…" : "下载中…"}
+            检查更新
           </button>
         </div>
         <div className="wr-settings-row">
@@ -554,6 +489,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
 
       {healthOpen ? <HealthScanDialog onClose={() => setHealthOpen(false)} /> : null}
       {cleanOpen ? <CleanTitleDialog onClose={() => setCleanOpen(false)} onChanged={() => {}} /> : null}
+      {updateOpen ? <UpdateModal onClose={() => setUpdateOpen(false)} /> : null}
     </div>
   );
 }

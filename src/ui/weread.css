@@ -36,7 +36,8 @@
   --wr-shadow-card-hover: 0 18px 48px rgba(0, 0, 0, 0.16);
   --wr-shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.14);
   --wr-serif: "Songti SC", "STSong", "Source Han Serif SC", "Noto Serif SC", "SimSun", serif;
-  --wr-sans: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* U-22 桌面化字体栈：Segoe UI 打头（拉丁/数字），中文落 YaHei UI（阅读正文字体走用户六栈设置，不受此影响） */
+  --wr-sans: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --wr-z-pager: 15;
   --wr-z-drawer: 20;
   --wr-z-selection: 25;
@@ -221,14 +222,122 @@
 .wr-shell {
   height: 100vh;
   font-family: var(--wr-sans);
-  display: grid;
-  grid-template-columns: 270px 1fr;
-  gap: 18px;
-  padding: 18px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   background: radial-gradient(800px 520px at 18% 0%, rgba(var(--wr-accent-rgb), 0.12), transparent 62%),
     radial-gradient(780px 540px at 92% 22%, rgba(var(--wr-accent-2-rgb), 0.09), transparent 58%), var(--wr-bg);
   color: var(--wr-ink);
+}
+
+/* U-23 标题栏叠加后的壳体两段式：标题栏全宽贴顶，body=原 270/1fr 栅格（侧栏 76px 与主栏 76px
+   顶线仍同栅格行起点，对齐基线不变）；三档窄窗断点改挂在 body 上（见 M2 U7 段） */
+.wr-shell-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 270px 1fr;
+  gap: 18px;
+  padding: 0 18px 18px;
+}
+
+/* U-15/U-22 桌面纯化：全局选中色随主题（八主题经 --wr-accent-rgb 自动派生，替换 Chromium 蓝）；
+   界面字体桌面化 + 基准字号 14px（辅助 12px 由各组件既定值承担）；界面文本不可拖选，
+   例外=输入框（阅读正文在 iframe 内自管，iframe 由 ReaderPage 注入同款选中色） */
+::selection {
+  background: rgba(var(--wr-accent-rgb), 0.28);
+}
+
+body {
+  font-family: var(--wr-sans);
+  font-size: 14px;
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+}
+
+/* U-23 自定义标题栏（AppShell 顶置 32px）：背景透明透出壳层同色，边线 hairline；
+   中部拖动区 data-tauri-drag-region（Tauri 注入脚本同时处理双击最大化/还原） */
+.wr-titlebar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding-left: 12px;
+  border-bottom: 1px solid var(--wr-hairline);
+  background: transparent;
+  color: var(--wr-ink);
+}
+
+.wr-titlebar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--wr-muted);
+}
+
+.wr-titlebar-title {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 42vw;
+}
+
+.wr-titlebar-drag {
+  flex: 1;
+  height: 100%;
+}
+
+/* Win11 规范窗口钮：46 宽 32 高、hover rgba(ink,0.06)、关闭钮 hover #e81123 图标白 */
+.wr-win-btns {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.wr-win-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--wr-ink);
+  cursor: default;
+  transition: background 120ms ease;
+}
+
+.wr-win-btn:hover {
+  background: rgba(var(--wr-ink-rgb), 0.06);
+}
+
+.wr-win-btn:focus-visible {
+  outline: 2px solid rgba(var(--wr-accent-rgb), 0.55);
+  outline-offset: -2px;
+}
+
+.wr-win-btn--close:hover {
+  background: #e81123;
+  color: #ffffff;
+}
+
+/* U-23 阅读顶栏并入的窗口钮：窄窗基档收到 32px 宽（U-16 不挤压红线，可收缩面只剩书名），≥800 回 46px */
+.wr-reader-topbar .wr-win-btn {
+  width: 32px;
+}
+
+@media (min-width: 800px) {
+  .wr-reader-topbar .wr-win-btn {
+    width: 46px;
+  }
 }
 
 .wr-panel {
@@ -3119,10 +3228,10 @@ body::after {
    窗口 minWidth 720（tauri.conf.json），默认 800 宽落中档而非小窗；
    侧栏 156/210/270、gap·padding 10/12/18 均沿用批次11b 的既有收紧值。
    原 640 详情弹窗单列规则并入最窄档：minWidth 720 后 640 不可达，并入可保持纯 min-width 结构不留死分支 */
-.wr-shell {
+.wr-shell-body {
   grid-template-columns: 156px 1fr;
   gap: 10px;
-  padding: 10px;
+  padding: 0 10px 10px;
 }
 
 /* 最窄档藏侧栏顶部状态 pill 与快捷筛选 chips（状态过滤仍可用工具行菜单） */
@@ -3190,10 +3299,10 @@ body::after {
 /* 中档 800–1199：侧栏 210、pill/快捷 chips 回归、刊头恢复 clamp 自动缩放（1000px 顶到 44px 上限），
    统计列保持在刊头下一行；工具行 flex-wrap（既有）允许换行，排序/密度控件可见 */
 @media (min-width: 800px) {
-  .wr-shell {
+  .wr-shell-body {
     grid-template-columns: 210px 1fr;
     gap: 12px;
-    padding: 12px;
+    padding: 0 12px 12px;
   }
 
   .wr-pill {
@@ -3232,10 +3341,10 @@ body::after {
 
 /* 完整档 ≥1200：侧栏 270、刊头 44px 顶格、统计列回刊头右侧、行距回到 18px 基准 */
 @media (min-width: 1200px) {
-  .wr-shell {
+  .wr-shell-body {
     grid-template-columns: 270px 1fr;
     gap: 18px;
-    padding: 18px;
+    padding: 0 18px 18px;
   }
 
   .wr-masthead {

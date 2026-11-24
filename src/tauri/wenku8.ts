@@ -111,3 +111,16 @@ export function wenku8Catalog(aid: number): Promise<Wenku8Volume[]> {
 export function wenku8Logout(): Promise<void> {
   return invoke<void>("wenku8_logout");
 }
+
+/** C-2 端点状态：当前设置 + auto 会话记忆 + 两地址连通探测（短超时，结果不落库）。
+ *  字段与 Rust Wenku8EndpointStatus 一致（该结构体无 camelCase rename，保持 snake_case）。 */
+export type Wenku8EndpointStatus = {
+  setting: string; // settings 实际值："auto" | "relay" | "direct"
+  session: string; // auto 会话记忆："relay" | "direct" | ""（本会话未发生过切换）
+  relay_ok: boolean;
+  direct_ok: boolean;
+};
+
+export function wenku8EndpointStatus(): Promise<Wenku8EndpointStatus> {
+  return invoke<Wenku8EndpointStatus>("wenku8_endpoint_status");
+}

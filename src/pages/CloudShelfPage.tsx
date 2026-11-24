@@ -534,6 +534,8 @@ export default function CloudShelfPage() {
   const [density, setDensity] = useState<LibraryDensity>("standard");
   const [sortKey, setSortKey] = useState<CloudSort>("added");
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // E-1（U-14 分区）：云书架卡右键菜单——详情/拉取(或打开)/网页版
+  const [cardMenu, setCardMenu] = useState<{ x: number; y: number; book: Wenku8ShelfBook } | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [dl, setDl] = useState<({ aid: number } & DlState) | null>(null);
   const [account, setAccount] = useState(() => shelfCache?.account ?? "");
@@ -719,6 +721,8 @@ export default function CloudShelfPage() {
 
   const titleOf = (b: Wenku8ShelfBook): string => b.name ?? infos[b.aid]?.title ?? "正在获取书名…";
   const pullBusy = dl?.phase === "downloading";
+  // E-1 右键「拉取到书库」的 title 提示用：目标书架名（根=书库根）
+  const destShelfName = destShelf ? shelves.find((s) => String(s.id) === destShelf)?.name ?? "书库" : "书库";
 
   // C-1 排序：收藏顺序=API 返回序（云端新收藏在前）；最近更新=last_update 降序，尚未取到 bookinfo 的排尾部
   //（取到后 infos 更新触发重排自动归位）；书名按中文 locale
@@ -752,14 +756,20 @@ export default function CloudShelfPage() {
     void setSetting("library_density", v).catch(() => {});
   }
 
-  // 排序菜单：外部 pointerdown / Esc 关闭（照 AppShell 主题菜单模式）
+  // 排序/云卡右键菜单：外部 pointerdown / Esc 关闭（照 AppShell 主题菜单模式）
   useEffect(() => {
-    if (!menu) return;
+    if (!menu && !cardMenu) return;
     const onPointerDown = (e: PointerEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenu(null);
+      if (!menuRef.current?.contains(e.target as Node)) {
+        setMenu(null);
+        setCardMenu(null);
+      }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenu(null);
+      if (e.key === "Escape") {
+        setMenu(null);
+        setCardMenu(null);
+      }
     };
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("keydown", onKey);
@@ -767,7 +777,7 @@ export default function CloudShelfPage() {
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("keydown", onKey, true);
     };
-  }, [menu]);
+  }, [menu, cardMenu]);
 
   // 批次8：壳常驻，本页元信息布局期写入 pageMeta store（切页零闪烁；登录卡态不渲染上下文行）
   // 批次12 U-1/U-2：顶栏与书库同款恒放搜索框（不再显示标题——刊头已有，避免双「云书架」）
@@ -919,7 +929,17 @@ export default function CloudShelfPage() {
               const info = infos[b.aid];
               const sub = info ? `${info.author || "未知作者"} · ${info.last_update}` : null;
               return (
-                <div key={b.aid} className="wr-book-card" data-aid={b.aid} onClick={() => setDetail(b)}>
+                <div
+                  key={b.aid}
+                  className="wr-book-card"
+                  data-aid={b.aid}
+                  onClick={() => setDetail(b)}
+                  onContextMenu={(e) => {
+                    // E-1：云书架卡右键 = 详情 / 拉取(已入库=打开) / 网页版
+                    e.preventDefault();
+                    setCardMenu({ x: e.clientX, y: e.clientY, book: b });
+                  }}
+                >
                   <div className="wr-cover">
                     {failed ? (
                       <div className="wr-cover-text">
@@ -1015,6 +1035,61 @@ export default function CloudShelfPage() {
               {CLOUD_SORT_LABELS[k]}
             </button>
           ))}
+        </div>
+      ) : null}
+
+      {/* E-1 云书架卡右键菜单：详情 / 拉取到书库（已入库=打开这本书）/ 网页版 */}
+      {cardMenu ? (
+        <div ref={menuRef} className="wr-menu" role="menu" style={{ left: cardMenu.x, top: cardMenu.y }}>
+          <button
+            className="wr-menu-item"
+            role="menuitem"
+            onClick={() => {
+              const b = cardMenu.book;
+              setCardMenu(null);
+              setDetail(b);
+            }}
+          >
+            详情
+          </button>
+          {cardMenu.book.book_id != null ? (
+            <button
+              className="wr-menu-item"
+              role="menuitem"
+              onClick={() => {
+                const b = cardMenu.book;
+                setCardMenu(null);
+                navigate(`/read/${b.book_id}`);
+              }}
+            >
+              打开这本书
+            </button>
+          ) : (
+            <button
+              className="wr-menu-item"
+              role="menuitem"
+              disabled={pullBusy}
+              title={pullBusy ? "正在拉取另一本" : `拉到「${destShelfName}」`}
+              onClick={() => {
+                const b = cardMenu.book;
+                setCardMenu(null);
+                void onDownload(b.aid, destShelf);
+              }}
+            >
+              拉取到书库
+            </button>
+          )}
+          <button
+            className="wr-menu-item"
+            role="menuitem"
+            onClick={() => {
+              const b = cardMenu.book;
+              setCardMenu(null);
+              void openWebUrl(`https://www.wenku8.cc/book/${b.aid}.htm`);
+            }}
+          >
+            网页版 ↗
+          </button>
         </div>
       ) : null}
 

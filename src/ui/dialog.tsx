@@ -6,7 +6,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
  * 样式复用 wr-prompt 体系，危险确认走 --wr-danger 实底。
  */
 type DialogRequest = {
-  kind: "alert" | "confirm" | "choice";
+  kind: "alert" | "confirm" | "choice" | "prompt";
   title: string;
   body?: string;
   danger?: boolean;
@@ -14,6 +14,9 @@ type DialogRequest = {
   secondaryText?: string;
   // C-1：三选 + 「记住我的选择」复选框（关闭按钮行为记忆）
   rememberLabel?: string;
+  // E-1 prompt：单行输入（侧栏书架树右键 新建/重命名 等处复用，样式同 LibraryPage 内联 prompt）
+  value?: string;
+  allowEmpty?: boolean;
   resolve: (action: "primary" | "secondary" | "dismiss", remember?: boolean) => void;
 };
 
@@ -57,6 +60,24 @@ export function showChoice(
   });
 }
 
+// E-1 prompt 输入值：宿主输入框实时写这里（current 在 finish 时已清空，resolve 闭包读不到）
+let promptValue = "";
+
+/** E-1：单行输入对话框（取消/点遮罩 → null；空提交受 allowEmpty 门禁，空时确定钮置灰） */
+export function showPrompt(title: string, value: string, opts?: { allowEmpty?: boolean }): Promise<string | null> {
+  return new Promise((resolve) => {
+    promptValue = value;
+    current = {
+      kind: "prompt",
+      title,
+      value,
+      allowEmpty: opts?.allowEmpty,
+      resolve: (a) => resolve(a === "primary" ? promptValue : null),
+    };
+    emit();
+  });
+}
+
 /** C-1：三选 + 「记住我的选择」复选框；取消/点遮罩（dismiss）时 remember 恒为 false */
 export function showChoiceRemember(
   title: string,
@@ -87,6 +108,8 @@ export function DialogHost() {
     () => null,
   );
   const [remember, setRemember] = useState(false);
+  // E-1 prompt：输入值存模块变量（resolve 闭包读取），bump 驱动空值门禁的重渲
+  const [, forceUpdate] = useState(0);
   useEffect(() => setRemember(false), [req]);
   if (!req) return null;
 
@@ -95,6 +118,7 @@ export function DialogHost() {
     emit();
     req.resolve(action, remember);
   };
+  const promptEmpty = req.kind === "prompt" && !req.allowEmpty && !promptValue.trim();
 
   return (
     <div
@@ -114,6 +138,21 @@ export function DialogHost() {
       >
         <div className="wr-prompt-title">{req.title}</div>
         {req.body ? <div className="wr-prompt-body">{req.body}</div> : null}
+        {req.kind === "prompt" ? (
+          <input
+            className="wr-input"
+            autoFocus
+            aria-label={req.title}
+            defaultValue={req.value}
+            onChange={(e) => {
+              promptValue = e.currentTarget.value;
+              forceUpdate((n) => n + 1);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !promptEmpty) finish("primary");
+            }}
+          />
+        ) : null}
         {req.rememberLabel ? (
           <label className="wr-prompt-remember">
             <input
@@ -125,8 +164,8 @@ export function DialogHost() {
           </label>
         ) : null}
         <div className="wr-prompt-actions">
-          {req.kind === "confirm" ? (
-            <button className="wr-btn" autoFocus onClick={() => finish("dismiss")}>
+          {req.kind === "confirm" || req.kind === "prompt" ? (
+            <button className="wr-btn" autoFocus={req.kind === "confirm"} onClick={() => finish("dismiss")}>
               取消
             </button>
           ) : null}
@@ -136,8 +175,9 @@ export function DialogHost() {
             </button>
           ) : null}
           <button
-            autoFocus={req.kind !== "confirm"}
+            autoFocus={req.kind !== "confirm" && req.kind !== "prompt"}
             className={req.danger ? "wr-btn wr-btn-danger" : "wr-btn wr-btn-primary"}
+            disabled={promptEmpty}
             onClick={() => finish("primary")}
           >
             {req.confirmText ?? (req.kind === "alert" ? "知道了" : "确定")}

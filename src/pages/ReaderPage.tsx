@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -103,6 +103,8 @@ import { calcPaperStage } from "../reader/ui/paperStage";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
 import { showAlert, showConfirm } from "../ui/dialog";
+import { installDesktopChrome } from "../ui/desktopChrome";
+import { WindowControls } from "../ui/TitleBar";
 import { useElementSize } from "../ui/useElementSize";
 import { useImmersiveChrome } from "../ui/useImmersiveChrome";
 import { getBackgroundUrl } from "../ui/appBackground";
@@ -192,10 +194,14 @@ const ReaderTopBar = memo(function ReaderTopBar(props: {
         <IconChevronLeft />
         <span className="wr-topbar-label">返回书库</span>
       </button>
-      <div style={{ fontSize: 16, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      {/* U-23：书名与中段空隙=拖动区（双击最大化由 Tauri drag-region 处理） */}
+      <div
+        data-tauri-drag-region=""
+        style={{ fontSize: 16, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+      >
         {props.title}
       </div>
-      <div style={{ flex: 1 }} />
+      <div data-tauri-drag-region="" style={{ flex: 1 }} />
       {props.showEpubTools ? (
         <>
           <button className="wr-btn wr-icon-btn" title="目录" onClick={() => props.onOpenDrawer("toc")}>
@@ -274,6 +280,8 @@ const ReaderTopBar = memo(function ReaderTopBar(props: {
       <div className="wr-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
         {props.percentText}
       </div>
+      {/* U-23：标题栏并入阅读顶栏——随沉浸 chrome 同步隐藏/顶缘悬停浮现（红线②） */}
+      <WindowControls />
     </div>
   );
 });
@@ -414,6 +422,9 @@ export default function ReaderPage() {
   const [speedToast, setSpeedToast] = useState<number | null>(null);
   // B13 滚动模式章续读提示（"已进入 <章名>"1.5s）
   const [chapterToast, setChapterToast] = useState<string | null>(null);
+  // E-1（U-14 分区）阅读正文右键菜单：复制/全选（与划词工具条同源的 clipboard 通道）
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement | null>(null);
   const [pagerHover, setPagerHover] = useState<"left" | "right" | null>(null);
   const [locationsReady, setLocationsReady] = useState(false);
   const [dragPct, setDragPct] = useState<number | null>(null);
@@ -456,6 +467,51 @@ export default function ReaderPage() {
   // 沉浸 chrome（B12 精简版）：显示=指针进顶/底热区（无延迟）；隐藏=离开热区与栏 1.2s / 翻页动作即收 /
   // 开始选字或打开抽屉、错误浮层（disabled=栏隐藏）；锁定=全藏+热区禁用。单击正文不承担收栏职责。
   const chrome = useImmersiveChrome({ disabled: drawerOpen || !!readerError || bookGone || !!selection || !!noteDraft });
+
+  // E 线全局纯化（右键/拖影/残留快捷键）：阅读路由在壳外，独立安装（幂等）
+  useEffect(() => installDesktopChrome(), []);
+
+  // E-1 右键菜单：外部 pointerdown / Esc 关闭；打开即聚焦可用首项
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (ctxMenuRef.current?.contains(e.target as Node)) return;
+      setCtxMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCtxMenu(null);
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [ctxMenu]);
+
+  const contentDoc = () => containerRef.current?.querySelector("iframe")?.contentDocument ?? null;
+
+  useLayoutEffect(() => {
+    if (ctxMenu) ctxMenuRef.current?.querySelector<HTMLElement>("button:not(:disabled)")?.focus();
+  }, [ctxMenu]);
+
+  function onCtxCopy() {
+    const text = contentDoc()?.getSelection?.()?.toString() ?? "";
+    setCtxMenu(null);
+    if (text) navigator.clipboard?.writeText(text).catch(() => {});
+  }
+
+  function onCtxSelectAll() {
+    setCtxMenu(null);
+    const doc = contentDoc();
+    const win = containerRef.current?.querySelector("iframe")?.contentWindow ?? null;
+    if (!doc?.body || !win) return;
+    const sel = win.getSelection();
+    const range = doc.createRange();
+    range.selectNodeContents(doc.body);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }
 
   // H-2：切 tab 即写 sessionStorage（重开抽屉回到上次 tab；存储被禁仅失去记忆）
   const changeSideTab = useCallback((tab: SideTab) => {
@@ -500,6 +556,39 @@ export default function ReaderPage() {
   const fromShelf = (location.state as { fromShelf?: number | null } | null)?.fromShelf;
   // 漫画/PDF 共用视觉阅读管线（顶栏/热区/页码/书签）；分支差异只在设置面板与 api 来源
   const isVisualBook = isImageBook || isPdfBook;
+
+  // E-1/E-2 epub 正文右键与选中色：正文渲染在 epubjs iframe 里，宿主全局监听与 CSS 都够不着——
+  // 观察 iframe 增删逐个接线；右键=复制/全选（贴光标，坐标换算宿主视口），::selection 注主题 accent 色
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root || !book || isVisualBook) return;
+    const accent = getComputedStyle(readerRootRef.current ?? document.documentElement)
+      .getPropertyValue("--wr-accent-rgb")
+      .trim();
+    const rgb = accent || "22, 24, 26";
+    const attach = (iframe: HTMLIFrameElement) => {
+      const doc = iframe.contentDocument;
+      if (!doc?.head || !doc.body) return;
+      let style = doc.getElementById("wr-iframe-chrome") as HTMLStyleElement | null;
+      if (!style) {
+        style = doc.createElement("style");
+        style.id = "wr-iframe-chrome";
+        doc.head.appendChild(style);
+        doc.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          const text = doc.getSelection?.()?.toString() ?? "";
+          const r = iframe.getBoundingClientRect();
+          setCtxMenu({ x: r.left + e.clientX, y: r.top + e.clientY, hasSelection: !!text.trim() });
+        });
+      }
+      style.textContent = `::selection{background:rgba(${rgb},0.30)}`;
+    };
+    const scan = () => root.querySelectorAll("iframe").forEach(attach);
+    const mo = new MutationObserver(scan);
+    mo.observe(root, { childList: true, subtree: true });
+    scan();
+    return () => mo.disconnect();
+  }, [book?.id, isVisualBook, theme]);
   // 当前视觉书生效设置与持久化键（漫画/PDF 两份全局 state，同 UI 受控切换，互不影响）；
   // E2：生效值 = 全局默认 ← imgset:<bookId> 书级覆盖（面板显示并改的是生效值）
   const visualSettings = useMemo(
@@ -1724,6 +1813,17 @@ export default function ReaderPage() {
       data-theme={theme}
       className="wr-reader-root"
       ref={readerRootRef}
+      onContextMenu={(e) => {
+        // E-1 宿主面（漫画/PDF/纸边距）右键只拦不出菜单；epub 文本视图给 复制/全选（输入框放行）
+        if ((e.target as HTMLElement).closest?.("input, textarea, [contenteditable]")) return;
+        e.preventDefault();
+        if (!book || isVisualBook || drawerOpen || !!readerError || chrome.locked) return;
+        setCtxMenu({
+          x: e.clientX,
+          y: e.clientY,
+          hasSelection: !!(contentDoc()?.getSelection?.()?.toString().trim()),
+        });
+      }}
     >
       {!chrome.locked ? (
         <ReaderTopBar
@@ -2236,6 +2336,24 @@ export default function ReaderPage() {
             }}
             onClose={() => setSelection(null)}
           />
+
+          {/* E-1 阅读正文右键菜单（iframe 内右键同款，见上方接线 effect） */}
+          {ctxMenu && !drawerOpen && !readerError && !chrome.locked ? (
+            <div
+              ref={ctxMenuRef}
+              className="wr-menu"
+              role="menu"
+              aria-label="正文操作"
+              style={{ left: ctxMenu.x, top: ctxMenu.y, zIndex: "var(--wr-z-selection)" }}
+            >
+              <button className="wr-menu-item" role="menuitem" disabled={!ctxMenu.hasSelection} onClick={onCtxCopy}>
+                复制
+              </button>
+              <button className="wr-menu-item" role="menuitem" onClick={onCtxSelectAll}>
+                全选（本章）
+              </button>
+            </div>
+          ) : null}
           {readerError ? (
             <div
               role="alert"

@@ -6,8 +6,20 @@ import { IconBook, IconCloud, IconImage, IconPalette, IconRefresh, IconSearch, I
 import { getCachedBackgroundUrl, getBackgroundUrl, subscribeBackground } from "./appBackground";
 import { emitAppRefresh } from "./appActions";
 import { importBooks, importImages } from "./importService";
+import { installDesktopChrome } from "./desktopChrome";
+import TitleBar from "./TitleBar";
 import { applyPersistedTheme, setTheme, THEME_SWATCHES, useThemeSelection } from "./theme";
-import { getSettings, listBooks, listShelves, setSetting, type Book, type Shelf } from "../tauri/invoke";
+import {
+  createShelf,
+  deleteShelf,
+  getSettings,
+  listBooks,
+  listShelves,
+  renameShelf,
+  setSetting,
+  type Book,
+  type Shelf,
+} from "../tauri/invoke";
 import { getAppDataBase } from "../tauri/appDataPaths";
 import { primeSettingsCache } from "../library/settingsCache";
 import { primeCoverLibraryRoot } from "../library/coverSrc";
@@ -17,7 +29,7 @@ import type { ReadingStatus } from "../library/readingStatus";
 import { BOOKS_CHANGED_EVENT, runImports, subscribeImportProgress, type ImportProgress } from "../library/importRunner";
 import { primeCloseAction } from "./closeAction";
 import { startSilentUpdateCheck, subscribeUpdateAvailable, getUpdateAvailable } from "./updater";
-import { showAlert } from "./dialog";
+import { showAlert, showConfirm, showPrompt } from "./dialog";
 import { ToastHost } from "./toast";
 import SettingsDialog from "./SettingsDialog";
 
@@ -193,6 +205,8 @@ export default function AppShell(props: {
   // 壳纱浓度（bg_veil）：默认 88%，与主题/背景同一次 settings 读取顺带解析
   const [veil, setVeil] = useState(88);
   const [themeMenu, setThemeMenu] = useState<{ x: number; y: number } | null>(null);
+  // E-1（U-14 分区）：侧栏书架树右键菜单——新建子书架/重命名/删除，动作与书库页同源
+  const [shelfMenu, setShelfMenu] = useState<{ x: number; y: number; shelf: Shelf } | null>(null);
   const shelves = useShellShelves();
   const shelfCounts = useShelfCounts();
   // S-1 树折叠：state 驱动重渲，模块缓存保证路由切换（重挂）不丢
@@ -203,6 +217,7 @@ export default function AppShell(props: {
   const [importProgress, setImportProgress] = useState<ImportProgress>(null);
   const themeBtnRef = useRef<HTMLButtonElement | null>(null);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
+  const shelfMenuRef = useRef<HTMLDivElement | null>(null);
   // U-18 搜索清理叉：清空后回焦输入框（mousedown preventDefault 保住鼠标路径的焦点）
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [searchParams] = useSearchParams();
@@ -311,6 +326,69 @@ export default function AppShell(props: {
     if (themeMenu) themeMenuRef.current?.querySelector<HTMLElement>("button")?.focus();
   }, [themeMenu]);
 
+  // E 线全局纯化（右键/拖影/残留快捷键）：壳与阅读页各装一次，幂等（全会话一条）
+  useEffect(() => installDesktopChrome(), []);
+
+  // E-1 侧栏书架树菜单：外部 pointerdown / Escape 关闭；打开即聚焦首项（键盘可达尽力，F-1 基座在 3.2）
+  useEffect(() => {
+    if (!shelfMenu) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (shelfMenuRef.current?.contains(e.target as Node)) return;
+      setShelfMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShelfMenu(null);
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [shelfMenu]);
+
+  useLayoutEffect(() => {
+    if (shelfMenu) shelfMenuRef.current?.querySelector<HTMLElement>("button")?.focus();
+  }, [shelfMenu]);
+
+  function onMenuNewShelf(parent: Shelf) {
+    setShelfMenu(null);
+    void showPrompt(`在“${parent.name}”内新建书架`, "").then((name) => {
+      if (!name?.trim()) return;
+      createShelf(name.trim(), parent.id)
+        .then(() => loadShelves())
+        .catch((e) => void showAlert("新建书架失败", String(e)));
+    });
+  }
+
+  function onMenuRenameShelf(shelf: Shelf) {
+    setShelfMenu(null);
+    void showPrompt("书架名称", shelf.name).then((name) => {
+      if (name == null || !name.trim() || name === shelf.name) return;
+      renameShelf(shelf.id, name.trim())
+        .then(() => loadShelves())
+        .catch((e) => void showAlert("重命名失败", String(e)));
+    });
+  }
+
+  async function onMenuDeleteShelf(shelf: Shelf) {
+    setShelfMenu(null);
+    const ok = await showConfirm(
+      "删除书架",
+      `删除书架“${shelf.name}”？其中的书移到上级书架，子书架一并删除。`,
+      { danger: true, confirmText: "删除" },
+    );
+    if (!ok) return;
+    try {
+      await deleteShelf(shelf.id);
+      // 删的是书库当前视图（或其视图已在别处失效）→ 回根，与 LibraryPage.onDeleteShelf 同口径
+      if (activeShelf === String(shelf.id)) navigate("/");
+      await loadShelves();
+    } catch (e) {
+      await showAlert("删除书架失败", String(e));
+    }
+  }
+
   function openThemeMenu() {
     const r = themeBtnRef.current?.getBoundingClientRect();
     setThemeMenu(
@@ -343,6 +421,8 @@ export default function AppShell(props: {
 
   return (
     <div className={`wr-shell${bgUrl ? " wr-shell--userbg" : ""}`} style={shellStyle}>
+      <TitleBar title={props.title} />
+      <div className="wr-shell-body">
       <div className="wr-panel wr-side">
         <div className="wr-side-top">
           <div className="wr-brand">
@@ -436,6 +516,12 @@ export default function AppShell(props: {
                     aria-current={activeShelf === String(row.id) ? "page" : undefined}
                     style={{ paddingLeft: 10 + row.depth * 12 }}
                     onClick={() => navigate(`/?shelf=${row.id}`)}
+                    onContextMenu={(e) => {
+                      // E-1：侧栏书架树右键 = 新建/重命名/删除（贴光标）
+                      e.preventDefault();
+                      const shelf = shelves.find((s) => s.id === row.id);
+                      if (shelf) setShelfMenu({ x: e.clientX, y: e.clientY, shelf });
+                    }}
                   >
                     {row.name}
                     {shelfCounts.get(row.id) ? <span className="wr-nav-count">{shelfCounts.get(row.id)}</span> : null}
@@ -587,6 +673,7 @@ export default function AppShell(props: {
           {props.children}
         </div>
       </div>
+      </div>
 
       {themeMenu ? (
         <div
@@ -612,6 +699,31 @@ export default function AppShell(props: {
               style={{ background: s.color }}
             />
           ))}
+        </div>
+      ) : null}
+
+      {shelfMenu ? (
+        <div
+          ref={shelfMenuRef}
+          className="wr-menu"
+          role="menu"
+          aria-label={`书架 ${shelfMenu.shelf.name}`}
+          style={{ left: shelfMenu.x, top: shelfMenu.y }}
+        >
+          <button className="wr-menu-item" role="menuitem" onClick={() => onMenuNewShelf(shelfMenu.shelf)}>
+            新建子书架
+          </button>
+          <button className="wr-menu-item" role="menuitem" onClick={() => onMenuRenameShelf(shelfMenu.shelf)}>
+            重命名书架
+          </button>
+          <button
+            className="wr-menu-item"
+            role="menuitem"
+            data-danger="true"
+            onClick={() => void onMenuDeleteShelf(shelfMenu.shelf)}
+          >
+            删除书架
+          </button>
         </div>
       ) : null}
 

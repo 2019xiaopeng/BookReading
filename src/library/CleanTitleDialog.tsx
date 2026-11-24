@@ -1,9 +1,11 @@
 // N-1 前端入口：设置→存储「重新清洗全部标题」——预览 diff 确认后批量应用。
+// D-1.3：每行可还原到上次批量清洗前的快照（original_title 等）。
 import { useEffect, useState } from "react";
 
 import {
   cleanTitleApply,
   cleanTitlePreview,
+  revertTitle,
   type CleanPreviewItem,
 } from "../tauri/invoke";
 import { showAlert } from "../ui/dialog";
@@ -12,6 +14,7 @@ import { showToast } from "../ui/toast";
 export default function CleanTitleDialog({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
   const [items, setItems] = useState<CleanPreviewItem[] | null>(null);
   const [applying, setApplying] = useState(false);
+  const [revertingId, setRevertingId] = useState<string | null>(null);
 
   useEffect(() => {
     cleanTitlePreview()
@@ -21,6 +24,32 @@ export default function CleanTitleDialog({ onClose, onChanged }: { onClose: () =
         onClose();
       });
   }, [onClose]);
+
+  // 还原单本：无快照（从未批量清洗过）只 toast，不算错误
+  const revertOne = (item: CleanPreviewItem) => {
+    if (applying || revertingId !== null) return;
+    setRevertingId(item.bookId);
+    void (async () => {
+      try {
+        const ok = await revertTitle(item.bookId);
+        if (!ok) {
+          showToast("无快照，无法还原（此书未经过批量清洗）");
+          return;
+        }
+        showToast("已还原原标题");
+        onChanged();
+        try {
+          setItems(await cleanTitlePreview()); // 标题已变，重扫预览
+        } catch {
+          onClose();
+        }
+      } catch (e) {
+        await showAlert("还原失败", String(e));
+      } finally {
+        setRevertingId(null);
+      }
+    })();
+  };
 
   const apply = () => {
     if (!items || items.length === 0 || applying) return;
@@ -36,7 +65,7 @@ export default function CleanTitleDialog({ onClose, onChanged }: { onClose: () =
             sourceTags: i.sourceTags,
           })),
         );
-        showToast(`已清洗 ${items.length} 本`);
+        showToast(`已清洗 ${items.length} 本（重新打开此预览可单本还原）`);
         onChanged();
         onClose();
       } catch (e) {
@@ -60,7 +89,19 @@ export default function CleanTitleDialog({ onClose, onChanged }: { onClose: () =
             <div className="wr-clean-list">
               {items.slice(0, 200).map((i) => (
                 <div key={i.bookId} className="wr-clean-row">
-                  <div className="wr-clean-old" title={i.titleOld}>{i.titleOld}</div>
+                  <div>
+                    <div className="wr-clean-old" title={i.titleOld}>{i.titleOld}</div>
+                    {/* D-1.3 还原：回到上次批量清洗前快照（无快照点击后 toast 提示） */}
+                    <button
+                      className="wr-btn"
+                      style={{ padding: "2px 10px", fontSize: 12, marginTop: 4 }}
+                      disabled={applying || revertingId !== null}
+                      aria-label={`还原 ${i.titleNew}`}
+                      onClick={() => revertOne(i)}
+                    >
+                      {revertingId === i.bookId ? "还原中…" : "还原"}
+                    </button>
+                  </div>
                   <div className="wr-clean-arrow">→</div>
                   <div className="wr-clean-new">
                     <div className="wr-clean-new-title">{i.titleNew}</div>
@@ -81,7 +122,7 @@ export default function CleanTitleDialog({ onClose, onChanged }: { onClose: () =
           )}
         </div>
         <div className="wr-prompt-actions">
-          {/* D-1：应用即快照原文（original_title 等），单本书随时可还原——还原入口批次3 接 UI */}
+          {/* D-1：应用即快照原文（original_title 等），每行「还原」按钮回到快照 */}
           <span className="wr-muted" style={{ marginRight: "auto", fontSize: 12 }}>
             应用后可单本还原原标题
           </span>
