@@ -80,6 +80,8 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 - **dev 启动后白屏 ≠ 代码问题**：Vite 开发模式逐模块加载，启动瞬间若机器网络变动（网卡 / 代理 / TUN 切换），模块请求成批报 `ERR_NETWORK_CHANGED`，React 根本没挂载（`#root` 为空）。CDP 里 `Page.reload` 一下即可；先用 `tools/cdp/cdp-lib.mjs` 的 `c.logs` 看报错再下结论
 - **"操作进行中不许关闭"之类的闸门要在动作开始处同步置位，不要靠 React effect**：effect 要等下一次渲染提交才执行，那个空档里 Esc / 点遮罩能穿透——全量测试负载下才复现（单跑永远过），这类"单跑过、全量偶发挂"的用例是竞态信号，不要重跑放过
 - **断言异步回填的值必须包在 `waitFor` 里**：`await findByRole(...)` 只等"元素出现"，控件一挂载就在，紧接着读 `.textContent` / `.value` 读到的是初始值。本机 mock 瞬间 resolve 所以总能过，CI 慢就偶发失败（v3.1.9 首次 CI 构建因此挂掉）。实测扫描：旧写法在后端延迟 ≥10ms 时 0/8 通过，`waitFor` 写法 72/72。写"回填 / 懒加载后的值"的断言时先问一句：这个值是同步就有的吗？不是就 `waitFor`
+- **经 CDP 求值的页面侧代码放独立 .js 文件，先 `node --check` 再送进浏览器**：嵌在模板字符串里要做双重转义，正则极易写错且只有浏览器执行时才报错（2026-11-25 一条正则漏了结尾斜杠，来回排查多轮）。范例 `tools/cdp/dryrun-organize.mjs` + `dryrun-organize.page.js`
+- **实验 / 诊断脚本给出的"反常结果"先怀疑脚本本身**：同一天两次被自己的工具误导——对照实验漏导入 `expect`，把所有断言错误都记成"新写法失败"；比对脚本按固定长度截取字符串，把源码里缺失的字符"补"了上去。反常时直接看原始字节（`JSON.stringify` / `lastIndexOf` 找终止符），别用推导出来的中间量下结论
 - **给 weread.css 做多行 Edit 前先确认能匹配**：文件里个别注释行含看不见的异常字符，几十行的 old_string 会整体匹配失败甚至拼坏相邻行（2026-11-25 踩过）。先小块试、或按行号带前置条件校验后拼接；含中文的 PowerShell 脚本不要用 `powershell -File` 跑（无 BOM 会被按 GBK 读坏），用 `[scriptblock]::Create((Get-Content -Raw -Encoding UTF8 …))` 在进程内执行
 - **epub.js themes.select() 必须在首章 display() 完成后调用，且每次 rendered（章节切换重建 iframe）后重新调用**：display 前 iframe 不存在 → sheet null。reader.ts 已如此实现，不要回退
 
