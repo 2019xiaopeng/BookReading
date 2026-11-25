@@ -1,0 +1,78 @@
+import { describe, expect, test } from "vitest";
+import { TURN_EFFECT_MS, turnFrame } from "./turnFx";
+
+const W = 1000;
+const H = 800;
+
+describe("turnFrame: slide（平移）", () => {
+  test("t=0 新页在页外、旧页归位", () => {
+    const f = turnFrame("slide", 1, 0, W, H);
+    expect(f.oldTransform).toBe("translateX(0.00px)");
+    expect(f.newTransform).toBe("translateX(1000.00px)");
+  });
+  test("t=1 旧页移出、新页归位", () => {
+    const f = turnFrame("slide", 1, 1, W, H);
+    expect(f.oldTransform).toBe("translateX(-1000.00px)");
+    expect(f.newTransform).toBe("translateX(0.00px)");
+  });
+  test("后退方向镜像", () => {
+    const f = turnFrame("slide", -1, 0.5, W, H);
+    expect(f.oldTransform).toBe("translateX(500.00px)");
+    expect(f.newTransform).toBe("translateX(-500.00px)");
+  });
+});
+
+describe("turnFrame: cover（覆盖）", () => {
+  test("旧叶恒静止，新叶自边缘滑入", () => {
+    const f = turnFrame("cover", 1, 0.5, W, H);
+    expect(f.oldTransform).toBe("");
+    expect(f.newTransform).toBe("translateX(500.00px)");
+  });
+  test("前缘阴影带宽=min(22px, 5.5%w)·包络，峰值在中段出现、两端消失", () => {
+    const mid = turnFrame("cover", 1, 0.5, W, H);
+    expect(mid.underShadow?.width).toBeCloseTo(22, 5);
+    expect(turnFrame("cover", 1, 0, W, H).underShadow).toBeNull();
+    expect(turnFrame("cover", 1, 1, W, H).underShadow).toBeNull();
+  });
+  test("前进阴影带贴新叶前缘左侧", () => {
+    const f = turnFrame("cover", 1, 0.5, W, H);
+    expect(f.underShadow?.x).toBeCloseTo(500 - 22, 5);
+    expect(f.underShadow?.toRight).toBe(true);
+  });
+});
+
+describe("turnFrame: fade（渐隐）", () => {
+  test("交叉淡化：旧 1-t / 新 t，恒等位移不裁剪", () => {
+    const f = turnFrame("fade", 1, 0.25, W, H);
+    expect(f.oldOpacity).toBeCloseTo(0.75);
+    expect(f.newOpacity).toBeCloseTo(0.25);
+    expect(f.oldTransform).toBe("");
+    expect(f.oldClip).toBe("");
+  });
+});
+
+describe("turnFrame: paper（纸页翻动）", () => {
+  test("前进：折痕自右缘(=w)扫向左缘(=0)", () => {
+    expect(turnFrame("paper", 1, 0, W, H).oldClip).toContain("M 1000.00 0");
+    expect(turnFrame("paper", 1, 1, W, H).oldClip).toContain("M 0.00 0");
+  });
+  test("折痕中段有高光条与阴影带，两端消失", () => {
+    const mid = turnFrame("paper", 1, 0.5, W, H);
+    expect(mid.fold).not.toBeNull();
+    expect(mid.fold?.width).toBeCloseTo(Math.min(28, W * 0.065), 5);
+    expect(mid.creaseShadow?.width).toBeGreaterThan(50);
+    expect(turnFrame("paper", 1, 0, W, H).fold).toBeNull();
+    expect(turnFrame("paper", 1, 1, W, H).fold).toBeNull();
+  });
+  test("弧形 clip 含三次贝塞尔控制点（弯曲折痕而非直线）", () => {
+    const f = turnFrame("paper", 1, 0.5, W, H);
+    expect(f.oldClip).toMatch(/C \d+\.\d+ 200\.00, \d+\.\d+ 600\.00/);
+  });
+});
+
+describe("TURN_EFFECT_MS", () => {
+  test("四效果齐且为正", () => {
+    expect(Object.keys(TURN_EFFECT_MS).sort()).toEqual(["cover", "fade", "paper", "slide"]);
+    for (const v of Object.values(TURN_EFFECT_MS)) expect(v).toBeGreaterThan(0);
+  });
+});

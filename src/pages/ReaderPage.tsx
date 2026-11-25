@@ -46,6 +46,7 @@ import {
 } from "../reader/epub/reader";
 import { readerFontFaceCss } from "../reader/epub/iframeFont";
 import { tocLabelFor } from "../reader/epub/tocLabel";
+import { TURN_EFFECT_MS, runTurnAnimation } from "../reader/epub/turnFx";
 import BookmarksPanel from "../reader/components/BookmarksPanel";
 import HighlightsPanel from "../reader/components/HighlightsPanel";
 import ImageLightbox from "../reader/components/ImageLightbox";
@@ -474,6 +475,9 @@ export default function ReaderPage() {
   const wheelAccumRef = useRef(0);
   // "先画完再滑入"翻页：入场动画的清理定时器（连按时第一步 clearTimeout 抢占，消灭定时器打架）
   const animTimerRef = useRef(0);
+  // V-1 翻页串行队列：每次按键恰好一页（不丢步）；旧动画被新按键打断时只跳过余下动画、提交照常
+  const turnTokenRef = useRef(0);
+  const turnLockRef = useRef<Promise<void>>(Promise.resolve());
   const imageApiRef = useRef<PageReaderApi | null>(null);
   // B-2：大书守卫的生成等待次数（生成失败也发 done==total → 无限重试死循环，2 次后放行直开走错误态）
   const optRetriesRef = useRef(0);
@@ -1429,7 +1433,16 @@ export default function ReaderPage() {
     [book],
   );
 
-  const animateTurn = useCallback(async (direction: "next" | "prev") => {
+  // ═══ V-1 翻页动画矩阵（对标 Wenku8_Flutter）═══
+  // 串行队列：每次按键恰好一页（rapid press 不丢步）；旧动画被新按键打断 → 跳过余下动画、提交照常。
+  // GhostView 就绪 → 双 live 叶片整幅动画（平移/覆盖/渐隐/纸页，零截图零克隆）；
+  // 未就绪/降级 → 旧路径"先画完再微幅滑入"（2026-11-24 处方，覆盖/纸页回落到 fade 微幅）。
+  const doAnimateTurn = useCallback(async (direction: "next" | "prev", token: number) => {
+    try {
+      await turnLockRef.current;
+    } catch {
+      // 上一轮异常不阻塞本次
+    }
     setSelection(null);
     setNoteDraft(null);
     if (imageCtxRef.current.active) {
@@ -1444,6 +1457,7 @@ export default function ReaderPage() {
     }
     const ctrl = controllerRef.current;
     const el = viewerRef.current;
+    const paper = containerRef.current;
     if (!ctrl) return;
     const run = async () => {
       try {
@@ -1455,12 +1469,6 @@ export default function ReaderPage() {
     const anim = settingsRef.current.pageAnimation;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const k = settingsRef.current.turnSpeedMs / 260;
-    const paper = containerRef.current;
-
-    // ═══ "先画完、再滑入"（用户 2026-11-24 处方）═══
-    // 按下方向键时画面先稳住不动 → epub.js 完成排版并上屏 → 唯一一段微幅滑入。
-    // 章内翻页 epub.js 只平移视野（无空白），旧"出场+入场双动画"在空窗期播=空白根因，已删。
-    // 快速连按：每次先清定时器+重置样式（消灭"隐身瞬移+定时器打架"），然后直接 run。
 
     // 1. 抢占：清上一帧的定时器和样式（连按时=跳到终态再继续，无 opacity:0 隐身）
     window.clearTimeout(animTimerRef.current);
@@ -1468,17 +1476,64 @@ export default function ReaderPage() {
       paper.style.transition = "none";
       paper.style.transform = "";
       paper.style.opacity = "";
+      paper.style.clipPath = "";
     }
     if (el) el.style.opacity = "";
 
-    // 2. 先画完（epub.js 处理翻页——章内=视野平移，跨章=重新排版）
+    if (anim === "none" || reduced || !paper) {
+      await run();
+      return;
+    }
+
+    // 2. GhostView 双容器路径（slide/cover/fade/paper）
+    if (anim === "slide" || anim === "cover" || anim === "fade" || anim === "paper") {
+      const dir = direction === "next" ? 1 : -1;
+      const ghostEl = await ctrl.prepareTurnView(dir, 450);
+      if (token !== turnTokenRef.current) {
+        // 更新的翻页已排队：跳过动画直接提交本步（连按=快进到目标页，最后一次翻页才播动画）
+        await run();
+        return;
+      }
+      if (ghostEl) {
+        ghostEl.style.visibility = "visible";
+        let paperColor: string | null = null;
+        try {
+          const host = paper.closest(".wr-reader-paper") ?? paper;
+          const c = getComputedStyle(host).backgroundColor;
+          if (c && c !== "transparent" && !/^rgba\(.+,\s*0\)$/.test(c)) paperColor = c;
+        } catch {
+          // 取不到实色（自定义背景）：跳过纸页折页高光条
+        }
+        const dark = ["dark", "darkcontrast", "ink-dark"].includes(document.documentElement.dataset.theme ?? "");
+        await runTurnAnimation({
+          effect: anim,
+          direction: dir,
+          width: paper.clientWidth,
+          height: paper.clientHeight,
+          duration: Math.round(TURN_EFFECT_MS[anim] * k),
+          oldLeaf: paper,
+          newLeaf: ghostEl,
+          dark,
+          paperColor,
+        });
+        // 3. 提交：主视图在 ghost 盖板下翻页（跨章重渲染被盖住→零闪白），双 rAF 确保上屏后再撤 ghost
+        await run();
+        await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+        paper.style.transform = "";
+        paper.style.clipPath = "";
+        paper.style.opacity = "";
+        ctrl.releaseTurnView();
+        // 预热下一步（方向以后续按键为准，未命中 prepareTurnView 会就地重建；失败静默）
+        void ctrl.prepareTurnView(1).catch(() => {});
+        return;
+      }
+      // ghost 未就绪 → 落到旧路径兜底
+    }
+
+    // 4. 旧路径："先画完、再滑入"（ghost 未就绪/降级；章内=视野平移，跨章=重新排版后微幅）
     await run();
-
-    // 3. 等新页真正上屏（display resolve ≠ 已绘制，双 rAF 保险）
     await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
-
-    // 4. 唯一一段动画：微幅滑入（先画完再动，零空白，连按抢占）
-    if (anim === "slide" && !reduced && paper) {
+    if (anim === "slide" && paper) {
       const inMs = Math.round(200 * k);
       paper.style.transition = "none";
       paper.style.transform = `translateX(${direction === "next" ? 24 : -24}px)`;
@@ -1492,7 +1547,8 @@ export default function ReaderPage() {
         paper.style.transform = "";
         paper.style.opacity = "";
       }, inMs + 50);
-    } else if (anim === "fade" && !reduced && el) {
+    } else if (el) {
+      // fade 微幅（cover/paper 未就绪时同样回落）
       el.style.transition = "none";
       el.style.opacity = "0.3";
       void el.offsetHeight;
@@ -1503,8 +1559,16 @@ export default function ReaderPage() {
         el.style.opacity = "";
       }, Math.round(180 * k) + 50);
     }
-    // "none" 或 reduced-motion：不加任何动画，run() 完即终态
+    // 兜底路径同样预热（冷构建 450ms 内没就绪 → 本轮微幅；预热完成后下一轮起走 ghost 全幅动画）
+    void ctrl.prepareTurnView(1).catch(() => {});
   }, []);
+
+  const animateTurn = useCallback((direction: "next" | "prev") => {
+    const token = ++turnTokenRef.current;
+    const p = doAnimateTurn(direction, token);
+    turnLockRef.current = p;
+    return p;
+  }, [doAnimateTurn]);
 
   /** footer 上一章/下一章（epub 两模式统一；image 书 footer 仍是页翻，走 animateTurn） */
   const navChapter = useCallback((direction: "next" | "prev") => {
@@ -1518,7 +1582,7 @@ export default function ReaderPage() {
       // 开抽屉前清掉翻页动画残留（定时器+样式），防阅读区"弹一下"
       window.clearTimeout(animTimerRef.current);
       const p = containerRef.current;
-      if (p) { p.style.transition = "none"; p.style.transform = ""; p.style.opacity = ""; }
+      if (p) { p.style.transition = "none"; p.style.transform = ""; p.style.opacity = ""; p.style.clipPath = ""; }
       changeSideTab(tab);
       setDrawerOpen(true);
       if (tab === "search") requestAnimationFrame(() => searchInputRef.current?.focus());

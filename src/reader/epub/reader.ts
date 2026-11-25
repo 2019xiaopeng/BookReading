@@ -149,6 +149,10 @@ export type ReaderController = {
   next: () => Promise<void>;
   prev: () => Promise<void>;
   display: (target?: string) => Promise<void>;
+  /** V-1 GhostView：准备翻页新叶（同 book 第二 rendition，display 当前页后同向走一步）；未就绪返回 null（调用方走旧路径） */
+  prepareTurnView: (direction: 1 | -1, waitMs?: number) => Promise<HTMLElement | null>;
+  /** V-1：翻页提交后销毁 ghost 叶片（主视图已在覆盖下完成翻页） */
+  releaseTurnView: () => void;
   chapterNav: (delta: number) => void;
   /** B13 滚动模式翻屏（PageDown/PageUp）：章末/章首即时章导航，章中滚动一屏；返回触发的章方向或 null */
   scrollStep: (dir: 1 | -1) => 1 | -1 | null;
@@ -401,7 +405,34 @@ export async function createReader(opts: {
     fontFamily: opts.fontFamily ?? "default",
     ...(opts.typography ?? {}),
   };
-  const registerThemes = () => {
+
+  // ═══ V-1 翻页动画矩阵：GhostView 状态（声明在前——registerThemes 按排版变更就地销毁 ghost）═══
+  // 新叶 = 同 book 第二 rendition：display 主视图当前页 CFI 后同向走一步——两 rendition 同宽同主题
+  // 同排版，分页确定性一致（跨章由 epub.js prev/next 自行处理边界，ghost 与主视图走到同一目标页）。
+  // 动画只对宿主容器施 transform/clip-path（iframe 整体 GPU 合成，内部零重排零截图，对标 Wenku8_Flutter）。
+  let ghost: {
+    rendition: any;
+    el: HTMLDivElement;
+    direction: 1 | -1;
+    anchorCfi: string;
+    width: number;
+    height: number;
+  } | null = null;
+  let ghostSeq = 0;
+  function destroyGhost() {
+    ghostSeq += 1;
+    const g = ghost;
+    ghost = null;
+    if (!g) return;
+    try {
+      g.rendition?.destroy?.();
+    } catch {
+      // ghost 销毁失败：元素移除即视觉复位，下轮 prepare 重建
+    }
+    g.el.remove();
+  }
+  const registerThemes = (r: any = rendition) => {
+    destroyGhost(); // 排版变体变更：ghost 与主视图的布局一致性失效，就地销毁（buildGhost 期间为无害空转）
     const common: Record<string, any> = {
       "*, *::before, *::after": { "box-sizing": "border-box" },
       img: { "max-width": "100%", height: "auto" },
@@ -430,7 +461,7 @@ export async function createReader(opts: {
       if (typo.textIndent > 0) pRules["text-indent"] = `${typo.textIndent}em !important`;
       if (typo.justify) pRules["text-align"] = "justify !important";
       // 规则按主题类作用域（themes.select 靠 body class 切换），避免多主题样式表共存时后者压死前者
-      rendition.themes.register(t, {
+      r.themes.register(t, {
         ...common,
         [scrollbar("::-webkit-scrollbar")]: { width: "8px", height: "8px" },
         [scrollbar("::-webkit-scrollbar-track")]: { background: "transparent" },
@@ -463,12 +494,15 @@ export async function createReader(opts: {
       });
     }
     // 防御+重试：iframe 未就绪时 sheet 为 null——首次失败延迟到 rendition.ready 后重试注入
+    // （ghost rendition 不重试：其 rendered 事件里统一重选主题）
     try {
-      rendition.themes.select(currentTheme);
+      r.themes.select(currentTheme);
     } catch {
-      rendition.ready.then(() => {
-        try { rendition.themes.select(currentTheme); } catch {}
-      }).catch(() => {});
+      if (r === rendition) {
+        rendition.ready.then(() => {
+          try { rendition.themes.select(currentTheme); } catch {}
+        }).catch(() => {});
+      }
     }
   };
   registerThemes();
@@ -513,8 +547,10 @@ export async function createReader(opts: {
   // 同样必须挂 rendition.hooks.content（Contents.addStylesheetCss 按 key 幂等覆盖）——
   // v2.5.0 起此 hook 误挂 spine.hooks（参数是 document 无 addStylesheetCss，异常被吞）致自定义字体一直未生效，本批修正。
   // 字体就绪前排版度量错误：epubjs 自带的 fontLoadListeners 已被上游注释停用，这里补 fonts.ready → resizeCheck 重排。
-  if (opts.fontFaceCss) {
-    rendition.hooks.content.register((contents: any) => {
+  // V-1：抽成函数——主视图与 GhostView 共用（ghost 分页度量必须与主视图一致）。
+  const registerFontFaceHook = (r: any) => {
+    if (!opts.fontFaceCss) return;
+    r.hooks.content.register((contents: any) => {
       const css = opts.fontFaceCss?.();
       const doc = contents?.document;
       if (!css || !doc) return;
@@ -535,7 +571,81 @@ export async function createReader(opts: {
         // iframe 无 FontFaceSet（老 WebView）：不等待，直接用回退字体排版
       }
     });
-  }
+  };
+  registerFontFaceHook(rendition);
+
+  // ═══ V-1 GhostView 构建/准备（双 live 叶片的新叶）═══
+  // 叶片几何=主容器同尺寸；visibility:hidden 挂后台渲染，动画开始才可见。
+  // 提交模型：动画完 → 主视图 next/prev 在 ghost 盖板下完成（跨章重渲染被盖住→零闪白）→ 双 rAF → 销毁 ghost。
+  const buildGhost = async (
+    direction: 1 | -1,
+    anchorCfi: string,
+    w: number,
+    h: number,
+  ): Promise<HTMLDivElement | null> => {
+    const seq = ghostSeq;
+    const el = document.createElement("div");
+    el.style.cssText =
+      "position:absolute;inset:0;z-index:5;overflow:hidden;pointer-events:none;visibility:hidden;background:var(--wr-paper,#fbfaf7)";
+    opts.container.appendChild(el);
+    let gr: any = null;
+    try {
+      gr = book.renderTo(el, { width: "100%", height: "100%", spread: lastSpreadMode, flow: "paginated" });
+      registerThemes(gr);
+      gr.themes.fontSize(`${currentFontSizePercent}%`);
+      gr.on?.("rendered", () => {
+        try {
+          gr.themes.select(currentTheme);
+        } catch {
+          // ghost 重选失败无碍：不影响主视图，下轮重建
+        }
+      });
+      registerFontFaceHook(gr);
+      await withTimeout(gr.display(anchorCfi), 12_000);
+      await withTimeout(direction > 0 ? gr.next() : gr.prev(), 6_000);
+      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+      if (seq !== ghostSeq) {
+        // 构建期间被抢占（翻页/排版变更/销毁）：丢弃
+        try {
+          gr.destroy?.();
+        } catch {}
+        el.remove();
+        return null;
+      }
+      ghost = { rendition: gr, el, direction, anchorCfi, width: w, height: h };
+      return el;
+    } catch (e) {
+      logOnce("reader.ghost", `reader: ghost build failed ${String(e)}`);
+      try {
+        gr?.destroy?.();
+      } catch {}
+      el.remove();
+      return null;
+    }
+  };
+
+  const prepareTurnView = async (direction: 1 | -1, waitMs = 450): Promise<HTMLElement | null> => {
+    const host = opts.container;
+    const w = host.clientWidth;
+    const h = host.clientHeight;
+    if (w < 40 || h < 40) return null;
+    const anchorCfi = rendition.currentLocation?.()?.start?.cfi;
+    if (typeof anchorCfi !== "string" || !anchorCfi) return null;
+    if (
+      ghost &&
+      ghost.direction === direction &&
+      ghost.anchorCfi === anchorCfi &&
+      ghost.width === w &&
+      ghost.height === h
+    ) {
+      return ghost.el; // 命中（含提交后的预热爱益）
+    }
+    destroyGhost();
+    return Promise.race([
+      buildGhost(direction, anchorCfi, w, h),
+      new Promise<null>((r) => window.setTimeout(() => r(null), waitMs)),
+    ]);
+  };
 
   let lastEmitted: RelocatedPayload | null = null;
   let prefetchedSection: number | null = null;
@@ -792,18 +902,23 @@ export async function createReader(opts: {
       await rendition.prev();
     },
     display: async (target?: string) => {
+      destroyGhost(); // 跳转后主视图 CFI 变更：ghost 锚点失效
       try {
         await withTimeout(rendition.display(target), 30_000);
       } catch (e) {
         logOnce("reader.display", `reader: display failed ${String(e)}`);
       }
     },
+    prepareTurnView,
+    releaseTurnView: destroyGhost,
     setTheme: (theme: Theme) => {
       if (theme === currentTheme) return;
+      destroyGhost();
       currentTheme = theme;
       rendition.themes.select(theme);
     },
     setFontSizePercent: (percent: number) => {
+      destroyGhost(); // 字号变更改变分页：ghost 布局失效
       rendition.themes.fontSize(`${percent}%`);
       currentFontSizePercent = percent;
       ensureLocations(); // locations 按 字体|字号 档缓存：换档重算（命中持久化则零成本灌注）
@@ -828,6 +943,7 @@ export async function createReader(opts: {
     },
     setSpreadMode: (mode: SpreadMode) => {
       if (mode === lastSpreadMode) return;
+      destroyGhost(); // 单双栏改变分页几何：ghost 失效
       lastSpreadMode = mode;
       const cfi = rendition.currentLocation?.()?.start?.cfi;
       applySpreadMode(rendition, mode, typeof cfi === "string" ? cfi : undefined);
@@ -877,6 +993,7 @@ export async function createReader(opts: {
       }
     },
     resize: () => {
+      destroyGhost(); // 容器尺寸变化：ghost 几何失效
       try {
         // 同尺寸下 rendition.resize() 会被 manager 提前返回（不重排页码），统一走 clear+display 当前 CFI；
         // scrolled 模式 spread 必须保持 none（与 setSpreadMode 跳过逻辑一致）
@@ -922,6 +1039,7 @@ export async function createReader(opts: {
       return matches;
     },
     destroy: () => {
+      destroyGhost(); // 先撤 ghost：避免 book.destroy 后其 iframe 悬空
       // 关书兜底：locations 生成的防抖落库若还在排队，立即一次写完（book.destroy 会作废 locations）
       locationsGen += 1;
       if (locationsSaveTimer !== null) {

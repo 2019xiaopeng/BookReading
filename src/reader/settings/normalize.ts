@@ -70,7 +70,7 @@ export function normalizeReaderFont(v: unknown): ReaderFont {
 
 export function normalizePageAnimation(v: unknown): PageAnimation {
   const s = String(v ?? "").trim().toLowerCase();
-  if (s === "none" || s === "slide" || s === "fade") return s;
+  if (s === "none" || s === "slide" || s === "cover" || s === "fade" || s === "paper") return s;
   return "none";
 }
 

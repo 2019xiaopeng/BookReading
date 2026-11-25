@@ -1,7 +1,8 @@
 import type { LayoutMode } from "./layoutMode";
 
 export type Theme = "light" | "sepia" | "green" | "gray" | "dark" | "darkcontrast" | "ink" | "ink-dark";
-export type PageAnimation = "none" | "slide" | "fade";
+/** V-1 翻页动画矩阵（对标 Wenku8_Flutter）：none/slide/cover/fade/paper，仅 EPUB 生效 */
+export type PageAnimation = "none" | "slide" | "cover" | "fade" | "paper";
 export type ReadingMode = "paginated" | "scrolled";
 export type FontFamily = "default" | "songti" | "heiti" | "kaiti" | "fangsong" | "custom";
 export type ReaderBackground = { type: "preset" } | { type: "image"; path: string };
