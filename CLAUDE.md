@@ -62,6 +62,9 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 ## 已知陷阱（历史教训，改动前先查）
 
+- **epub.js themes.select() 必须在首章 display() 完成后调用**：display 前 iframe 不存在 → sheet null → 主题永不注入 → 字体/排版全丢。已在 reader.ts 首章 display 后 + 每次 rendered 事件注入。**dev 正常是因为 Vite 初始化慢碰对时序——安装版才是验证标准，dev OK 不代表生产 OK**
+- **themes.select() 还需要在每次 rendered（章节切换）后重新调用**：章节切换销毁重建 iframe，旧注入的 CSS 全丢
+
 - **Vite 生产构建 minify 会破坏 epub.js**：esbuild identifier mangling 导致 themes 系统 insertRule 对 null sheet—— 已锁定在 vite.config.ts，**不要改回 true**（dev 不 minify 所以 dev 永远正常，安装版才是验证标准）
 - **epub.js themes.select() 在 iframe 未就绪时调用必失败**：rendition.ready 后重试注入（reader.ts registerThemes 内）——不要移除重试逻辑
 - **regex 清 CSS 极危险**：grep 关键词可能误删同名前缀类（如清理 V-4 窄窗时误删 Drawer CSS 含 'drawer' 关键词）——删除前必须逐条核实每个命中行
