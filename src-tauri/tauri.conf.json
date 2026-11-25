@@ -26,8 +26,7 @@
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]
-      },
-      "csp": "default-src 'self' tauri: asset:; img-src 'self' asset: blob: data: http://img.wenku8.com https://img.wenku8.com; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-aickr4PGcvaJR9KQAybpGec0xJo0vgJ0xXnpKmwdXpE='; connect-src 'self' ipc: http://ipc.localhost;"
+      }
     }
   },
   "plugins": {

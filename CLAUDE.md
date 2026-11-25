@@ -62,13 +62,10 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 ## 已知陷阱（历史教训，改动前先查）
 
-- **安装版 EPUB 阅读字体/布局异常（v3.1 系列未解）**：dev 版正常、安装版不正常（同一代码/数据库/WebView2）。已排除 minify/themes.select 时序/CSS 残留/CSP img-src。**最可疑未验证：①downloadBootstrapper vs offlineInstaller（290MB 版正常，5MB 版异常）②tauri://localhost 对 iframe 动态样式限制 ③appdata 残留**。排查必须用 CDP 在安装版内检查 computed font-family，不要在 dev 版验证
+- **v3.1 系列（3.1.0→3.1.7）安装版字体/布局/插图全坏的根因 = CSP nonce（已解，v3.1.8）**：tauri.conf.json 配置任何 csp，Tauri 构建时都会往 style-src 自动追加 nonce；CSP 规范规定 source list 含 nonce/hash 时 'unsafe-inline' 一律失效 → epub.js 全部动态 `<style>` 注入被拦（主题/字体栈/排版/adjustImages 缩放/书内嵌字体/blob 样式表）→ sheet 恒 null——即此前误判为"themes.select 时序"的 null sheet。iframe 是 about:srcdoc，继承 tauri.localhost 的 CSP。**dev 不注入 CSP，所以 dev 永远正常——本 bug 连错 6 版就是因为一直在 dev 验证**。修复=整体移除 csp（回到 v3.0.1 已知良好状态；CSP 本是为放行内联 boot 脚本才引入的）。**不要再给本应用配 csp**；排查安装版问题的唯一可信手段=`temp/cdp-inspect.mjs` 式 CDP 取证（安装版带 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port` 启动）
+- **epub.js themes.select() 必须在首章 display() 完成后调用，且每次 rendered（章节切换重建 iframe）后重新调用**：display 前 iframe 不存在 → sheet null。reader.ts 已如此实现，不要回退
 
-- **epub.js themes.select() 必须在首章 display() 完成后调用**：display 前 iframe 不存在 → sheet null → 主题永不注入 → 字体/排版全丢。已在 reader.ts 首章 display 后 + 每次 rendered 事件注入。**dev 正常是因为 Vite 初始化慢碰对时序——安装版才是验证标准，dev OK 不代表生产 OK**
-- **themes.select() 还需要在每次 rendered（章节切换）后重新调用**：章节切换销毁重建 iframe，旧注入的 CSS 全丢
-
-- **Vite 生产构建 minify 会破坏 epub.js**：esbuild identifier mangling 导致 themes 系统 insertRule 对 null sheet—— 已锁定在 vite.config.ts，**不要改回 true**（dev 不 minify 所以 dev 永远正常，安装版才是验证标准）
-- **epub.js themes.select() 在 iframe 未就绪时调用必失败**：rendition.ready 后重试注入（reader.ts registerThemes 内）——不要移除重试逻辑
+- **Vite 生产构建 minify 疑似破坏 epub.js（未复验——当时症状实为 CSP 根因）**：minify 已锁 false 在 vite.config.ts，保守起见**不要改回 true**
 - **regex 清 CSS 极危险**：grep 关键词可能误删同名前缀类（如清理 V-4 窄窗时误删 Drawer CSS 含 'drawer' 关键词）——删除前必须逐条核实每个命中行
 - **tauri-plugin-window-state 默认恢复 decorated:true**：必须排除 DECORATIONS flag 否则无边框被覆盖出双标题栏
 - **快速连按翻页必须 clearTimeout 抢占**：残留定时器会在下一帧醒来强制设 opacity:0 造成闪烁

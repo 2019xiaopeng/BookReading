@@ -2,8 +2,9 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <!-- U-9 启动闪白：首帧先落纸墨底色（与窗口 backgroundColor 同值），再由内联脚本按 localStorage 同步主题；
-         脚本内容的 sha256 必须同步进 tauri.conf.json 的 CSP script-src（改此脚本需重算 hash） -->
+    <!-- U-9 启动闪白：首帧先落纸墨底色（与窗口 backgroundColor 同值），再由内联脚本按 localStorage 同步主题。
+         v3.1.8：CSP 已整体移除——Tauri 对任何 csp 都会往 style-src 追加 nonce，nonce 存在时 'unsafe-inline'
+         按 CSP 规范失效，epub.js 全部动态 <style> 注入（主题/字体/排版/图片缩放）被拦 = v3.1 系列根因 -->
     <style>
       html{background:#FAFAF7}
     </style>
