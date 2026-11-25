@@ -3939,46 +3939,70 @@ body::after {
   }
 }
 
-/* ───────────────────────── V-3 设置大页面（/settings，壳内主栏） ─────────────────────────
-   断点按「内容宽度」而非窗口宽度：主栏宽 = 窗口 − 侧栏（210/270 两档跳变），随窗口宽度不单调，
-   故 .wr-settings 设为尺寸容器，以下 @container 都相对它的宽度求值。容器不能查询自己，
-   所以布局规则落在新层 .wr-settings-layout 上。 */
+/* ───────────────────────── V-3 设置浮窗（PyCharm 式居中弹窗，2026-11-25 用户定稿） ─────────────────────────
+   外框 = 圆角面板，自身 overflow:hidden 不滚动；内部三段：标题行 / [左：分区目录 | 右：配置面板] / 底栏。
+   只有右侧面板内部滚动。浮窗尺寸固定 + 右面板恒留滚动条槽 → 切分区时没有任何东西平移。
+   右面板是尺寸容器：下面的 @container 量的是它的内容盒宽（扣掉 padding 与滚动条槽）。 */
 
-.wr-settings {
-  container-type: inline-size;
-  padding: 0 18px 32px;
+.wr-settings-dialog {
+  width: min(1080px, calc(100vw - 48px));
+  height: min(720px, calc(100vh - 48px));
+  max-height: none;
+  padding: 0;
+  gap: 0;
+  display: block;
+  overflow: hidden;
 }
 
-.wr-settings-layout {
+.wr-settings-frame {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100%;
+}
+
+/* 标题：复用书架 / 收藏刊头的 .wr-masthead-name（大字）与 .wr-masthead-stats；左缘 24px */
+.wr-settings-mast {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px 0;
+}
+
+.wr-settings-frame-body {
+  display: grid;
+  grid-template-columns: 176px minmax(0, 1fr);
+  min-height: 0;
+  margin-top: 12px;
+  border-top: 1px solid var(--m2-line);
+}
+
+/* 左：分区目录。每行定高、图标定宽——选中只换颜色，任何尺寸分毫不变 */
+.wr-settings-nav {
   display: flex;
   flex-direction: column;
-}
-
-/* 分区导航：窄容器=顶部胶囊行（吸顶；玻璃栏底色盖住下方滚过的内容） */
-.wr-settings-nav {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 -18px;
-  padding: 12px 18px 10px;
-  background: var(--wr-chrome-bg);
-  backdrop-filter: blur(14px);
-  box-shadow: 0 1px 0 var(--m2-line);
+  gap: 4px;
+  min-height: 0;
+  padding: 14px 10px 14px 11px; /* 11 + 行边框 1 + 行内边距 12 = 24 → 图标左缘与标题左缘逐像素对齐 */
+  overflow-y: auto;
+  border-right: 1px solid var(--m2-line);
 }
 
 .wr-settings-tab {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
-  gap: 6px;
-  border: 1px solid var(--m2-line);
-  border-radius: 999px;
+  gap: 8px;
+  flex: none;
+  height: 38px;
+  padding: 0 12px; /* 目录左内边距 12 + 行内边距 12 = 24 → 图标左缘与标题左缘对齐 */
+  border: 1px solid transparent;
+  border-radius: var(--wr-radius-md);
   background: transparent;
   color: var(--m2-ink);
-  padding: 6px 12px;
   font-size: 13px;
+  line-height: 1;
+  text-align: left;
   cursor: pointer;
   white-space: nowrap;
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
@@ -3988,34 +4012,43 @@ body::after {
   background: var(--m2-wash);
 }
 
-/* 窄容器选中态同侧栏快捷 chips：墨色实底反白 */
-.wr-settings-tab[aria-current="page"] {
-  background: var(--m2-ink);
-  border-color: var(--m2-ink);
-  color: var(--m2-paper);
+.wr-settings-tab[aria-selected="true"] {
+  background: rgba(var(--wr-accent-rgb), 0.12);
+  border-color: rgba(var(--wr-accent-rgb), 0.22);
+  color: var(--wr-ink);
 }
 
-/* 分区图标只在宽容器的竖列里显示（胶囊行里省宽度） */
 .wr-settings-tab-icon {
-  display: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wr-muted);
 }
 
-/* 分区切换的两种形态：胶囊组（默认 / 宽容器竖列）与最窄形态的下拉，由下方容器查询二选一显示 */
-.wr-settings-tabs {
-  display: contents; /* 透明包裹：按钮直接参与导航条自身的 flex / grid 排布 */
+.wr-settings-tab[aria-selected="true"] .wr-settings-tab-icon {
+  color: var(--wr-ink);
 }
 
-.wr-settings-nav-select {
-  display: none;
+.wr-settings-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* 分区内容：限宽居中（宽屏不摊成长线）；切分区时轻微淡入 */
-.wr-settings-body {
+/* 右：配置面板——唯一的滚动区。恒留滚动条槽：有长有短的分区来回切，内容宽度不变 */
+.wr-settings-pane {
+  container-type: inline-size;
   min-width: 0;
-  width: 100%;
-  max-width: 720px;
-  margin: 0 auto;
-  animation: wr-settings-in 180ms ease both;
+  min-height: 0;
+  padding-right: 6px; /* 滚动条离右边框留一点，不贴着圆角 */
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+.wr-settings-body {
+  max-width: 800px;
+  padding: 16px 20px 28px 24px;
+  animation: wr-settings-in 180ms ease both; /* 切分区时轻微淡入 */
 }
 
 @keyframes wr-settings-in {
@@ -4055,7 +4088,7 @@ body::after {
   color: var(--wr-muted);
 }
 
-/* 分组：小标题沿用 .wr-settings-group（见文件中段），组内设置行以细线分隔 */
+/* 分组：小标题沿用 .wr-settings-group（见文件中段，HealthScanDialog 也在用），组内设置行以细线分隔 */
 .wr-settings-block {
   margin-top: 26px;
 }
@@ -4225,7 +4258,7 @@ body::after {
   background-position: center;
 }
 
-/* 快捷键：键位 + 说明，宽容器自动分栏 */
+/* 快捷键：键位 + 说明，宽面板自动分栏 */
 .wr-settings-keys {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -4250,23 +4283,23 @@ body::after {
   border-bottom: none;
 }
 
-/* 窄容器（<600，三件事同一个断点，不留夹在中间的形态）：
-   ① 八个胶囊一行要 ~548px（实测），放不下时吸顶条会折成两排（最矮窗口下吃掉 1/4 内容区）——改用一个下拉切换分区
-   ② 设置行上下堆叠，控件通栏左对齐 */
+/* 底栏 */
+.wr-settings-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--m2-line);
+}
+
+.wr-settings-foot-note {
+  font-size: 12px;
+  color: var(--wr-muted);
+}
+
+/* 面板窄（内容盒 <600，最矮小的窗口下才会出现）：设置行上下堆叠，控件通栏左对齐 */
 @container (max-width: 599px) {
-  .wr-settings-tabs {
-    display: none;
-  }
-
-  .wr-settings-nav-select {
-    display: inline-flex;
-    min-width: 128px;
-  }
-
-  .wr-settings-nav {
-    padding-top: 10px;
-    padding-bottom: 10px;
-  }
   .wr-settings-row {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -4281,81 +4314,175 @@ body::after {
   }
 }
 
-/* 主题九宫格改一行九个：窄形态下内容=容器宽（≥700 每格 ≥69px，最长标签"夜间高对比"60px 放得下） */
+/* 面板内容盒 ≥700：主题九宫格一行九个（每格 ≥69px，最长标签"夜间高对比"60px 放得下） */
 @container (min-width: 700px) {
   .wr-settings-themes {
     grid-template-columns: repeat(9, minmax(0, 1fr));
   }
 }
 
-/* 宽容器（≥780）：左侧竖列导航（吸顶）+ 内容限宽，整体居中 */
-@container (min-width: 780px) {
-  .wr-settings-layout {
-    display: grid;
-    grid-template-columns: 160px minmax(0, 720px);
-    column-gap: 40px;
-    justify-content: center;
-    align-items: start;
-  }
-
-  .wr-settings-nav {
-    position: sticky;
-    top: 20px;
-    display: grid;
-    align-content: start;
-    gap: 4px;
-    margin: 0;
-    padding: 20px 0;
-    background: none;
-    backdrop-filter: none;
-    box-shadow: none;
-  }
-
-  .wr-settings-tab {
-    justify-content: flex-start;
-    border-color: transparent;
-    border-radius: var(--wr-radius-md);
-    padding: 9px 12px;
-    text-align: left;
-  }
-
-  /* 宽容器选中态同侧栏导航钮：accent 淡底 + 描边 */
-  .wr-settings-tab[aria-current="page"] {
-    background: rgba(var(--wr-accent-rgb), 0.12);
-    border-color: rgba(var(--wr-accent-rgb), 0.22);
-    color: var(--wr-ink);
-  }
-
-  .wr-settings-tab-icon {
-    display: inline-flex;
-    align-items: center;
-    color: var(--wr-muted);
-  }
-
-  .wr-settings-tab[aria-current="page"] .wr-settings-tab-icon {
-    color: var(--wr-ink);
-  }
-
-  .wr-settings-body {
-    max-width: none;
-    margin-top: 20px;
-  }
-
-  /* 宽形态下内容列 = 容器 − 200（导航 160 + 间距 40）：容器 780–899 时内容不足 700，九宫格退回 5+4 */
-  .wr-settings-themes {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
+/* ───────────────────────── 圆角弹窗里的滚动条不触碰圆角（2026-11-25 用户要求） ─────────────────────────
+   所有自带滚动的 .wr-dialog（书籍详情 / 标签 / 更新 / 清洗标题…）：面板圆角 22px，滚动条却贴着面板边缘，
+   滑块行程会压进四角。轨道两端内缩 ≥ 圆角半径，滑块行程避开四角；滑块两侧再留 3px 透明边成细墨条。
+   设置浮窗与书库体检则是结构上的处理：面板自身不滚动，滚动区带内边距（见各自规则）。 */
+.wr-dialog::-webkit-scrollbar-track {
+  margin: 22px;
 }
 
-/* 宽形态且内容 ≥700：九宫格一行九个 */
-@container (min-width: 900px) {
-  .wr-settings-themes {
-    grid-template-columns: repeat(9, minmax(0, 1fr));
-  }
+.wr-dialog::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
 
-/* 侧栏「设置」钮在设置页上的选中态（同 .wr-nav-btn[data-active]） */
-.wr-small-btn[aria-current="page"] {
-  border-color: rgba(var(--wr-accent-rgb), 0.22);
-  background: rgba(var(--wr-accent-rgb), 0.12);
+.wr-prompt--sys .wr-prompt-body::-webkit-scrollbar-track {
+  margin: 6px 0;
+}
+
+/* ───────────────────────── 书库体检弹窗（v3.2：放大 + 批量勾选 + 重复项按份显示位置） ─────────────────────────
+   与设置浮窗同一套骨架：外框不滚动，滚动区在标题与底栏之间、左右各留 24px——滚动条不碰圆角。 */
+
+.wr-health-dialog {
+  width: min(980px, calc(100vw - 48px));
+  height: min(760px, calc(100vh - 48px));
+  max-height: none;
+  padding: 0;
+  gap: 0;
+  display: block;
+  overflow: hidden;
+}
+
+.wr-health-frame {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100%;
+}
+
+.wr-health-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 24px 0;
+}
+
+.wr-health-top-sub {
+  font-size: 12px;
+  color: var(--wr-muted);
+}
+
+.wr-health-scroll {
+  min-height: 0;
+  padding: 0 24px;
+  overflow-y: auto;
+  overflow-x: hidden; /* 行内永不横向溢出：操作列可换行，路径可折行 */
+  scrollbar-gutter: stable;
+}
+
+.wr-health-sec {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wr-health-sel {
+  margin-top: 14px;
+  border: 1px solid var(--m2-line);
+  border-radius: 999px;
+  background: transparent;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--wr-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.wr-health-sel:hover {
+  color: var(--wr-ink);
+  border-color: rgba(var(--wr-accent-rgb), 0.4);
+}
+
+/* 条目行：[勾选] [图标] [信息（可缩）] [操作列]；操作列放不下时在列内换行，绝不撑宽弹窗 */
+.wr-health-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  padding: 10px 12px;
+}
+
+/* 勾选框：定宽 14px——悬空封面行用同类的空 span 占位，三组行的图标列对齐 */
+.wr-health-check {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--wr-accent);
+  cursor: pointer;
+}
+
+.wr-health-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* 重复导入组：一张卡，组内逐份列出位置 / 书架 / 大小 / 导入时间 */
+.wr-health-group {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--m2-line);
+  border-radius: var(--wr-radius-lg);
+  background: var(--wr-paper);
+  box-shadow: var(--wr-shadow-card);
+}
+
+[data-theme="dark"] .wr-health-group,
+[data-theme="darkcontrast"] .wr-health-group {
+  background: rgba(var(--wr-ink-rgb), 0.06);
+}
+
+.wr-health-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wr-health-copy {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  padding: 8px 0 8px 26px;
+  border-top: 1px solid var(--m2-line);
+}
+
+/* 位置要让人看清是哪个目录：折行显示，不用省略号 */
+.wr-health-copy .wr-health-meta {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.wr-health-copy:first-of-type {
+  border-top: none;
+}
+
+/* 底栏：已选统计靠左，批量动作与关闭靠右 */
+.wr-health-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--m2-line);
+}
+
+.wr-health-foot-count {
+  margin-right: auto;
+  font-size: 13px;
+  color: var(--wr-muted);
 }

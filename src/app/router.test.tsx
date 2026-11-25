@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { useLayoutEffect } from "react";
 
@@ -24,7 +24,6 @@ vi.mock("../tauri/invoke", async (importOriginal) => {
 
 import { AppLayout } from "./router";
 import { setPageMeta } from "../ui/pageMeta";
-import SettingsPage from "../pages/SettingsPage";
 
 // 假页面照真实页面同款：布局期（useLayoutEffect）注册本页元信息
 function FakeLibrary() {
@@ -74,14 +73,14 @@ describe("AppLayout 常驻壳（批次8 防回归红线）", () => {
     expect(document.querySelector(".wr-nav-btn[data-active='true']")?.textContent).toContain("收藏");
   });
 
-  // v3.2（V-3）：设置由弹窗改为壳内独立页面——入口仍是侧栏底部「设置」钮，壳照旧不重挂
-  test("侧栏「设置」钮导航到设置页（不再开弹窗）：标题「设置」、钮带 aria-current、侧栏不被高亮成书架；点书架回来", async () => {
+  // v3.2（V-3，用户定稿 PyCharm 式）：设置是浮在当前页上的居中浮窗——侧栏「设置」钮打开，
+  // 底下的书架页不切走（滚动位置、选中书架、侧栏快捷行都原样），Esc 关闭，壳照旧不重挂
+  test("侧栏「设置」钮打开设置浮窗：不切页（书架页仍在）、八个分区、Esc 关闭、壳不重挂", async () => {
     render(
       <MemoryRouter initialEntries={["/"]}>
         <Routes>
           <Route element={<AppLayout />}>
             <Route path="/" element={<FakeLibrary />} />
-            <Route path="/settings" element={<SettingsPage />} />
           </Route>
         </Routes>
       </MemoryRouter>,
@@ -89,18 +88,19 @@ describe("AppLayout 常驻壳（批次8 防回归红线）", () => {
 
     const side = document.querySelector(".wr-side-bottom");
     const settingsBtn = screen.getByRole("button", { name: "设置" });
-    expect(settingsBtn.getAttribute("aria-current")).toBeNull();
+    expect(settingsBtn.getAttribute("aria-expanded")).toBe("false");
 
     fireEvent.click(settingsBtn);
-    await waitFor(() => expect(screen.getByRole("navigation", { name: "设置分区" })).toBeTruthy());
-    expect(screen.getByRole("heading", { level: 1, name: "设置" })).toBeTruthy();
-    expect(settingsBtn.getAttribute("aria-current")).toBe("page");
+    const dialog = await screen.findByRole("dialog", { name: "设置" });
+    expect(within(dialog).getAllByRole("tab")).toHaveLength(8);
+    expect(within(dialog).getByText("设 置")).toBeTruthy(); // 与书架 / 收藏刊头同款大字标题
+    expect(screen.getByTestId("page-library")).toBeTruthy(); // 底下还是书架页
     expect(document.querySelector(".wr-side-bottom")).toBe(side);
-    expect(document.querySelector(".wr-nav-btn[data-active='true']")).toBeNull(); // 设置页不冒充书架
-    expect(document.querySelector(".wr-dialog, .wr-dialog--settings")).toBeNull(); // 旧设置弹窗已不存在
+    expect(settingsBtn.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector(".wr-nav-btn[data-active='true']")?.textContent).toContain("书架"); // 书架仍是当前页
 
-    fireEvent.click(document.querySelector(".wr-nav-btn[data-shelf-id='']") as HTMLElement);
-    await waitFor(() => expect(screen.getByTestId("page-library")).toBeTruthy());
-    expect(settingsBtn.getAttribute("aria-current")).toBeNull();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "设置" })).toBeNull());
+    expect(screen.getByTestId("page-library")).toBeTruthy();
   });
 });

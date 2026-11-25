@@ -41,9 +41,9 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 **双进程壳**：React 前端（WebView2）↔ Rust 后端（全部 IO/重活），边界 = `#[tauri::command]`。前端 invoke 封装集中在 `src/tauri/invoke.ts` 与 `src/tauri/wenku8.ts`（契约层：改 Rust 命令签名必须同步 TS wrapper，多 agent 并行时先冻结契约再各自实现）。
 
-**路由与壳（v3.0 批次8 重构，勿回退）**：`src/app/router.tsx` 的 `AppLayout` 是**唯一常驻 AppShell 实例**（侧栏/底栏零重挂载根治切页闪烁）；四个内容页（LibraryPage 含回收站视图、FavoritesPage、CloudShelfPage、SettingsPage）不自带壳，通过 `src/ui/pageMeta.ts` 模块级 store（useSyncExternalStore）在 useLayoutEffect 里注册本页元信息（title/search/quickFilter/contextRow）。ReaderPage 在壳外独立路由。
+**路由与壳（v3.0 批次8 重构，勿回退）**：`src/app/router.tsx` 的 `AppLayout` 是**唯一常驻 AppShell 实例**（侧栏/底栏零重挂载根治切页闪烁）；三个内容页（LibraryPage 含回收站视图、FavoritesPage、CloudShelfPage）不自带壳，通过 `src/ui/pageMeta.ts` 模块级 store（useSyncExternalStore）在 useLayoutEffect 里注册本页元信息（title/search/quickFilter/contextRow）。ReaderPage 在壳外独立路由。侧栏品牌区下方那一行（`.wr-quick-row`）显示的就是本页注册的 quickFilter / contextRow——**新增壳内页面必须注册其中之一，否则那里留一条空白**（用户对这条空白明确提过意见）。
 
-**设置（v3.2 V-3，2026-11-25 落地）**：独立路由 `/settings?section=<id>`，页面壳在 `src/pages/SettingsPage.tsx`，各分区与通用控件在 `src/settings/`（八分区登记表 `sections.ts`，**加分区先改它**）。原 `SettingsDialog` 已删、条目全部迁入；**阅读页的设置抽屉（`SettingsPanel` / `ImageSettingsPanel`）是另一套，没动**——设置页改的是全局默认，阅读页抽屉改的是"当前书生效值"（书级覆盖优先）。全局阅读默认 ↔ settings 键的映射在 `src/settings/readerDefaults.ts` 与 `ReaderPage.tsx` 各一份（为了让设置页零触碰阅读器代码），**改键必须两处同步**。`.wr-settings-group` 是与 `HealthScanDialog` 共用的小标题类，视觉勿动。
+**设置（v3.2 V-3，2026-11-25 落地；形态为用户钦定，勿改回整页路由）**：`src/ui/SettingsDialog.tsx` 是**PyCharm 式居中模态浮窗**——侧栏「设置」钮（AppShell 的 `settings` 状态）打开，浮在当前页上方、不切页，Esc / 点遮罩 / 「关闭」退出；顶部复用刊头大字标题「设 置」，左侧分区目录（WAI-ARIA 标签页）+ 右侧配置面板，只有右面板内部滚动。各分区与通用控件在 `src/settings/`（八分区登记表 `sections.ts`，**加分区先改它**）。**阅读页的设置抽屉（`SettingsPanel` / `ImageSettingsPanel`）是另一套，没动**——设置浮窗改的是全局默认，阅读页抽屉改的是"当前书生效值"（书级覆盖优先）。全局阅读默认 ↔ settings 键的映射在 `src/settings/readerDefaults.ts` 与 `ReaderPage.tsx` 各一份（为了让设置零触碰阅读器代码），**改键必须两处同步**。`.wr-settings-group` 是与 `HealthScanDialog` 共用的小标题类，视觉勿动。同日第一版做过壳内独立路由整页（用户实测后否决：切页让侧栏留白、分区导航抖动），已撤。
 
 **侧栏动作**：底部四钮（刷新/导入漫画/导入图书/设置）写死在 AppShell；刷新走 `src/ui/appActions.ts` 事件总线（各页订阅自消化），导入走 `src/ui/importService.ts`（落架目标=模块级当前书架）。`sidebarActions` 动态注册机制已删——不要再引入按页注册底栏的方案。
 
@@ -57,13 +57,13 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 ## 设计系统（碳墨）
 
-全部手搓，**无 UI 组件库**（3.2 已引入 Radix headless 基座，封装在 `src/ui/radix.tsx`：`Modal / PointMenu / WrSelect / Tooltip`，只取行为层、视觉走碳墨类，勿整库替换）。token 在 `src/ui/weread.css`（--wr-*/--m2-* 两套变量浅深主题，八主题）。**弹层/对话框设计基准 = 书库右键详情弹层**（用户钦定）；弹层一律 body 级 Portal + fixed 视口定位（父层 overflow 裁不到内嵌弹层）；新 UI 的下拉一律 `WrSelect`（原生 select 弹层做不了主题；存量少数原生 select 尚未迁）。README 截图必须中性内容（用户书库隐私），裁掉侧栏或匿名化。
+全部手搓，**无 UI 组件库**（3.2 已引入 Radix headless 基座，封装在 `src/ui/radix.tsx`：`Modal / PointMenu / WrSelect / Tooltip`，只取行为层、视觉走碳墨类，勿整库替换）。token 在 `src/ui/weread.css`（--wr-*/--m2-* 两套变量浅深主题，八主题）。**弹层/对话框设计基准 = 书库右键详情弹层**（用户钦定）；弹层一律 body 级 Portal + fixed 视口定位（父层 overflow 裁不到内嵌弹层）；新 UI 的下拉一律 `WrSelect`（原生 select 弹层做不了主题；存量少数原生 select 尚未迁）。**圆角弹窗里的滚动条不能压进圆角**（用户明确要求）：新做的大弹窗照设置浮窗 / 书库体检的骨架——面板自身 `overflow:hidden`，滚动区夹在标题与底栏之间并留内边距，行内不许横向溢出；存量自带滚动的 `.wr-dialog` 靠通用的轨道内缩规则兜着，别删。README 截图必须中性内容（用户书库隐私），裁掉侧栏或匿名化。
 
 ## 测试与验收
 
 前端 vitest（jsdom 文件级 `// @vitest-environment jsdom` 指令，全局仍是 node 环境）。dev 应用 CDP 实测：`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9223" npm run tauri dev`，然后零依赖 Node22 脚本（WebSocket）驱动——**Playwright page.goto 会整页重载重置 SPA 状态，持久化类验证必须走应用内导航（点侧栏按钮）**。多开 dev 实例会留 WebView2 僵尸进程占数据目录（0x8007139F 崩溃），杀 msedgewebview2 进程重启。
 
-**布局/视觉验证（不占用用户的 dev 窗口）**：起一个独立无头 Chrome（`chrome --headless=new --remote-debugging-port=9333 --user-data-dir=<F 盘临时目录>`）连同一个 Vite dev server，用 `tools/cdp/` 里的零依赖脚本驱动——`cdp-lib.mjs`（连接/eval/视口模拟/截图）、`verify-settings.mjs`（注入 Tauri IPC 假后端 → 应用内导航 → 多尺寸截图 + 横向溢出断言）、`verify-breakpoints.mjs`（断点两侧逐像素扫描）、`inspect-installed.mjs`（安装版取证）、`smoke-turn.mjs`。dev 与安装版**共用正式数据目录**，两者不能同时开；`npm run dev:isolated` 的隔离目录在本机尚不存在（=空书库）。
+**布局/视觉验证（不占用用户的 dev 窗口）**：起一个独立无头 Chrome（`chrome --headless=new --remote-debugging-port=9333 --user-data-dir=<F 盘临时目录>`）连 Vite dev server（用户的 dev 开着时直接共用它的 14200），用 `tools/cdp/` 里的零依赖脚本驱动——`cdp-lib.mjs`（连接/eval/视口模拟/截图，截图可裁剪放大看圆角）、`verify-settings.mjs`（注入 Tauri IPC 假后端 → 应用内导航 → 设置浮窗与书库体检：六尺寸 × 八分区截图 + 零溢出断言 + **切分区零位移断言**，可选参数 `only=sectionId sizes=720x480,1350x801`）、`verify-settings-extra.mjs`（深浅主题、Esc / 遮罩关闭）、`inspect-installed.mjs`（安装版取证）、`smoke-turn.mjs`。界面改动后先跑前两个并逐张看截图。dev 与安装版**共用正式数据目录**，两者不能同时开；`npm run dev:isolated` 的隔离目录在本机尚不存在（=空书库）。
 
 ## 已知陷阱（历史教训，改动前先查）
 
@@ -72,7 +72,9 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 - **磁盘空间是硬约束**：书库数据库与设置在 **C 盘**（`%APPDATA%\com.root.bookreading`），C 盘写满时 dev 的 tauri 命令行工具会静默退出（exit 1，窗口成孤儿）、应用存不进进度。本机 C 盘长期接近满（桌面有大文件夹）、F 盘也紧张（`F:\cargo-target\bookreading` debug ≈18GB + release ≈4.5GB）。**动构建前先看 `Get-PSDrive C,F`**；Claude Code 自己的临时目录也在 C 盘，满了会话随时断。清理用户机器上的东西必须先列清单征得同意，只删清单内的
 - **任何 cargo / tauri dev 都必须带 `CARGO_TARGET_DIR=F:/cargo-target/bookreading`**：漏了会编到仓库内 `src-tauri/target`（一次落了 10GB 垃圾，且撞 hashbrown rlib 冲突 exit 101）。清理该目录即可
 - **Radix Select（`WrSelect`）的选项值不能是空串**：不报错，触发器直接显示成一片空白。设置表里用空串表示"默认/根"的键（如 `wenku8.dest_shelf`），界面上要换成占位值、读写时互换
-- **CSS 容器查询量的是内容盒宽度**（要扣掉容器自身 padding）：设置页 `.wr-settings` 左右各 18px 内边距，所以 CSS 写的 600/780 对应实际窗口宽 904/1084。改断点后用 `tools/cdp/verify-breakpoints.mjs` 在分界两侧逐像素实测，别只靠推算
+- **CSS 容器查询量的是内容盒宽度**（扣掉容器自身 padding；滚动容器还要扣预留的滚动条槽）：设置浮窗的右面板 `.wr-settings-pane` 是容器，断点 600（设置行上下堆叠）/ 700（主题九宫格一行九个）。改断点后在分界两侧逐像素实测，别只靠推算
+- **"切换内容时抖动"的通用解法**：容器尺寸固定 + 滚动容器 `scrollbar-gutter: stable`（内容有长有短时滚动条时有时无，可用宽度会跳一个滚动条宽）+ 导航项定高定宽、选中只换色。验证不能只看"没溢出"，要**把切换前后的坐标逐位比对**（`verify-settings.mjs` 的 stable 断言）
+- **"操作进行中不许关闭"之类的闸门要在动作开始处同步置位，不要靠 React effect**：effect 要等下一次渲染提交才执行，那个空档里 Esc / 点遮罩能穿透——全量测试负载下才复现（单跑永远过），这类"单跑过、全量偶发挂"的用例是竞态信号，不要重跑放过
 - **给 weread.css 做多行 Edit 前先确认能匹配**：文件里个别注释行含看不见的异常字符，几十行的 old_string 会整体匹配失败甚至拼坏相邻行（2026-11-25 踩过）。先小块试、或按行号带前置条件校验后拼接；含中文的 PowerShell 脚本不要用 `powershell -File` 跑（无 BOM 会被按 GBK 读坏），用 `[scriptblock]::Create((Get-Content -Raw -Encoding UTF8 …))` 在进程内执行
 - **epub.js themes.select() 必须在首章 display() 完成后调用，且每次 rendered（章节切换重建 iframe）后重新调用**：display 前 iframe 不存在 → sheet null。reader.ts 已如此实现，不要回退
 

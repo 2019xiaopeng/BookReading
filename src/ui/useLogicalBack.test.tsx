@@ -39,12 +39,9 @@ describe("logicalBackTarget（M-3 侧键逻辑回溯目标）", () => {
     expect(logicalBackTarget("/", "?shelf=99", SHELVES, null)).toBeNull();
   });
 
-  test("收藏 / 回收站 / 设置页 → 书库根；其它路径无操作", () => {
+  test("收藏 / 回收站 → 书库根；其它路径无操作", () => {
     expect(logicalBackTarget("/favorites", "", SHELVES, null)).toBe("/");
     expect(logicalBackTarget("/", "?trash=1", SHELVES, null)).toBe("/");
-    // v3.2 设置大页面：侧键后退回书库根（分区参数不影响）
-    expect(logicalBackTarget("/settings", "", SHELVES, null)).toBe("/");
-    expect(logicalBackTarget("/settings", "?section=reading", SHELVES, null)).toBe("/");
     expect(logicalBackTarget("/favorites", "?x=1", SHELVES, null)).toBe("/");
     expect(logicalBackTarget("/whatever", "", SHELVES, null)).toBeNull();
   });

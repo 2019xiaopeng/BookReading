@@ -79,9 +79,14 @@ export default function LibrarySection(props: { ctx: SettingsCtx; stats: Storage
     };
   }, []);
 
+  // 迁移 / 清理 / 重提取进行中：告诉浮窗别响应关闭。登记放在操作开始的同一行（同步），不靠 effect——
+  // effect 要等下一次渲染提交才执行，那个空档里 Esc 能穿透（测试全量跑时抓到过）。
+  useEffect(() => () => ctx.hold(false), [ctx.hold]); // 卸载复位
+
   async function clearCats(cats: string[]) {
     if (busy || cats.length === 0) return;
     setBusy(true);
+    ctx.hold(true);
     try {
       const res = await clearCache(cats);
       if (cats.includes("covers")) {
@@ -99,6 +104,7 @@ export default function LibrarySection(props: { ctx: SettingsCtx; stats: Storage
       await showAlert("清理失败", String(e));
     } finally {
       setBusy(false);
+      ctx.hold(false);
     }
   }
 
@@ -115,6 +121,7 @@ export default function LibrarySection(props: { ctx: SettingsCtx; stats: Storage
     );
     if (!ok) return;
     setBusy(true);
+    ctx.hold(true);
     try {
       // 批次16：迁移后追问是否删除旧库文件（Rust 端按迁移记录校验，bootstrap db 永不动）
       const res = await migrateLibraryRoot(target);
@@ -136,6 +143,7 @@ export default function LibrarySection(props: { ctx: SettingsCtx; stats: Storage
       await showAlert("迁移失败", String(e));
     } finally {
       setBusy(false);
+      ctx.hold(false);
     }
   }
 
@@ -147,6 +155,7 @@ export default function LibrarySection(props: { ctx: SettingsCtx; stats: Storage
     });
     if (!ok) return;
     setBusy(true);
+    ctx.hold(true);
     try {
       const n = await reextractAllCovers();
       invalidateAllCoverUrls();
@@ -157,6 +166,7 @@ export default function LibrarySection(props: { ctx: SettingsCtx; stats: Storage
       await showAlert("重新提取失败", String(e));
     } finally {
       setBusy(false);
+      ctx.hold(false);
     }
   }
 

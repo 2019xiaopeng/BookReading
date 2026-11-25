@@ -1,7 +1,8 @@
-// V-3 设置大页面：壳内独立路由 /settings，八分区（见 settings/sections.ts），分区存 ?section=<id>。
-// 原设置弹窗（SettingsDialog）的全部条目迁入此处；阅读页的设置抽屉不动。
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+// V-3 设置浮窗（PyCharm 式，2026-11-25 用户定稿）：居中模态弹窗——顶部大字标题，左侧分区目录 + 右侧配置面板，
+// 只有右侧面板内部滚动；遮罩 / Esc / 「关闭」退出，底下的书架页不切页、状态原样保留。
+// 八个分区在 src/settings/（登记表 sections.ts）。阅读页的设置抽屉是另一套，不在这里。
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -19,10 +20,9 @@ import {
 import { wenku8Status } from "../tauri/wenku8";
 import { setCachedSetting } from "../library/settingsCache";
 import { shelfTreeRows } from "../library/shelves";
-import { setPageMeta } from "../ui/pageMeta";
-import { showToast } from "../ui/toast";
-import { showAlert } from "../ui/dialog";
-import { WrSelect } from "../ui/radix";
+import { showToast } from "./toast";
+import { showAlert } from "./dialog";
+import { Modal, WrSelect } from "./radix";
 import {
   IconBookOpen,
   IconCloud,
@@ -32,13 +32,13 @@ import {
   IconPalette,
   IconShelf,
   IconUpdate,
-} from "../ui/icons";
-import { setTheme, THEME_SWATCHES, useThemeSelection } from "../ui/theme";
-import { getBackgroundUrl, notifyBackgroundChanged, resetBackgroundCache } from "../ui/appBackground";
-import { resolveCloseAction, setCloseBehavior } from "../ui/closeAction";
-import { getUpdateAvailable, subscribeUpdateAvailable } from "../ui/updater";
-import NetworkSettings from "../ui/NetworkSettings";
-import UpdateModal from "../ui/UpdateModal";
+} from "./icons";
+import { setTheme, THEME_SWATCHES, useThemeSelection } from "./theme";
+import { getBackgroundUrl, notifyBackgroundChanged, resetBackgroundCache } from "./appBackground";
+import { resolveCloseAction, setCloseBehavior } from "./closeAction";
+import { getUpdateAvailable, subscribeUpdateAvailable } from "./updater";
+import NetworkSettings from "./NetworkSettings";
+import UpdateModal from "./UpdateModal";
 import { normalizeBgVeil, normalizeReaderBackground } from "../reader/settings/normalize";
 import { SETTINGS_SECTIONS, normalizeSettingsSection, type SettingsSectionId } from "../settings/sections";
 import { Check, type SettingsCtx, SectionHeader, SettingsGroup, SettingsRow, Slider } from "../settings/controls";
@@ -86,16 +86,28 @@ const LIBRARY_KEYS: [string, string][] = [
   ["拖拽", "把书移入书架（含批量）"],
 ];
 
-export default function SettingsPage() {
-  const [params, setParams] = useSearchParams();
-  const section = normalizeSettingsSection(params.get("section"));
+// 分区图标：目录行里固定 18px 宽，切换选中态不改变任何尺寸
+const SECTION_ICONS: Record<SettingsSectionId, ReactNode> = {
+  appearance: <IconPalette />,
+  reading: <IconBookOpen />,
+  library: <IconShelf />,
+  cloud: <IconCloud />,
+  network: <IconUpdate />,
+  shortcuts: <IconKeyboard />,
+  manga: <IconImage />,
+  about: <IconInfo />,
+};
+
+const tabId = (id: SettingsSectionId) => `wr-settings-tab-${id}`;
+
+export default function SettingsDialog(props: { initialSection?: SettingsSectionId; onClose: () => void }) {
+  const [section, setSection] = useState<SettingsSectionId>(() => normalizeSettingsSection(props.initialSection));
   const [map, setMap] = useState<Record<string, string>>({});
   const [version, setVersion] = useState("");
   const [stats, setStats] = useState<StorageStats | null>(null);
-
-  useLayoutEffect(() => {
-    setPageMeta({ active: "settings", title: "设置" });
-  }, []);
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  // 书库迁移 / 清理进行中不响应关闭（沿原设置弹窗口径：迁移后的"是否删旧文件"追问不能被关窗吞掉）
+  const heldRef = useRef(false);
 
   useEffect(() => {
     // DB 不可达时各控件显示默认值（与"未设置过"同一表现）
@@ -108,17 +120,19 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!needStats || stats) return;
     let cancelled = false;
-    storageStats().then((s) => {
-      if (!cancelled) setStats(s);
-    }).catch(() => {});
+    storageStats()
+      .then((s) => {
+        if (!cancelled) setStats(s);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [needStats, stats]);
 
-  // 切分区回顶：壳的滚动容器跨路由常驻，pathname 不变时 AppLayout 的回顶不触发
+  // 切分区回顶（右侧面板是唯一滚动区，位置固定——不让滚动位置跨分区残留）
   useEffect(() => {
-    const el = document.querySelector<HTMLElement>(".wr-main-scroll");
+    const el = paneRef.current;
     if (el) el.scrollTop = 0;
   }, [section]);
 
@@ -148,60 +162,96 @@ export default function SettingsPage() {
     },
     [patch],
   );
-  const ctx = useMemo<SettingsCtx>(() => ({ map, patch, put, putMany, version }), [map, patch, put, putMany, version]);
+  const hold = useCallback((on: boolean) => {
+    heldRef.current = on;
+  }, []);
+  const requestClose = useCallback(() => {
+    if (!heldRef.current) props.onClose();
+  }, [props]);
+  const ctx = useMemo<SettingsCtx>(
+    () => ({ map, patch, put, putMany, version, close: requestClose, hold }),
+    [map, patch, put, putMany, version, requestClose, hold],
+  );
 
-  const go = (id: SettingsSectionId) =>
-    setParams(
-      (prev) => {
-        prev.set("section", id);
-        return prev;
-      },
-      { replace: true },
-    );
+  // 目录的键盘操作（WAI-ARIA 标签页）：上下方向键 / Home / End 在分区间移动并直接切换
+  const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const n = SETTINGS_SECTIONS.length;
+    const idx = SETTINGS_SECTIONS.findIndex((s) => s.id === section);
+    let next = idx;
+    if (e.key === "ArrowDown") next = (idx + 1) % n;
+    else if (e.key === "ArrowUp") next = (idx - 1 + n) % n;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = n - 1;
+    else return;
+    e.preventDefault();
+    const id = SETTINGS_SECTIONS[next].id;
+    setSection(id);
+    document.getElementById(tabId(id))?.focus();
+  };
 
   return (
-    <div className="wr-settings">
-      <div className="wr-settings-layout">
-        <nav className="wr-settings-nav" aria-label="设置分区">
-          <div className="wr-settings-tabs">
-            {SETTINGS_SECTIONS.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className="wr-settings-tab"
-                data-section={s.id}
-                aria-current={s.id === section ? "page" : undefined}
-                title={s.desc}
-                onClick={() => go(s.id)}
-              >
-                <span className="wr-settings-tab-icon" aria-hidden="true">
-                  {SECTION_ICONS[s.id]}
-                </span>
-                {s.label}
-              </button>
-            ))}
+    <Modal label="设置" onClose={requestClose} panelClassName="wr-panel wr-prompt wr-dialog wr-settings-dialog">
+      <div className="wr-settings-frame">
+        {/* 标题与书架 / 收藏刊头同款大字；右侧一行小字 */}
+        <div className="wr-settings-mast">
+          <h1 className="wr-masthead-name">设 置</h1>
+          <div className="wr-masthead-stats">BookReading v{version || "…"} · 更改即时保存</div>
+        </div>
+
+        <div className="wr-settings-frame-body">
+          <div className="wr-settings-nav" role="tablist" aria-label="设置分区" aria-orientation="vertical" onKeyDown={onTabKey}>
+            {SETTINGS_SECTIONS.map((s) => {
+              const active = s.id === section;
+              return (
+                <button
+                  key={s.id}
+                  id={tabId(s.id)}
+                  type="button"
+                  role="tab"
+                  className="wr-settings-tab"
+                  data-section={s.id}
+                  aria-selected={active}
+                  aria-controls="wr-settings-panel"
+                  tabIndex={active ? 0 : -1}
+                  title={s.desc}
+                  onClick={() => setSection(s.id)}
+                >
+                  <span className="wr-settings-tab-icon" aria-hidden="true">
+                    {SECTION_ICONS[s.id]}
+                  </span>
+                  <span className="wr-settings-tab-label">{s.label}</span>
+                </button>
+              );
+            })}
           </div>
-          {/* 最窄形态（容器 <600，见 CSS）：八个胶囊放不进一行、吸顶条要占两排，改用一个下拉切换分区 */}
-          <WrSelect
-            className="wr-settings-nav-select"
-            ariaLabel="切换分区"
-            value={section}
-            options={SETTINGS_SECTIONS.map((s) => ({ value: s.id, label: s.label }))}
-            onChange={(v) => go(normalizeSettingsSection(v))}
-          />
-        </nav>
-        <div className="wr-settings-body" key={section}>
-          {section === "appearance" ? <AppearanceSection ctx={ctx} /> : null}
-          {section === "reading" ? <ReadingSection ctx={ctx} /> : null}
-          {section === "library" ? <LibrarySection ctx={ctx} stats={stats} onStatsStale={() => setStats(null)} /> : null}
-          {section === "cloud" ? <CloudSection ctx={ctx} /> : null}
-          {section === "network" ? <NetworkSection ctx={ctx} /> : null}
-          {section === "shortcuts" ? <ShortcutsSection /> : null}
-          {section === "manga" ? <MangaSection ctx={ctx} /> : null}
-          {section === "about" ? <AboutSection ctx={ctx} dbPath={stats?.db_path ?? null} /> : null}
+          <div className="wr-settings-pane" ref={paneRef}>
+            <div
+              className="wr-settings-body"
+              key={section}
+              role="tabpanel"
+              id="wr-settings-panel"
+              aria-labelledby={tabId(section)}
+            >
+              {section === "appearance" ? <AppearanceSection ctx={ctx} /> : null}
+              {section === "reading" ? <ReadingSection ctx={ctx} /> : null}
+              {section === "library" ? <LibrarySection ctx={ctx} stats={stats} onStatsStale={() => setStats(null)} /> : null}
+              {section === "cloud" ? <CloudSection ctx={ctx} /> : null}
+              {section === "network" ? <NetworkSection ctx={ctx} /> : null}
+              {section === "shortcuts" ? <ShortcutsSection /> : null}
+              {section === "manga" ? <MangaSection ctx={ctx} /> : null}
+              {section === "about" ? <AboutSection ctx={ctx} dbPath={stats?.db_path ?? null} /> : null}
+            </div>
+          </div>
+        </div>
+
+        <div className="wr-settings-foot">
+          <span className="wr-settings-foot-note">点遮罩或按 Esc 关闭</span>
+          <button type="button" className="wr-btn wr-btn-primary" onClick={requestClose}>
+            关闭
+          </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -378,7 +428,14 @@ function CloudSection({ ctx }: { ctx: SettingsCtx }) {
                 : "未登录——登录后可把云端书架拉取到本地"
           }
         >
-          <button type="button" className="wr-btn" onClick={() => navigate("/cloud-shelf")}>
+          <button
+            type="button"
+            className="wr-btn"
+            onClick={() => {
+              ctx.close(); // 浮窗盖在书架页上：先收浮窗再切页
+              navigate("/cloud-shelf");
+            }}
+          >
             {account.saved ? "打开云书架" : "前往登录"}
           </button>
         </SettingsRow>
@@ -410,7 +467,7 @@ function CloudSection({ ctx }: { ctx: SettingsCtx }) {
 
 function NetworkSection({ ctx }: { ctx: SettingsCtx }) {
   const update = useSyncExternalStore(subscribeUpdateAvailable, getUpdateAvailable, () => null);
-  // 沿原弹窗口径：带着"发现新版本"红点进来时直接弹更新窗（侧栏红点钮会导航到本分区）
+  // 沿原弹窗口径：带着"发现新版本"红点进来时直接弹更新窗（侧栏红点钮会直达本分区）
   const [updateOpen, setUpdateOpen] = useState(() => getUpdateAvailable() != null);
   const autoCheck = ctx.map.update_check !== "off";
 
@@ -422,10 +479,7 @@ function NetworkSection({ ctx }: { ctx: SettingsCtx }) {
       </SettingsGroup>
 
       <SettingsGroup title="更新">
-        <SettingsRow
-          label="检查更新"
-          hint={update ? `发现新版本 v${update.latest}` : `当前版本 v${ctx.version || "…"}`}
-        >
+        <SettingsRow label="检查更新" hint={update ? `发现新版本 v${update.latest}` : `当前版本 v${ctx.version || "…"}`}>
           <button type="button" className="wr-btn wr-btn-primary" onClick={() => setUpdateOpen(true)}>
             <IconUpdate />
             检查更新
@@ -507,15 +561,3 @@ function AboutSection({ ctx, dbPath }: { ctx: SettingsCtx; dbPath: string | null
     </>
   );
 }
-
-// 分区图标：宽容器的左侧竖列里显示，窄容器的胶囊行隐藏（省宽度）
-const SECTION_ICONS: Record<SettingsSectionId, ReactNode> = {
-  appearance: <IconPalette />,
-  reading: <IconBookOpen />,
-  library: <IconShelf />,
-  cloud: <IconCloud />,
-  network: <IconUpdate />,
-  shortcuts: <IconKeyboard />,
-  manga: <IconImage />,
-  about: <IconInfo />,
-};

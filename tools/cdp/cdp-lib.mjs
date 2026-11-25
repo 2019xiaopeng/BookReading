@@ -55,9 +55,9 @@ export async function connect(port = 9223, match = /localhost:14200|tauri\.local
     /** 视口模拟（仅布局）；dsf<1 时截图按比例缩小（CSS 布局不变），clear 复原 */
     viewport: (width, height, dsf = 0) => send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: dsf, mobile: false }),
     viewportClear: () => send("Emulation.clearDeviceMetricsOverride"),
-    /** 截图落盘（PNG），返回路径 */
-    screenshot: async (file) => {
-      const r = await send("Page.captureScreenshot", { format: "png" });
+    /** 截图落盘（PNG）；clip={x,y,width,height,scale} 时只截该区域并放大（看圆角、滚动条细节） */
+    screenshot: async (file, clip) => {
+      const r = await send("Page.captureScreenshot", { format: "png", ...(clip ? { clip } : {}) });
       writeFileSync(file, Buffer.from(r.data, "base64"));
       return file;
     },

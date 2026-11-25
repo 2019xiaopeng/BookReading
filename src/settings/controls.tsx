@@ -14,6 +14,10 @@ export type SettingsCtx = {
   /** 批量写（一次 IPC） */
   putMany: (values: Record<string, string>) => Promise<void>;
   version: string;
+  /** 请求关闭设置浮窗（需要切页的分区先收浮窗再导航） */
+  close: () => void;
+  /** 登记"有操作进行中"：期间遮罩 / Esc / 关闭钮都不生效（书库迁移、清理——迁移后的追问不能被关窗吞掉） */
+  hold: (on: boolean) => void;
 };
 
 /** 分区抬头：分区名 + 一句说明（取自登记表；顶栏 h1 恒为「设置」，这里是被选中分区的名字）；note=需要常驻的提醒 */
