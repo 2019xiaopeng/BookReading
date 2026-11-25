@@ -66,6 +66,12 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 **布局/视觉验证（不占用用户的 dev 窗口）**：起一个独立无头 Chrome（`chrome --headless=new --remote-debugging-port=9333 --user-data-dir=<F 盘临时目录>`）连 Vite dev server（用户的 dev 开着时直接共用它的 14200），用 `tools/cdp/` 里的零依赖脚本驱动——`cdp-lib.mjs`（连接/eval/视口模拟/截图，截图可裁剪放大看圆角与边缘）、`ipc-shim.mjs`（Tauri IPC 假后端：假数据 + 调用记录）、`verify-settings.mjs`（应用内导航 → 设置浮窗与书库体检：六尺寸 × 八分区截图 + 零溢出断言 + **切分区零位移断言**，可选参数 `only=sectionId sizes=720x480,1350x801`）、`verify-settings-extra.mjs`（深浅主题、Esc / 遮罩关闭）、`inspect-installed.mjs`（安装版取证）、`reopen-images.mjs`（**真实窗口**：同一本书三轮打开，比对插图状态与 blob 数——"第二次打开才坏"类问题的回归）、`smoke-turn.mjs`。界面改动后先跑前两个并逐张看截图。dev 与安装版**共用正式数据目录**，两者不能同时开；`npm run dev:isolated` 的隔离目录在本机尚不存在（=空书库）。**别把用户书名 / 路径写进入库文件**（脚本用命令行参数传）。
 
+## Subagent 协作规则（用户 2026-11-25 定）
+
+- **调研 / 查询 / 纠错类任务**（多文件排查、定位根因、并行核查）优先由 Subagent 分工并行排查；Subagent 只返回精简结论、关键文件路径与依据，**不替主 Agent 擅自发散修改**。
+- **实际修改代码、跨模块 / 跨组件联动、守住既有红线**（翻页动画、布局、安全策略等）由主 Agent 统一决策与实施。
+- **单一且定位明确的局部修改**由主 Agent 直接完成，不开子任务（省掉不必要的开销与重复读取）。
+
 ## 接续与红线（v3.2 期间）
 
 - **新对话接续**：先读 `docs/开发计划-v3.2.md` 的 V-8「接续清单」（按序推进），再看第七节施工记录。最新发布 = v3.1.9（2026-11-25）。
