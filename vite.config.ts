@@ -8,6 +8,12 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
+  // epub.js 的 themes 系统依赖内部变量名做动态样式注入——esbuild minify 的 identifier mangling
+  // 会导致 themes.select() 内 insertRule 对 null sheet 崩（dev 不 minify 所以 dev 正常）
+  build: {
+    minify: false,
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
