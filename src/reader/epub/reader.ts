@@ -378,6 +378,10 @@ export async function createReader(opts: {
     opts.onError?.(`章节渲染失败：${String(e ?? "displayerror")}`);
   };
   rendition.on?.("displayerror", onDisplayError);
+  // 章节切换重建 iframe——每次 rendered 后重新应用当前主题（否则切章后字体丢失）
+  rendition.on?.("rendered", () => {
+    try { rendition.themes.select(currentTheme); } catch {}
+  });
 
   let currentTheme: Theme = "light";
   let currentFontSizePercent = 120;
@@ -773,6 +777,9 @@ export async function createReader(opts: {
       fatal(e);
     }
   }
+  // 首章 display 完成——此刻 iframe 已创建并渲染，themes.select 才有 document 可注入
+  // （registerThemes 的初始调用在 display 之前，sheet 为 null 是必然；dev 版仅靠时序偶然通过）
+  try { rendition.themes.select(currentTheme); } catch {}
 
   // 冷启动收敛：请求 scrolled 时在首显成功后立即切换（见 renderTo 注释）
   if (requestedFlow === "scrolled") applyFlow("scrolled");
