@@ -26,7 +26,7 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 # 发版构建一律走 GitHub CI（tag 触发，见「发布流程」），不在本地构建——本机 C / F 盘空间紧张（用户 2026-11-25 裁定）；本地构建只用于安装版取证，且先看 Get-PSDrive C,F
 ```
 
-网络规则（本机实测）：cargo/npm/gh API 直连（unset 代理）；git push 直连失败用 `HTTPS_PROXY=http://127.0.0.1:7897` 重试；NSIS 下载与 GitHub 网页走代理。中文路径下 gh 的 glob 参数会炸（"no matches found"），换 ASCII 路径。PS 5.1 原生传参会吞参数里的英文双引号（git -m / gh --jq 都会炸——双引号内容换中文引号或不用）；gh run list 的 displayTitle 是提交信息，tag 触发的 run 按 headBranch==tag 过滤。
+网络规则（本机实测，以当次为准——2026-11-26 实测 git push / gh 直连可用、代理的 TLS 握手反而失败，且 Bash 环境里带着 `HTTP(S)_PROXY`，直连时要显式清空）：cargo/npm/gh API 直连（unset 代理）；直连失败再用 `HTTPS_PROXY=http://127.0.0.1:7897` 重试；NSIS 下载与 GitHub 网页走代理。中文路径下 gh 的 glob 参数会炸（"no matches found"），换 ASCII 路径。PS 5.1 原生传参会吞参数里的英文双引号（git -m / gh --jq 都会炸——双引号内容换中文引号或不用）；gh run list 的 displayTitle 是提交信息，tag 触发的 run 按 headBranch==tag 过滤。
 
 ## 发布流程（tag 触发 CI 云构建）
 
@@ -74,7 +74,7 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 ## 接续与红线（v3.2 期间）
 
-- **新对话接续**：先读 `docs/开发计划-v3.2.md` 的 V-8「接续清单」（按序推进），再看第七节施工记录。最新发布 = v3.2.0（2026-11-26）。
+- **新对话接续**：先读 `docs/开发计划-v3.2.md` 的**第九节「3.2.1 施工单」**（范围、施工顺序、每条审计发现的处置口径、接续清单都在那里；用户 2026-11-26 裁定 3.2.1 = 开场动画 + V-13 + V-12 + 第八节审计发现处置），再看第七节施工记录。最新发布 = v3.2.0（2026-11-26）。
 - **翻页动画（2026-11-25 晚）已改为 View Transitions 快照双叶并打开 `TURN_FX_ENABLED`，用户 2026-11-26 验收通过，随 v3.2.0 发布**。EPUB 处理链 / 展示链的审计发现均未处理，见开发计划第八节，动手前先复核。
 - **自动识别的产品红线（用户 2026-11-25 原话要点）**：导入新书时的自动识别要直觉、合乎人性，**不要生硬机械的排列，不要强制归类**；任何自动动作都不覆盖用户手动改过的作者 / 书架 / 标签。V-8 规则已获用户确认（作者子架阈值 3、5 个状态标签 已汉化 / 生肉 / 无修正 / DL版 / AI生成、入口两处），**不做**「书架转标签」、作者标签、宣传页过滤、轻小说自动分类。
 - **隐私红线**：公开仓库里不得出现个人书籍文件、真实书名、个人书架名（2026-11-25 清理过一次根目录的书）。README 更新用 `beautify-github-readme` skill，截图只用合成书。
