@@ -1,16 +1,14 @@
-// V-1 翻页动画矩阵（对标 Wenku8_Flutter lib/reader_sheet_motion.dart，2026-11-25 源码拆解）：
-// 单一 progress 纯函数 + 效果=纯画法差异；叶片=宿主容器（对 div 施 transform/clip-path，
-// iframe 整体参与 GPU 合成，内部零重排零截图）。数值全为相对页宽，包络 e=sin(πt)（中段最大两端归零）。
+// V-1 翻页动画（对标 Wenku8_Flutter：平移 / 覆盖 / 渐隐 / 纸页翻动）。
+// 机制 = View Transitions 快照双叶：翻页瞬间浏览器对「叶片」（正文 + 页码徽标）拍新旧两张合成器级快照，
+// 效果 = 对两张快照（及叶片内的遮罩条）施加的 WAAPI 关键帧；进度线性（对标其点击翻页 curve: Curves.linear），
+// 阴影 / 折页的强弱走包络 e=sin(πt)（中段最大、两端归零）。原理与实测边界见 docs/开发计划-v3.2.md V-1「方案改定」。
 import type { PageAnimation } from "../settings/types";
 
 /**
- * 翻页动画矩阵总开关。
- * v3.1.9 发版时关闭（用户 2026-11-25 裁定 B）：GhostView 双容器路径与覆盖 / 纸页两个新效果带已知缺陷
- * （新叶嵌在旧叶里、夜间底色半透明、兜底路径混入——见 docs/开发计划-v3.2.md V-1「已知缺陷」），
- * 关闭后翻页与设置选项完全回到 v3.1.8 的行为。
- * shortcut: 关闭期间已存的 cover / paper 值按渐隐处理且不在选项里显示；动画阶段修完三处根因、逐帧验收后置 true
+ * 翻页动画矩阵总开关（v3.1.9 曾关闭；v3.2 改为快照双叶并逐帧验收后打开）。关闭时走 v3.1.8 路径、
+ * 选项恢复「无 / 淡入淡出 / 滑动」——线上出问题时的退路。
  */
-export const TURN_FX_ENABLED = false;
+export const TURN_FX_ENABLED = true;
 
 const MATRIX_OPTIONS: { value: PageAnimation; label: string }[] = [
   { value: "none", label: "无" },
@@ -43,95 +41,28 @@ export type TurnEffect = "slide" | "cover" | "fade" | "paper";
 /** 各效果基准时长（ms，× turnSpeedMs/260 缩放；fade 短促、纸页略慢） */
 export const TURN_EFFECT_MS: Record<TurnEffect, number> = { slide: 260, cover: 260, fade: 180, paper: 320 };
 
-export type TurnShadow = { x: number; width: number; alpha: number; toRight: boolean };
-export type TurnFold = { x: number; width: number; flip: boolean };
+// ═══ 画法（纯函数）═══
 
-export type TurnFrame = {
-  oldTransform: string;
-  newTransform: string;
-  oldOpacity: number;
-  newOpacity: number;
-  /** clip-path path()；"" = 不裁 */
-  oldClip: string;
-  newClip: string;
-  /** 覆盖：压在新叶之下、投在旧叶上的前缘软阴影（渐变朝前缘收紧） */
-  underShadow: TurnShadow | null;
-  /** 纸页：最上层折痕阴影带（对称 透明→墨→透明） */
-  creaseShadow: TurnShadow | null;
-  /** 纸页：最上层折页高光条（暗→亮→纸色三段渐变，模拟纸背受光）；null=无（t 两端或无纸色） */
-  fold: TurnFold | null;
-};
+export type TurnBand = { name: string; css: string; frames: Keyframe[] };
+export type TurnKeys = { old: Keyframe[]; new: Keyframe[]; bands: TurnBand[] };
 
-const clamp01 = (t: number) => (t < 0 ? 0 : t > 1 ? 1 : t);
+/** 叶片内的遮罩条（叶子节点的 view-transition-name）：0=阴影，1=折页 */
+const BAND = ["wr-band-0", "wr-band-1"];
+
+const SAMPLES = 16;
 const px = (v: number) => (Math.round(v * 100) / 100).toFixed(2);
+const path = (d: string) => `path("${d}")`;
 
-const BASE: TurnFrame = {
-  oldTransform: "",
-  newTransform: "",
-  oldOpacity: 1,
-  newOpacity: 1,
-  oldClip: "",
-  newClip: "",
-  underShadow: null,
-  creaseShadow: null,
-  fold: null,
-};
+/** 随包络 e 变化的量按进度等距采样成关键帧（帧间线性插值） */
+function sampled(fn: (t: number, e: number) => Keyframe): Keyframe[] {
+  return Array.from({ length: SAMPLES + 1 }, (_, i) => {
+    const t = i / SAMPLES;
+    return { offset: t, ...fn(t, Math.sin(Math.PI * t)) };
+  });
+}
 
-/** 动画帧几何（纯函数）：direction 1=前进（新页自右入），-1=后退 */
-export function turnFrame(
-  effect: TurnEffect,
-  direction: 1 | -1,
-  tRaw: number,
-  w: number,
-  h: number,
-  dark = false,
-): TurnFrame {
-  const t = clamp01(tRaw);
-  const e = Math.sin(Math.PI * t);
-  if (effect === "slide") {
-    return {
-      ...BASE,
-      oldTransform: `translateX(${px(-direction * w * t)}px)`,
-      newTransform: `translateX(${px(direction * w * (1 - t))}px)`,
-    };
-  }
-  if (effect === "cover") {
-    const bandW = Math.min(22, w * 0.055) * e;
-    const lead = direction > 0 ? w * (1 - t) : w * t;
-    return {
-      ...BASE,
-      newTransform: `translateX(${px(direction * w * (1 - t))}px)`,
-      underShadow:
-        bandW > 0.5
-          ? { x: direction > 0 ? lead - bandW : lead, width: bandW, alpha: 0.16 * e, toRight: direction > 0 }
-          : null,
-    };
-  }
-  if (effect === "fade") {
-    return { ...BASE, oldOpacity: 1 - t, newOpacity: t };
-  }
-  // paper —— 纸页翻动：两互补弧形 clip 沿移动折痕分界 + 折痕阴影带 + 折页高光
-  const bend = Math.min(24, w * 0.045) * e * direction;
-  const fold = Math.min(28, w * 0.065) * e;
-  const spread = Math.min(26, w * 0.07);
-  const crease = direction > 0 ? w * (1 - t) : w * t;
-  const edge = (x: number, b: number) =>
-    `C ${px(x + b)} ${px(h * 0.25)}, ${px(x + b)} ${px(h * 0.75)}, ${px(x)} ${px(h)}`;
-  const rightClip = (x: number, b: number) => `path("M ${px(x)} 0 ${edge(x, b)} L ${px(w)} ${px(h)} L ${px(w)} 0 Z")`;
-  const leftClip = (x: number, b: number) => `path("M 0 0 L ${px(x)} 0 ${edge(x, b)} L 0 ${px(h)} Z")`;
-  return {
-    ...BASE,
-    // 前进：折痕自右缘扫向左缘——旧叶留折痕右侧，新叶露左侧并让出 fold 宽的折页条；后退镜像
-    oldClip: direction > 0 ? rightClip(crease, bend) : leftClip(crease, bend),
-    newClip: direction > 0 ? leftClip(crease + fold, bend) : rightClip(crease - fold, bend),
-    creaseShadow: {
-      x: (direction > 0 ? crease : crease - fold) - spread,
-      width: fold + spread * 2,
-      alpha: (dark ? 0.3 : 0.2) * e,
-      toRight: true,
-    },
-    fold: fold > 0.5 ? { x: Math.min(crease, crease + direction * fold), width: fold, flip: direction < 0 } : null,
-  };
+function bandCss(left: number, width: number, extra: string): string {
+  return `position:absolute;top:0;bottom:0;left:${px(left)}px;width:${px(width)}px;pointer-events:none;${extra}`;
 }
 
 function parseColor(c: string): [number, number, number] | null {
@@ -147,115 +78,261 @@ function parseColor(c: string): [number, number, number] | null {
   return null;
 }
 
-const lerpC = (a: number, b: number, k: number) => Math.round(a + (b - a) * k);
-
-/** 折页高光三段渐变（纸色→暗→亮→纸色；暗纸加深幅度小、提亮幅度也小，对标源码 luminance 分支） */
-function foldColors(paper: string, dark: boolean, flip: boolean): string[] {
+/** 折页高光三段渐变：自折痕向外 暗 → 亮 → 纸色 → 透明（暗纸加深与提亮幅度都更小，对标源码 luminance 分支） */
+function foldGradient(paper: string, dark: boolean, to: "left" | "right"): string {
   const p = parseColor(paper);
-  if (!p) return [paper, paper, paper];
-  const kd = dark ? 0.08 : 0.15;
-  const kw = dark ? 0.14 : 0.3;
-  const colors = [
-    `rgb(${lerpC(p[0], 0, kd)}, ${lerpC(p[1], 0, kd)}, ${lerpC(p[2], 0, kd)})`,
-    `rgb(${lerpC(p[0], 255, kw)}, ${lerpC(p[1], 255, kw)}, ${lerpC(p[2], 255, kw)})`,
-    paper,
-  ];
-  return flip ? colors.reverse() : colors;
+  if (!p) return "";
+  const mix = (target: number, k: number) => p.map((v) => Math.round(v + (target - v) * k));
+  const rgba = (rgb: number[], a = 1) => `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
+  return `linear-gradient(to ${to},${rgba(mix(0, dark ? 0.08 : 0.15))} 0%,${rgba(mix(255, dark ? 0.14 : 0.3))} 55%,${rgba(p)} 92%,${rgba(p, 0)} 100%)`;
 }
 
 /**
- * 双叶翻页动画（rAF 线性驱动——progress 与几何 1:1 映射，对标参考实现的 Curves.linear）。
- * oldLeaf=主视图宿主容器（旧页），newLeaf=GhostView 宿主容器（新页，背景须不透明纸色）；
- * 结束时叶片停在终态（旧叶移出/新叶归位），样式复位与 ghost 销毁由调用方在提交后处理。
+ * 各效果的关键帧（纯函数）：dir=1 新页自右入，-1 自左入；w/h = 叶片尺寸。
+ * old / new 施加于叶片的新旧两张快照；bands 是叠在叶片内的遮罩条（覆盖的前缘阴影、纸页的折痕阴影与折页）。
  */
-export async function runTurnAnimation(p: {
-  effect: TurnEffect;
-  direction: 1 | -1;
-  width: number;
-  height: number;
-  duration: number;
-  oldLeaf: HTMLElement;
-  newLeaf: HTMLElement;
-  dark: boolean;
-  /** 纸色（折页高光渐变端点）；null=跳过高光条（自定义背景下取不到实色） */
-  paperColor: string | null;
-}): Promise<void> {
-  const { oldLeaf, newLeaf, effect, direction, width, height, dark, paperColor, duration } = p;
-  const host = newLeaf.parentElement;
-  const mkOverlay = () => {
-    const d = document.createElement("div");
-    d.style.cssText = "position:absolute;top:0;bottom:0;pointer-events:none;";
-    return d;
-  };
-  const under = mkOverlay(); // 覆盖：前缘软阴影（插在两叶之间，投在旧叶上）
-  const band = mkOverlay(); // 纸页：折痕阴影带（最上层）
-  const foldEl = mkOverlay(); // 纸页：折页高光条（最上层）
-  let underIn = false;
-  let overIn = false;
-  const apply = (t: number) => {
-    const f = turnFrame(effect, direction, t, width, height, dark);
-    oldLeaf.style.transform = f.oldTransform;
-    newLeaf.style.transform = f.newTransform;
-    oldLeaf.style.opacity = f.oldOpacity === 1 ? "" : String(f.oldOpacity);
-    newLeaf.style.opacity = f.newOpacity === 1 ? "" : String(f.newOpacity);
-    oldLeaf.style.clipPath = f.oldClip;
-    newLeaf.style.clipPath = f.newClip;
-    if (f.underShadow && host) {
-      if (!underIn) {
-        host.insertBefore(under, newLeaf);
-        underIn = true;
-      }
-      under.style.left = `${f.underShadow.x}px`;
-      under.style.width = `${f.underShadow.width}px`;
-      under.style.background = `linear-gradient(to ${f.underShadow.toRight ? "right" : "left"}, transparent, rgba(0, 0, 0,${f.underShadow.alpha.toFixed(3)}))`;
-    } else if (underIn) {
-      under.remove();
-      underIn = false;
-    }
-    if (host && (f.creaseShadow || f.fold)) {
-      if (!overIn) {
-        host.appendChild(band);
-        host.appendChild(foldEl);
-        overIn = true;
-      }
-      if (f.creaseShadow) {
-        band.style.left = `${f.creaseShadow.x}px`;
-        band.style.width = `${f.creaseShadow.width}px`;
-        band.style.background = `linear-gradient(to right, transparent, rgba(0, 0, 0,${f.creaseShadow.alpha.toFixed(3)}), transparent)`;
-      }
-      if (f.fold && paperColor) {
-        foldEl.style.left = `${f.fold.x}px`;
-        foldEl.style.width = `${f.fold.width}px`;
-        foldEl.style.background = `linear-gradient(to ${f.fold.flip ? "left" : "right"}, ${foldColors(paperColor, dark, f.fold.flip).join(", ")})`;
-      }
-    } else if (overIn) {
-      band.remove();
-      foldEl.remove();
-      overIn = false;
-    }
-  };
-  const cleanup = () => {
-    under.remove();
-    band.remove();
-    foldEl.remove();
-  };
-  if (duration <= 0) {
-    apply(1);
-    cleanup();
-    return;
+export function turnKeyframes(
+  effect: TurnEffect,
+  dir: 1 | -1,
+  w: number,
+  h: number,
+  o: { dark: boolean; paperColor: string | null },
+): TurnKeys {
+  const slideIn: Keyframe[] = [{ transform: `translateX(${px(dir * w)}px)` }, { transform: "translateX(0px)" }];
+  if (effect === "slide") {
+    // 新旧两页连成一条整幅平移
+    return { new: slideIn, old: [{ transform: "translateX(0px)" }, { transform: `translateX(${px(-dir * w)}px)` }], bands: [] };
   }
-  await new Promise<void>((resolve) => {
-    const start = performance.now();
-    const tick = () => {
-      const t = (performance.now() - start) / duration;
-      apply(clamp01(t));
-      if (t >= 1) {
-        cleanup();
-        resolve();
-        return;
-      }
-      requestAnimationFrame(tick);
+  if (effect === "cover") {
+    // 旧页留在原处；被新页压住的部分同步裁掉（叶片底色半透明，不裁会透出新页文字）
+    const band = Math.min(22, w * 0.055);
+    return {
+      new: slideIn,
+      old: [{ clipPath: "inset(0px)" }, { clipPath: dir > 0 ? "inset(0px 100% 0px 0px)" : "inset(0px 0px 0px 100%)" }],
+      bands: [
+        {
+          name: BAND[0],
+          css: bandCss(dir > 0 ? w - band : 0, band, `background:linear-gradient(to ${dir > 0 ? "right" : "left"},rgba(0,0,0,0),rgba(0,0,0,0.16));`),
+          frames: sampled((t, e) => ({ transform: `translateX(${px(-dir * w * t)}px)`, opacity: e })),
+        },
+      ],
     };
-    requestAnimationFrame(tick);
+  }
+  if (effect === "fade") {
+    return { new: [{ opacity: 0 }, { opacity: 1 }], old: [{ opacity: 1 }, { opacity: 0 }], bands: [] };
+  }
+  // paper：旧页自运动侧的边缘掀起、折痕扫过整页，新页从掀开处露出；两段裁剪沿折痕互补（不重叠即不透叠）
+  const crease = (t: number) => (dir > 0 ? w * (1 - t) : w * t);
+  const bendMax = Math.min(24, w * 0.045);
+  const foldMax = Math.min(28, w * 0.065);
+  const spread = Math.min(26, w * 0.07);
+  const y1 = px(h * 0.25);
+  const y2 = px(h * 0.75);
+  const yh = px(h);
+  // 折痕 = 自上而下、向运动反方向鼓起的三次贝塞尔（鼓起量乘 e：两端平直、中段弯曲）
+  const curve = (c: number, b: number) => `C ${px(c + b)} ${y1}, ${px(c + b)} ${y2}, ${px(c)} ${yh}`;
+  const clips = sampled((t, e) => {
+    const c = px(crease(t));
+    const edge = curve(crease(t), bendMax * e * dir);
+    return dir > 0
+      ? {
+          // 旧页在折痕左侧，新页在右侧（含鼓出部分）
+          oldClip: path(`M 0 0 L ${c} 0 ${edge} L 0 ${yh} Z`),
+          newClip: path(`M ${c} 0 ${edge} L ${px(w)} ${yh} L ${px(w)} 0 Z`),
+        }
+      : {
+          oldClip: path(`M ${c} 0 ${edge} L ${px(w)} ${yh} L ${px(w)} 0 Z`),
+          newClip: path(`M 0 0 L ${c} 0 ${edge} L 0 ${yh} Z`),
+        };
   });
+  const pick = (key: "oldClip" | "newClip"): Keyframe[] =>
+    clips.map((f) => ({ offset: f.offset, clipPath: f[key] as string }));
+  // 折痕阴影：投在新页上、紧贴折痕；裁剪边界沿用同一条折痕，不会压到旧页鼓出的边
+  const shadowA = o.dark ? 0.3 : 0.2;
+  const shadow = sampled((t, e) => {
+    const b = bendMax * e * dir;
+    const c = px(crease(t));
+    return dir > 0
+      ? { transform: `translateX(${c}px)`, clipPath: path(`M 0 0 ${curve(0, b)} L ${px(spread)} ${yh} L ${px(spread)} 0 Z`), opacity: e }
+      : {
+          transform: `translateX(${px(crease(t) - w)}px)`,
+          clipPath: path(`M ${px(spread)} 0 ${curve(spread, b)} L 0 ${yh} L 0 0 Z`),
+          opacity: e,
+        };
+  });
+  const bands: TurnBand[] = [
+    {
+      name: BAND[0],
+      css: bandCss(dir > 0 ? 0 : w - spread, spread, `background:linear-gradient(to ${dir > 0 ? "right" : "left"},rgba(0,0,0,${shadowA}),rgba(0,0,0,0));`),
+      frames: shadow,
+    },
+  ];
+  // 折页条：以折痕为轴横向缩放（宽 ∝ e，鼓起量随之 ∝ e）；取不到纸面实色（自定义背景图）时不画
+  if (o.paperColor) {
+    const foldEdge = dir > 0 ? path(`M 0 0 L ${px(foldMax)} 0 ${curve(foldMax, bendMax)} L 0 ${yh} Z`) : path(`M ${px(foldMax)} 0 L 0 0 ${curve(0, -bendMax)} L ${px(foldMax)} ${yh} Z`);
+    bands.push({
+      name: BAND[1],
+      css: bandCss(dir > 0 ? -foldMax : w, foldMax, `transform-origin:${dir > 0 ? "100%" : "0"} 0;clip-path:${foldEdge};background:${foldGradient(o.paperColor, o.dark, dir > 0 ? "left" : "right")};`),
+      // opacity 显式写 1：起始姿态（CSS）是 0，关键帧不带它的话整段动画都不可见
+      frames: sampled((t, e) => ({ transform: `translateX(${px(crease(t) - (dir > 0 ? 0 : w))}px) scaleX(${Math.max(e, 0.001).toFixed(3)})`, opacity: 1 })),
+    });
+  }
+  return { old: pick("oldClip"), new: pick("newClip"), bands };
+}
+
+// ═══ 执行 ═══
+
+const LEAF_OLD = "::view-transition-old(wr-leaf)";
+const LEAF_NEW = "::view-transition-new(wr-leaf)";
+
+/** 能否走快照翻页：需要 View Transitions（Chromium 111+），且文档可见——隐藏时浏览器不产帧，过渡不会推进 */
+export function viewTurnSupported(): boolean {
+  return typeof document !== "undefined" && typeof document.startViewTransition === "function" && document.visibilityState === "visible";
+}
+
+/** 纸页效果的折页要用纸面实色：取 iframe body 的不透明底（深色四档），否则取壳的 --wr-paper（浅色四档为不透明 hex）；都没有 → null */
+export function turnPaperColor(root: Element | null, body: Element | null): string | null {
+  const opaque = (c: string) => !!c && c !== "transparent" && !/^rgba\(.+,\s*0\)$/.test(c);
+  if (body) {
+    const bg = getComputedStyle(body).backgroundColor;
+    if (opaque(bg)) return bg;
+  }
+  const v = root ? getComputedStyle(root).getPropertyValue("--wr-paper").trim() : "";
+  return opaque(v) ? v : null;
+}
+
+/** 提交结果：dir = 新页进入的一侧（RTL 书与滚动方向相反时由提交方换算）；changed=false 表示已到书的首尾、页面没变 */
+export type TurnCommit = { dir: 1 | -1; changed: boolean };
+
+export type TurnHandle = { done: Promise<void>; interrupt: () => void };
+
+/**
+ * 快照翻页：浏览器先拍旧态 → 调 commit 改 DOM → 拍新态 → 播关键帧。
+ * commit 运行在浏览器的「DOM 更新回调」里——期间不产帧、requestAnimationFrame 冻结，旧页快照全程盖着
+ * （跨章重建 iframe 的空窗因此不露白）；animate=false 时只当遮罩用，新态就绪即换。
+ * interrupt()：新态捕获之后（armed）才会立即跳过动画；之前调用无效——那时打断会把未就绪的页面暴露出来。
+ */
+export function runViewTurn(p: {
+  effect: TurnEffect | "none";
+  animate: boolean;
+  duration: number;
+  leaf: HTMLElement;
+  dark: boolean;
+  paperColor: string | null;
+  commit: () => Promise<TurnCommit>;
+}): TurnHandle {
+  const html = document.documentElement;
+  const bands: HTMLElement[] = [];
+  let anims: Animation[] = [];
+  let armed = false;
+  // 关键帧在更新回调里定（提交后才知道新页进哪一侧）；装在对象里，免得控制流把外层变量收窄成 null
+  const state: { plan: TurnKeys | null } = { plan: null };
+  let vt: ViewTransition;
+  const cleanup = () => {
+    delete html.dataset.wrTurn;
+    html.style.removeProperty("--wr-turn-from");
+    while (bands.length) bands.pop()!.remove();
+    anims.forEach((a) => {
+      try {
+        a.cancel();
+      } catch {
+        // 动画已结束
+      }
+    });
+    anims = [];
+  };
+  try {
+    html.dataset.wrTurn = p.animate ? p.effect : "none";
+    vt = document.startViewTransition(async () => {
+      const r = await p.commit();
+      if (!p.animate || !r.changed) return;
+      const w = p.leaf.clientWidth;
+      const h = p.leaf.clientHeight;
+      if (w < 40 || h < 40) return;
+      state.plan = turnKeyframes(p.effect as TurnEffect, r.dir, w, h, { dark: p.dark, paperColor: p.paperColor });
+      html.style.setProperty("--wr-turn-from", r.dir > 0 ? "100%" : "-100%");
+      for (const b of state.plan.bands) {
+        const el = document.createElement("div");
+        el.style.cssText = b.css;
+        el.style.setProperty("view-transition-name", b.name);
+        p.leaf.appendChild(el);
+        bands.push(el);
+      }
+    });
+  } catch {
+    // 浏览器拒绝发起过渡：退化为直接提交
+    void p.commit().catch(() => {});
+    cleanup();
+    return { done: Promise.resolve(), interrupt: () => {} };
+  }
+  const done = (async () => {
+    try {
+      await vt.ready;
+    } catch {
+      // 过渡没走起来（更新阶段被打断 / 页面隐藏 / 提交超时）：只保证提交完成，不播动画
+      await Promise.race([vt.updateCallbackDone.catch(() => {}), new Promise((r) => window.setTimeout(r, 5000))]);
+      cleanup();
+      return;
+    }
+    const { plan } = state;
+    if (plan) {
+      const play = (frames: Keyframe[], pseudoElement: string) => {
+        try {
+          anims.push(html.animate(frames, { duration: p.duration, easing: "linear", fill: "both", pseudoElement }));
+        } catch {
+          // 单条动画起不来不影响翻页
+        }
+      };
+      play(plan.old, LEAF_OLD);
+      play(plan.new, LEAF_NEW);
+      plan.bands.forEach((b) => play(b.frames, `::view-transition-new(${b.name})`));
+    }
+    armed = true;
+    if (p.duration > 0) await Promise.all(anims.map((a) => a.finished.catch(() => {})));
+    // 先撤叶片里的遮罩条再撤快照：否则实况露出的那一帧会看到停着的遮罩条
+    cleanup();
+    vt.skipTransition();
+  })();
+  return {
+    done,
+    interrupt: () => {
+      if (!armed) return;
+      anims.forEach((a) => {
+        try {
+          a.cancel();
+        } catch {
+          // 动画已结束
+        }
+      });
+    },
+  };
+}
+
+/**
+ * 翻页队列：每次请求恰好一页。忙碌中再来请求 → 先交给 interrupt()（当前页让不让路由它决定）；
+ * 队里有积压时后续各页快进（run 的 fast=true），队尾那次才播动画。某一页出错不卡死队列。
+ */
+export function createTurnQueue(run: (dir: 1 | -1, fast: boolean) => Promise<void>, interrupt: () => void) {
+  const queue: (1 | -1)[] = [];
+  let busy = false;
+  const drain = async () => {
+    busy = true;
+    try {
+      for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
+        try {
+          await run(dir, queue.length > 0);
+        } catch {
+          // 这一页失败不影响后面的请求
+        }
+      }
+    } finally {
+      busy = false;
+    }
+  };
+  return (dir: 1 | -1) => {
+    const wasBusy = busy;
+    queue.push(dir);
+    if (wasBusy) interrupt();
+    else void drain();
+  };
 }

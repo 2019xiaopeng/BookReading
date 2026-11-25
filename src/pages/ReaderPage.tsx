@@ -46,7 +46,15 @@ import {
 } from "../reader/epub/reader";
 import { readerFontFaceCss } from "../reader/epub/iframeFont";
 import { tocLabelFor } from "../reader/epub/tocLabel";
-import { TURN_EFFECT_MS, TURN_FX_ENABLED, effectivePageAnimation, runTurnAnimation } from "../reader/epub/turnFx";
+import {
+  TURN_EFFECT_MS,
+  createTurnQueue,
+  effectivePageAnimation,
+  runViewTurn,
+  turnPaperColor,
+  viewTurnSupported,
+  type TurnHandle,
+} from "../reader/epub/turnFx";
 import BookmarksPanel from "../reader/components/BookmarksPanel";
 import HighlightsPanel from "../reader/components/HighlightsPanel";
 import ImageLightbox from "../reader/components/ImageLightbox";
@@ -75,7 +83,7 @@ import {
 import PdfReader, { type PdfReaderApi } from "../reader/pdf/PdfReader";
 import { parsePdfCfi, pdfCfi } from "../reader/pdf/layout";
 import { defaultSettings, HIGHLIGHT_COLOR } from "../reader/settings/defaults";
-import type { ReaderSettings } from "../reader/settings/types";
+import type { PageAnimation, ReaderSettings } from "../reader/settings/types";
 import { normalizeLayoutMode, resolveSpreadMode } from "../reader/settings/layoutMode";
 import {
   normalizeBgVeil,
@@ -139,6 +147,8 @@ const SIDE_TABS: readonly SideTab[] = ["toc", "bookmarks", "highlights", "favori
 
 // H-2 抽屉 tab 会话内记忆（同收藏页 tab 方案）：重开抽屉回到上次 tab
 const READER_TAB_KEY = "wr-reader-tab";
+/** 纸面为深色的主题（翻页阴影 / 折页高光随之调整） */
+const DARK_THEMES = ["dark", "darkcontrast", "ink-dark"];
 function initialSideTab(): SideTab {
   try {
     const v = sessionStorage.getItem(READER_TAB_KEY);
@@ -475,9 +485,10 @@ export default function ReaderPage() {
   const wheelAccumRef = useRef(0);
   // "先画完再滑入"翻页：入场动画的清理定时器（连按时第一步 clearTimeout 抢占，消灭定时器打架）
   const animTimerRef = useRef(0);
-  // V-1 翻页串行队列：每次按键恰好一页（不丢步）；旧动画被新按键打断时只跳过余下动画、提交照常
-  const turnTokenRef = useRef(0);
-  const turnLockRef = useRef<Promise<void>>(Promise.resolve());
+  // V-1 快照翻页：翻页队列与正在播的这一次（动画期间再翻 → interrupt 让它立刻收尾）
+  const turnQueueRef = useRef<((dir: 1 | -1) => void) | null>(null);
+  const turnRef = useRef<TurnHandle | null>(null);
+  const leafRef = useRef<HTMLDivElement | null>(null);
   const imageApiRef = useRef<PageReaderApi | null>(null);
   // B-2：大书守卫的生成等待次数（生成失败也发 done==total → 无限重试死循环，2 次后放行直开走错误态）
   const optRetriesRef = useRef(0);
@@ -1171,6 +1182,7 @@ export default function ReaderPage() {
 
       if (e.ctrlKey && e.key.toLowerCase() === "f" && !imageCtxRef.current.active) {
         e.preventDefault();
+        resetTurnStyles();
         changeSideTab("search");
         setDrawerOpen(true);
         requestAnimationFrame(() => searchInputRef.current?.focus());
@@ -1249,9 +1261,7 @@ export default function ReaderPage() {
         // Esc 顺序语义：关抽屉 > 解除锁定 > 唤醒栏 > 无操作
         if (drawerOpen) {
           e.preventDefault();
-          window.clearTimeout(animTimerRef.current);
-          const p = containerRef.current;
-          if (p) { p.style.transition = "none"; p.style.transform = ""; p.style.opacity = ""; }
+          resetTurnStyles();
           setDrawerOpen(false);
           return;
         }
@@ -1433,145 +1443,104 @@ export default function ReaderPage() {
     [book],
   );
 
-  // ═══ V-1 翻页动画矩阵（对标 Wenku8_Flutter）═══
-  // 串行队列：每次按键恰好一页（rapid press 不丢步）；旧动画被新按键打断 → 跳过余下动画、提交照常。
-  // GhostView 就绪 → 双 live 叶片整幅动画（平移/覆盖/渐隐/纸页，零截图零克隆）；
-  // 未就绪/降级 → 旧路径"先画完再微幅滑入"（2026-11-24 处方，覆盖/纸页回落到 fade 微幅）。
-  const doAnimateTurn = useCallback(async (direction: "next" | "prev", token: number) => {
-    // TURN_FX_ENABLED=false（v3.1.9）：整段翻页逻辑与 v3.1.8 逐行一致——不排队、不建 GhostView、不预热
-    if (TURN_FX_ENABLED) {
-      try {
-        await turnLockRef.current;
-      } catch {
-        // 上一轮异常不阻塞本次
-      }
-    }
-    setSelection(null);
-    setNoteDraft(null);
-    if (imageCtxRef.current.active) {
-      // B6：翻页不再被缩放阻塞——ImageReader.turn 内部先复位缩放再翻
-      imageApiRef.current?.turn(direction);
-      return;
-    }
-    // epub 滚动模式无分页语义：键盘/滚轮/热区统一改为上一章/下一章（wheel 仍留给 iframe 原生滚动）
-    if (settingsRef.current.readingMode !== "paginated") {
-      controllerRef.current?.chapterNav(direction === "next" ? 1 : -1);
-      return;
-    }
-    const ctrl = controllerRef.current;
-    const el = viewerRef.current;
-    const paper = containerRef.current;
-    if (!ctrl) return;
-    const run = async () => {
-      try {
-        await (direction === "next" ? ctrl.next() : ctrl.prev());
-      } catch (e) {
-        logFrontend(`reader: turn failed ${direction} ${String(e)}`);
-      }
-    };
-    const anim = effectivePageAnimation(settingsRef.current.pageAnimation);
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const k = settingsRef.current.turnSpeedMs / 260;
-
-    // 1. 抢占：清上一帧的定时器和样式（连按时=跳到终态再继续，无 opacity:0 隐身）
+  // ═══ V-1 翻页（快照双叶；机制与实测边界见 src/reader/epub/turnFx.ts 与开发计划 V-1「方案改定」）═══
+  // 队列：每次按键恰好一页；队列有积压时快进（只遮罩不播动画），队尾那次才播。
+  // 动画期间再翻 → 打断当前动画直接续下一页（新态此时已捕获，不会露出未就绪的页面）。
+  const resetTurnStyles = useCallback(() => {
     window.clearTimeout(animTimerRef.current);
-    if (paper) {
-      paper.style.transition = "none";
-      paper.style.transform = "";
-      paper.style.opacity = "";
-      paper.style.clipPath = "";
+    turnRef.current?.interrupt();
+    const p = containerRef.current;
+    if (p) {
+      p.style.transition = "none";
+      p.style.transform = "";
+      p.style.opacity = "";
+      p.style.clipPath = "";
     }
-    if (el) el.style.opacity = "";
+    if (viewerRef.current) viewerRef.current.style.opacity = "";
+  }, []);
 
-    if (anim === "none" || reduced || !paper) {
-      await run();
-      return;
+  /** v3.1.8 路径（不支持 View Transitions 的老 WebView2）："先画完、再微幅滑入" */
+  const legacyTurn = useCallback(async (ctrl: ReaderController, dir: 1 | -1, anim: PageAnimation, reduced: boolean) => {
+    const paper = containerRef.current;
+    const el = viewerRef.current;
+    try {
+      await (dir > 0 ? ctrl.next() : ctrl.prev());
+    } catch (e) {
+      logFrontend(`reader: turn failed ${dir} ${String(e)}`);
     }
-
-    // 2. GhostView 双容器路径（slide/cover/fade/paper）——仅在翻页矩阵开启时走
-    if (TURN_FX_ENABLED && (anim === "slide" || anim === "cover" || anim === "fade" || anim === "paper")) {
-      const dir = direction === "next" ? 1 : -1;
-      const ghostEl = await ctrl.prepareTurnView(dir, 450);
-      if (token !== turnTokenRef.current) {
-        // 更新的翻页已排队：跳过动画直接提交本步（连按=快进到目标页，最后一次翻页才播动画）
-        await run();
-        return;
-      }
-      if (ghostEl) {
-        ghostEl.style.visibility = "visible";
-        let paperColor: string | null = null;
-        try {
-          const host = paper.closest(".wr-reader-paper") ?? paper;
-          const c = getComputedStyle(host).backgroundColor;
-          if (c && c !== "transparent" && !/^rgba\(.+,\s*0\)$/.test(c)) paperColor = c;
-        } catch {
-          // 取不到实色（自定义背景）：跳过纸页折页高光条
-        }
-        const dark = ["dark", "darkcontrast", "ink-dark"].includes(document.documentElement.dataset.theme ?? "");
-        await runTurnAnimation({
-          effect: anim,
-          direction: dir,
-          width: paper.clientWidth,
-          height: paper.clientHeight,
-          duration: Math.round(TURN_EFFECT_MS[anim] * k),
-          oldLeaf: paper,
-          newLeaf: ghostEl,
-          dark,
-          paperColor,
-        });
-        // 3. 提交：主视图在 ghost 盖板下翻页（跨章重渲染被盖住→零闪白），双 rAF 确保上屏后再撤 ghost
-        await run();
-        await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
-        paper.style.transform = "";
-        paper.style.clipPath = "";
-        paper.style.opacity = "";
-        ctrl.releaseTurnView();
-        // 预热下一步（方向以后续按键为准，未命中 prepareTurnView 会就地重建；失败静默）
-        void ctrl.prepareTurnView(1).catch(() => {});
-        return;
-      }
-      // ghost 未就绪 → 落到旧路径兜底
-    }
-
-    // 4. 旧路径："先画完、再滑入"（ghost 未就绪/降级；章内=视野平移，跨章=重新排版后微幅）
-    await run();
+    if (anim === "none" || reduced || !paper) return;
     await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
-    if (anim === "slide" && paper) {
+    const k = settingsRef.current.turnSpeedMs / 260;
+    if (anim === "slide") {
       const inMs = Math.round(200 * k);
       paper.style.transition = "none";
-      paper.style.transform = `translateX(${direction === "next" ? 24 : -24}px)`;
+      paper.style.transform = `translateX(${dir > 0 ? 24 : -24}px)`;
       paper.style.opacity = "0.85";
       void paper.offsetHeight;
       paper.style.transition = `transform ${inMs}ms ease-out, opacity ${Math.round(inMs * 0.5)}ms ease-out`;
       paper.style.transform = "translateX(0)";
       paper.style.opacity = "1";
-      animTimerRef.current = window.setTimeout(() => {
-        paper.style.transition = "";
-        paper.style.transform = "";
-        paper.style.opacity = "";
-      }, inMs + 50);
+      animTimerRef.current = window.setTimeout(resetTurnStyles, inMs + 50);
     } else if (el) {
-      // fade 微幅（cover/paper 未就绪时同样回落）
       el.style.transition = "none";
       el.style.opacity = "0.3";
       void el.offsetHeight;
       el.style.transition = `opacity ${Math.round(180 * k)}ms ease`;
       el.style.opacity = "1";
-      animTimerRef.current = window.setTimeout(() => {
-        el.style.transition = "";
-        el.style.opacity = "";
-      }, Math.round(180 * k) + 50);
+      animTimerRef.current = window.setTimeout(resetTurnStyles, Math.round(180 * k) + 50);
     }
-    // 兜底路径同样预热（冷构建 450ms 内没就绪 → 本轮微幅；预热完成后下一轮起走 ghost 全幅动画）
-    if (TURN_FX_ENABLED) void ctrl.prepareTurnView(1).catch(() => {});
-  }, []);
+  }, [resetTurnStyles]);
 
-  const animateTurn = useCallback((direction: "next" | "prev") => {
-    const token = ++turnTokenRef.current;
-    const p = doAnimateTurn(direction, token);
-    turnLockRef.current = p;
-    return p;
-  }, [doAnimateTurn]);
+  const doTurn = useCallback(async (dir: 1 | -1, fast: boolean) => {
+    const ctrl = controllerRef.current;
+    if (!ctrl) return;
+    resetTurnStyles();
+    const anim = effectivePageAnimation(settingsRef.current.pageAnimation);
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!viewTurnSupported()) {
+      await legacyTurn(ctrl, dir, anim, reduced);
+      return;
+    }
+    const paper = containerRef.current?.closest<HTMLElement>(".wr-reader-paper");
+    const body = containerRef.current?.querySelector("iframe")?.contentDocument?.body ?? null;
+    const leaf = leafRef.current ?? containerRef.current;
+    if (!leaf) return;
+    const handle = runViewTurn({
+      effect: anim,
+      // 即使不播动画也走快照：旧页盖到新页就绪为止，跨章重建 iframe 的空窗不露白
+      animate: !fast && !reduced && anim !== "none",
+      duration: anim === "none" ? 0 : Math.round(TURN_EFFECT_MS[anim] * (settingsRef.current.turnSpeedMs / 260)),
+      leaf,
+      dark: DARK_THEMES.includes(document.documentElement.dataset.theme ?? ""),
+      // 自定义背景图下没有纸面实色：不画折页高光
+      paperColor: paper?.style.backgroundImage ? null : turnPaperColor(readerRootRef.current, body),
+      commit: () => ctrl.turn(dir),
+    });
+    turnRef.current = handle;
+    await handle.done;
+    if (turnRef.current === handle) turnRef.current = null;
+    ctrl.reportTurn();
+  }, [legacyTurn, resetTurnStyles]);
+
+  const animateTurn = useCallback(
+    (direction: "next" | "prev") => {
+      setSelection(null);
+      setNoteDraft(null);
+      if (imageCtxRef.current.active) {
+        // B6：翻页不再被缩放阻塞——ImageReader.turn 内部先复位缩放再翻
+        imageApiRef.current?.turn(direction);
+        return;
+      }
+      // epub 滚动模式无分页语义：键盘/滚轮/热区统一改为上一章/下一章（wheel 仍留给 iframe 原生滚动）
+      if (settingsRef.current.readingMode !== "paginated") {
+        controllerRef.current?.chapterNav(direction === "next" ? 1 : -1);
+        return;
+      }
+      turnQueueRef.current ??= createTurnQueue(doTurn, () => turnRef.current?.interrupt());
+      turnQueueRef.current(direction === "next" ? 1 : -1);
+    },
+    [doTurn],
+  );
 
   /** footer 上一章/下一章（epub 两模式统一；image 书 footer 仍是页翻，走 animateTurn） */
   const navChapter = useCallback((direction: "next" | "prev") => {
@@ -1582,15 +1551,13 @@ export default function ReaderPage() {
 
   const openDrawer = useCallback(
     (tab: SideTab) => {
-      // 开抽屉前清掉翻页动画残留（定时器+样式），防阅读区"弹一下"
-      window.clearTimeout(animTimerRef.current);
-      const p = containerRef.current;
-      if (p) { p.style.transition = "none"; p.style.transform = ""; p.style.opacity = ""; p.style.clipPath = ""; }
+      // 开抽屉前清掉翻页动画残留（定时器+样式+未播完的快照），防阅读区"弹一下"、抽屉被快照盖住
+      resetTurnStyles();
       changeSideTab(tab);
       setDrawerOpen(true);
       if (tab === "search") requestAnimationFrame(() => searchInputRef.current?.focus());
     },
-    [changeSideTab],
+    [changeSideTab, resetTurnStyles],
   );
 
   // B4: 书签统一入口——image 书记 img:N、PDF 记 pdf:N + "第N页"，epub 记 CFI + 章名
@@ -2274,47 +2241,50 @@ export default function ReaderPage() {
                   }
                 >
                   {bgUrl ? <div className="wr-reader-bg-veil" aria-hidden="true" style={{ opacity: bgVeil / 100 }} /> : null}
-                  <div ref={containerRef} style={{ height: "100%", position: "relative" }} />
-                  {/* B12 页码徽标：locations 就绪显示全书"位置页" X / Y（1024 字/页估算；双页两角 X 与 X+1 近似）；未就绪回退章内页码 */}
-                  {locPage ? (
-                    <div aria-hidden="true" className="wr-page-badge-layer">
-                      {pageBadge.right ? (
-                        <>
-                          <span className="wr-page-badge wr-page-badge--left">
+                  {/* V-1 叶片：正文 + 页码徽标，翻页时作为整体进快照 */}
+                  <div className="wr-reader-leaf" ref={leafRef}>
+                    <div ref={containerRef} style={{ height: "100%", position: "relative" }} />
+                    {/* B12 页码徽标：locations 就绪显示全书"位置页" X / Y（1024 字/页估算；双页两角 X 与 X+1 近似）；未就绪回退章内页码 */}
+                    {locPage ? (
+                      <div aria-hidden="true" className="wr-page-badge-layer">
+                        {pageBadge.right ? (
+                          <>
+                            <span className="wr-page-badge wr-page-badge--left">
+                              {locPage.index + 1} / {locPage.total}
+                            </span>
+                            <span className="wr-page-badge wr-page-badge--right">
+                              {Math.min(locPage.index + 2, locPage.total)} / {locPage.total}
+                            </span>
+                          </>
+                        ) : (
+                          // 单页：只右下角一枚
+                          <span className="wr-page-badge wr-page-badge--right">
                             {locPage.index + 1} / {locPage.total}
                           </span>
-                          <span className="wr-page-badge wr-page-badge--right">
-                            {Math.min(locPage.index + 2, locPage.total)} / {locPage.total}
-                          </span>
-                        </>
-                      ) : (
-                        // 单页：只右下角一枚
-                        <span className="wr-page-badge wr-page-badge--right">
-                          {locPage.index + 1} / {locPage.total}
-                        </span>
-                      )}
-                    </div>
-                  ) : pageBadge.left || pageBadge.right ? (
-                    <div aria-hidden="true" className="wr-page-badge-layer">
-                      {pageBadge.right ? (
-                        <>
-                          {pageBadge.left ? (
-                            <span className="wr-page-badge wr-page-badge--left">
-                              {pageBadge.left.page}/{pageBadge.left.total}
+                        )}
+                      </div>
+                    ) : pageBadge.left || pageBadge.right ? (
+                      <div aria-hidden="true" className="wr-page-badge-layer">
+                        {pageBadge.right ? (
+                          <>
+                            {pageBadge.left ? (
+                              <span className="wr-page-badge wr-page-badge--left">
+                                {pageBadge.left.page}/{pageBadge.left.total}
+                              </span>
+                            ) : null}
+                            <span className="wr-page-badge wr-page-badge--right">
+                              {pageBadge.right.page}/{pageBadge.right.total}
                             </span>
-                          ) : null}
+                          </>
+                        ) : pageBadge.left ? (
+                          // 单页：只右下角一枚
                           <span className="wr-page-badge wr-page-badge--right">
-                            {pageBadge.right.page}/{pageBadge.right.total}
+                            {pageBadge.left.page}/{pageBadge.left.total}
                           </span>
-                        </>
-                      ) : pageBadge.left ? (
-                        // 单页：只右下角一枚
-                        <span className="wr-page-badge wr-page-badge--right">
-                          {pageBadge.left.page}/{pageBadge.left.total}
-                        </span>
-                      ) : null}
-                    </div>
-                  ) : null}
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </>
             )}

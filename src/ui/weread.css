@@ -950,6 +950,48 @@ textarea,
   width: min(1100px, 100%);
 }
 
+/* V-1 翻页（View Transitions 快照双叶，src/reader/epub/turnFx.ts）：只在翻页瞬间——html[data-wr-turn] 存在时——生效。
+   叶片 = 正文 + 页码徽标；卡片、底色、栏不参与捕获，保持实时不动。 */
+.wr-reader-leaf {
+  position: relative;
+  height: 100%;
+}
+html[data-wr-turn] {
+  view-transition-name: none;
+}
+html[data-wr-turn] .wr-reader-leaf {
+  view-transition-name: wr-leaf;
+}
+/* 遮罩层不吃指针：过渡期间热区点击 / 滚轮照常到达 */
+html[data-wr-turn]::view-transition {
+  pointer-events: none;
+}
+/* 关掉 UA 默认的交叉淡化——画法全部由 WAAPI 关键帧给出，这里只定 t=0 的起始姿态（动画晚一帧接手也不会闪终态） */
+html[data-wr-turn]::view-transition-group(*),
+html[data-wr-turn]::view-transition-image-pair(*),
+html[data-wr-turn]::view-transition-old(*),
+html[data-wr-turn]::view-transition-new(*) {
+  animation: none;
+}
+html[data-wr-turn]::view-transition-group(wr-leaf) {
+  overflow: clip;
+  border-radius: 21px;
+}
+html[data-wr-turn="slide"]::view-transition-new(wr-leaf),
+html[data-wr-turn="cover"]::view-transition-new(wr-leaf) {
+  transform: translateX(var(--wr-turn-from, 100%));
+}
+/* 纸页翻动：旧页在上（自边缘掀起），新页在下露出 */
+html[data-wr-turn="paper"]::view-transition-old(wr-leaf) {
+  z-index: 1;
+}
+/* 遮罩条（前缘阴影 / 折痕阴影 / 折页）：快照默认按加色混合，深色阴影会加不出来——改普通混合；起始不可见 */
+html[data-wr-turn]::view-transition-new(wr-band-0),
+html[data-wr-turn]::view-transition-new(wr-band-1) {
+  mix-blend-mode: normal;
+  opacity: 0;
+}
+
 /* veil over custom reader background image: solid theme bg color keeps text contrast at AA (dark --wr-paper is translucent and would let bright images through) */
 .wr-reader-bg-veil {
   position: absolute;
