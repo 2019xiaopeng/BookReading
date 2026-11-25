@@ -62,6 +62,8 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 ## 已知陷阱（历史教训，改动前先查）
 
+- **安装版 EPUB 阅读字体/布局异常（v3.1 系列未解）**：dev 版正常、安装版不正常（同一代码/数据库/WebView2）。已排除 minify/themes.select 时序/CSS 残留/CSP img-src。**最可疑未验证：①downloadBootstrapper vs offlineInstaller（290MB 版正常，5MB 版异常）②tauri://localhost 对 iframe 动态样式限制 ③appdata 残留**。排查必须用 CDP 在安装版内检查 computed font-family，不要在 dev 版验证
+
 - **epub.js themes.select() 必须在首章 display() 完成后调用**：display 前 iframe 不存在 → sheet null → 主题永不注入 → 字体/排版全丢。已在 reader.ts 首章 display 后 + 每次 rendered 事件注入。**dev 正常是因为 Vite 初始化慢碰对时序——安装版才是验证标准，dev OK 不代表生产 OK**
 - **themes.select() 还需要在每次 rendered（章节切换）后重新调用**：章节切换销毁重建 iframe，旧注入的 CSS 全丢
 
