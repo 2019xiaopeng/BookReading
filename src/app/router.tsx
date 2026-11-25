@@ -5,6 +5,7 @@ import LibraryPage from "../pages/LibraryPage";
 import ReaderPage from "../pages/ReaderPage";
 import FavoritesPage from "../pages/FavoritesPage";
 import CloudShelfPage from "../pages/CloudShelfPage";
+import SettingsPage from "../pages/SettingsPage";
 import useLogicalBack from "../ui/useLogicalBack";
 import AppShell from "../ui/AppShell";
 import { usePageMeta } from "../ui/pageMeta";
@@ -56,6 +57,8 @@ export const router = createBrowserRouter([
           { path: "/", element: <LibraryPage /> },
           { path: "/favorites", element: <FavoritesPage /> },
           { path: "/cloud-shelf", element: <CloudShelfPage /> },
+          // v3.2（V-3）：设置由弹窗改为壳内独立页面，分区存 ?section=
+          { path: "/settings", element: <SettingsPage /> },
         ],
       },
       { path: "/read/:bookId", element: <ReaderPage /> },

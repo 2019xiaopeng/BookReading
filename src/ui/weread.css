@@ -2539,98 +2539,14 @@ input[type="range"] {
   }
 }
 
-/* SET-1 设置弹窗：外层圆角框 overflow:hidden 裁剪，滚动移到内层——
-   滚动条被弹窗 padding（14px）推离圆角边，不再凸出/溢出圆角 */
-.wr-dialog--settings {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.wr-settings-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-/* 批次10 设置对话框：分组标题 + 占用/只读行 + 快捷键表；M2 U5 分组标题/行线换 m2 token */
+/* 设置分组标题。v3.2（V-3）起设置弹窗已删（设置迁独立大页面 /settings），旧的行/控件规则与 .wr-kbd-table 一并移除，
+   页面样式见文末「V-3 设置大页面」段。本类保留原样——HealthScanDialog 仍用它作小标题，视觉勿动。 */
 .wr-settings-group {
   margin-top: 14px;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--m2-ink-soft);
-}
-
-.wr-settings-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 7px 0;
-  font-size: 13px;
-  border-bottom: 1px solid var(--m2-line);
-}
-
-.wr-settings-row:last-of-type {
-  border-bottom: none;
-}
-
-.wr-settings-label {
-  flex-shrink: 0;
-  min-width: 88px;
-  font-weight: 600;
-}
-
-.wr-settings-hint {
-  font-weight: 400;
-  font-size: 12px;
-  color: var(--wr-muted);
-}
-
-.wr-settings-value {
-  flex: 1;
-  min-width: 0;
-  color: var(--wr-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.wr-settings-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  color: var(--wr-muted);
-}
-
-.wr-settings-check input {
-  accent-color: var(--wr-accent);
-}
-
-/* M2 U5：快捷键表格线换 --m2-line */
-.wr-kbd-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.wr-kbd-table th {
-  width: 48px;
-  padding: 6px 12px 6px 0;
-  text-align: left;
-  vertical-align: top;
-  font-weight: 600;
-  color: var(--wr-muted);
-  border-bottom: 1px solid var(--m2-line);
-}
-
-.wr-kbd-table td {
-  padding: 6px 0;
-  line-height: 1.7;
-  color: var(--wr-muted);
-  border-bottom: 1px solid var(--m2-line);
 }
 
 .wr-kbd {
@@ -4021,4 +3937,425 @@ body::after {
   .wr-side {
     transition: none;
   }
+}
+
+/* ───────────────────────── V-3 设置大页面（/settings，壳内主栏） ─────────────────────────
+   断点按「内容宽度」而非窗口宽度：主栏宽 = 窗口 − 侧栏（210/270 两档跳变），随窗口宽度不单调，
+   故 .wr-settings 设为尺寸容器，以下 @container 都相对它的宽度求值。容器不能查询自己，
+   所以布局规则落在新层 .wr-settings-layout 上。 */
+
+.wr-settings {
+  container-type: inline-size;
+  padding: 0 18px 32px;
+}
+
+.wr-settings-layout {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 分区导航：窄容器=顶部胶囊行（吸顶；玻璃栏底色盖住下方滚过的内容） */
+.wr-settings-nav {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 -18px;
+  padding: 12px 18px 10px;
+  background: var(--wr-chrome-bg);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 1px 0 var(--m2-line);
+}
+
+.wr-settings-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--m2-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--m2-ink);
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.wr-settings-tab:hover {
+  background: var(--m2-wash);
+}
+
+/* 窄容器选中态同侧栏快捷 chips：墨色实底反白 */
+.wr-settings-tab[aria-current="page"] {
+  background: var(--m2-ink);
+  border-color: var(--m2-ink);
+  color: var(--m2-paper);
+}
+
+/* 分区图标只在宽容器的竖列里显示（胶囊行里省宽度） */
+.wr-settings-tab-icon {
+  display: none;
+}
+
+/* 分区切换的两种形态：胶囊组（默认 / 宽容器竖列）与最窄形态的下拉，由下方容器查询二选一显示 */
+.wr-settings-tabs {
+  display: contents; /* 透明包裹：按钮直接参与导航条自身的 flex / grid 排布 */
+}
+
+.wr-settings-nav-select {
+  display: none;
+}
+
+/* 分区内容：限宽居中（宽屏不摊成长线）；切分区时轻微淡入 */
+.wr-settings-body {
+  min-width: 0;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  animation: wr-settings-in 180ms ease both;
+}
+
+@keyframes wr-settings-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.wr-settings-title {
+  margin: 18px 0 0;
+  font-size: 24px;
+  line-height: 1.2;
+  font-weight: 800;
+  color: var(--m2-ink);
+}
+
+.wr-settings-desc {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--wr-muted);
+}
+
+/* 需要常驻的提醒（如"书级设置优先于默认值"） */
+.wr-settings-note {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-left: 2px solid rgba(var(--wr-accent-rgb), 0.45);
+  border-radius: 0 var(--wr-radius-xs) var(--wr-radius-xs) 0;
+  background: var(--m2-wash);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--wr-muted);
+}
+
+/* 分组：小标题沿用 .wr-settings-group（见文件中段），组内设置行以细线分隔 */
+.wr-settings-block {
+  margin-top: 26px;
+}
+
+.wr-settings-block > .wr-settings-group {
+  margin: 0 0 2px;
+}
+
+/* 设置行：左=名称+说明，右=控件 */
+.wr-settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 24px;
+  row-gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--m2-line);
+}
+
+.wr-settings-block .wr-settings-row:last-child {
+  border-bottom: none;
+}
+
+.wr-settings-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wr-settings-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--wr-ink);
+}
+
+.wr-settings-hint {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--wr-muted);
+  overflow-wrap: anywhere;
+}
+
+.wr-settings-value {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--wr-muted);
+  overflow-wrap: anywhere;
+}
+
+.wr-settings-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.wr-settings-path {
+  font-family: var(--wr-mono);
+  font-size: 12px;
+}
+
+.wr-settings-ctrl {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.wr-settings-ctrl .wr-select--radix {
+  max-width: 100%;
+}
+
+/* WrSelect 置灰（当前模式下无意义的项） */
+.wr-select--radix[data-disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.wr-settings-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--wr-muted);
+  cursor: pointer;
+}
+
+.wr-settings-check input {
+  accent-color: var(--wr-accent);
+}
+
+.wr-settings-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: 220px;
+  max-width: 100%;
+}
+
+.wr-settings-slider input {
+  flex: 1;
+  min-width: 0;
+}
+
+.wr-settings-slider-value {
+  min-width: 50px;
+  text-align: right;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--wr-muted);
+}
+
+/* 主题色块卡：色片 + 名称；选中态色片描 accent 环（同 .wr-swatch-btn）。
+   九格恒成组：放得下一行就一行九个，否则 5+4（不用 auto-fill，避免 7+2 这类残行） */
+.wr-settings-themes {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  padding: 6px 0 12px;
+}
+
+.wr-settings-theme {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--wr-muted);
+  text-align: center;
+  cursor: pointer;
+}
+
+.wr-settings-theme-chip {
+  height: 36px;
+  border: 1px solid var(--m2-line);
+  border-radius: var(--wr-radius-sm);
+  transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+}
+
+.wr-settings-theme:hover .wr-settings-theme-chip {
+  transform: translateY(-1px);
+}
+
+.wr-settings-theme[aria-pressed="true"] {
+  color: var(--wr-ink);
+  font-weight: 600;
+}
+
+.wr-settings-theme[aria-pressed="true"] .wr-settings-theme-chip {
+  border-color: rgba(var(--wr-accent-rgb), 0.65);
+  box-shadow: 0 0 0 3px rgba(var(--wr-accent-rgb), 0.2);
+}
+
+.wr-settings-bg-thumb {
+  width: 96px;
+  height: 30px;
+  border: 1px solid var(--wr-hairline);
+  border-radius: var(--wr-radius-xs);
+  background-size: cover;
+  background-position: center;
+}
+
+/* 快捷键：键位 + 说明，宽容器自动分栏 */
+.wr-settings-keys {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  column-gap: 28px;
+}
+
+.wr-settings-key {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--m2-line);
+  font-size: 13px;
+  color: var(--wr-muted);
+}
+
+.wr-settings-key .wr-kbd {
+  flex: none;
+}
+
+.wr-settings-keys .wr-settings-key:last-child {
+  border-bottom: none;
+}
+
+/* 窄容器（<600，三件事同一个断点，不留夹在中间的形态）：
+   ① 八个胶囊一行要 ~548px（实测），放不下时吸顶条会折成两排（最矮窗口下吃掉 1/4 内容区）——改用一个下拉切换分区
+   ② 设置行上下堆叠，控件通栏左对齐 */
+@container (max-width: 599px) {
+  .wr-settings-tabs {
+    display: none;
+  }
+
+  .wr-settings-nav-select {
+    display: inline-flex;
+    min-width: 128px;
+  }
+
+  .wr-settings-nav {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .wr-settings-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wr-settings-ctrl {
+    justify-self: stretch;
+    justify-content: flex-start;
+  }
+
+  .wr-settings-slider {
+    width: 100%;
+  }
+}
+
+/* 主题九宫格改一行九个：窄形态下内容=容器宽（≥700 每格 ≥69px，最长标签"夜间高对比"60px 放得下） */
+@container (min-width: 700px) {
+  .wr-settings-themes {
+    grid-template-columns: repeat(9, minmax(0, 1fr));
+  }
+}
+
+/* 宽容器（≥780）：左侧竖列导航（吸顶）+ 内容限宽，整体居中 */
+@container (min-width: 780px) {
+  .wr-settings-layout {
+    display: grid;
+    grid-template-columns: 160px minmax(0, 720px);
+    column-gap: 40px;
+    justify-content: center;
+    align-items: start;
+  }
+
+  .wr-settings-nav {
+    position: sticky;
+    top: 20px;
+    display: grid;
+    align-content: start;
+    gap: 4px;
+    margin: 0;
+    padding: 20px 0;
+    background: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+
+  .wr-settings-tab {
+    justify-content: flex-start;
+    border-color: transparent;
+    border-radius: var(--wr-radius-md);
+    padding: 9px 12px;
+    text-align: left;
+  }
+
+  /* 宽容器选中态同侧栏导航钮：accent 淡底 + 描边 */
+  .wr-settings-tab[aria-current="page"] {
+    background: rgba(var(--wr-accent-rgb), 0.12);
+    border-color: rgba(var(--wr-accent-rgb), 0.22);
+    color: var(--wr-ink);
+  }
+
+  .wr-settings-tab-icon {
+    display: inline-flex;
+    align-items: center;
+    color: var(--wr-muted);
+  }
+
+  .wr-settings-tab[aria-current="page"] .wr-settings-tab-icon {
+    color: var(--wr-ink);
+  }
+
+  .wr-settings-body {
+    max-width: none;
+    margin-top: 20px;
+  }
+
+  /* 宽形态下内容列 = 容器 − 200（导航 160 + 间距 40）：容器 780–899 时内容不足 700，九宫格退回 5+4 */
+  .wr-settings-themes {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+/* 宽形态且内容 ≥700：九宫格一行九个 */
+@container (min-width: 900px) {
+  .wr-settings-themes {
+    grid-template-columns: repeat(9, minmax(0, 1fr));
+  }
+}
+
+/* 侧栏「设置」钮在设置页上的选中态（同 .wr-nav-btn[data-active]） */
+.wr-small-btn[aria-current="page"] {
+  border-color: rgba(var(--wr-accent-rgb), 0.22);
+  background: rgba(var(--wr-accent-rgb), 0.12);
 }

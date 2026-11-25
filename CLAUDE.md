@@ -41,7 +41,9 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 **双进程壳**：React 前端（WebView2）↔ Rust 后端（全部 IO/重活），边界 = `#[tauri::command]`。前端 invoke 封装集中在 `src/tauri/invoke.ts` 与 `src/tauri/wenku8.ts`（契约层：改 Rust 命令签名必须同步 TS wrapper，多 agent 并行时先冻结契约再各自实现）。
 
-**路由与壳（v3.0 批次8 重构，勿回退）**：`src/app/router.tsx` 的 `AppLayout` 是**唯一常驻 AppShell 实例**（侧栏/底栏零重挂载根治切页闪烁）；三个内容页（LibraryPage 含回收站视图、FavoritesPage、CloudShelfPage）不自带壳，通过 `src/ui/pageMeta.ts` 模块级 store（useSyncExternalStore）在 useLayoutEffect 里注册本页元信息（title/search/quickFilter/contextRow）。ReaderPage 在壳外独立路由。
+**路由与壳（v3.0 批次8 重构，勿回退）**：`src/app/router.tsx` 的 `AppLayout` 是**唯一常驻 AppShell 实例**（侧栏/底栏零重挂载根治切页闪烁）；四个内容页（LibraryPage 含回收站视图、FavoritesPage、CloudShelfPage、SettingsPage）不自带壳，通过 `src/ui/pageMeta.ts` 模块级 store（useSyncExternalStore）在 useLayoutEffect 里注册本页元信息（title/search/quickFilter/contextRow）。ReaderPage 在壳外独立路由。
+
+**设置（v3.2 V-3，2026-11-25 落地）**：独立路由 `/settings?section=<id>`，页面壳在 `src/pages/SettingsPage.tsx`，各分区与通用控件在 `src/settings/`（八分区登记表 `sections.ts`，**加分区先改它**）。原 `SettingsDialog` 已删、条目全部迁入；**阅读页的设置抽屉（`SettingsPanel` / `ImageSettingsPanel`）是另一套，没动**——设置页改的是全局默认，阅读页抽屉改的是"当前书生效值"（书级覆盖优先）。全局阅读默认 ↔ settings 键的映射在 `src/settings/readerDefaults.ts` 与 `ReaderPage.tsx` 各一份（为了让设置页零触碰阅读器代码），**改键必须两处同步**。`.wr-settings-group` 是与 `HealthScanDialog` 共用的小标题类，视觉勿动。
 
 **侧栏动作**：底部四钮（刷新/导入漫画/导入图书/设置）写死在 AppShell；刷新走 `src/ui/appActions.ts` 事件总线（各页订阅自消化），导入走 `src/ui/importService.ts`（落架目标=模块级当前书架）。`sidebarActions` 动态注册机制已删——不要再引入按页注册底栏的方案。
 
@@ -55,15 +57,23 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 ## 设计系统（碳墨）
 
-全部手搓，**无 UI 组件库**（3.2 计划引入 Radix 类 headless 基座，勿整库替换）。token 在 `src/ui/weread.css`（--wr-*/--m2-* 两套变量浅深主题，八主题）。**弹层/对话框设计基准 = 书库右键详情弹层**（用户钦定）；弹层一律 body 级 Portal + fixed 视口定位（父层 overflow 裁不到内嵌弹层）；下拉自绘（原生 select 弹层做不了主题）。README 截图必须中性内容（用户书库隐私），裁掉侧栏或匿名化。
+全部手搓，**无 UI 组件库**（3.2 已引入 Radix headless 基座，封装在 `src/ui/radix.tsx`：`Modal / PointMenu / WrSelect / Tooltip`，只取行为层、视觉走碳墨类，勿整库替换）。token 在 `src/ui/weread.css`（--wr-*/--m2-* 两套变量浅深主题，八主题）。**弹层/对话框设计基准 = 书库右键详情弹层**（用户钦定）；弹层一律 body 级 Portal + fixed 视口定位（父层 overflow 裁不到内嵌弹层）；新 UI 的下拉一律 `WrSelect`（原生 select 弹层做不了主题；存量少数原生 select 尚未迁）。README 截图必须中性内容（用户书库隐私），裁掉侧栏或匿名化。
 
 ## 测试与验收
 
 前端 vitest（jsdom 文件级 `// @vitest-environment jsdom` 指令，全局仍是 node 环境）。dev 应用 CDP 实测：`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9223" npm run tauri dev`，然后零依赖 Node22 脚本（WebSocket）驱动——**Playwright page.goto 会整页重载重置 SPA 状态，持久化类验证必须走应用内导航（点侧栏按钮）**。多开 dev 实例会留 WebView2 僵尸进程占数据目录（0x8007139F 崩溃），杀 msedgewebview2 进程重启。
 
+**布局/视觉验证（不占用用户的 dev 窗口）**：起一个独立无头 Chrome（`chrome --headless=new --remote-debugging-port=9333 --user-data-dir=<F 盘临时目录>`）连同一个 Vite dev server，用 `tools/cdp/` 里的零依赖脚本驱动——`cdp-lib.mjs`（连接/eval/视口模拟/截图）、`verify-settings.mjs`（注入 Tauri IPC 假后端 → 应用内导航 → 多尺寸截图 + 横向溢出断言）、`verify-breakpoints.mjs`（断点两侧逐像素扫描）、`inspect-installed.mjs`（安装版取证）、`smoke-turn.mjs`。dev 与安装版**共用正式数据目录**，两者不能同时开；`npm run dev:isolated` 的隔离目录在本机尚不存在（=空书库）。
+
 ## 已知陷阱（历史教训，改动前先查）
 
-- **v3.1 系列（3.1.0→3.1.7）安装版字体/布局/插图全坏的根因 = CSP nonce（已解，v3.1.8）**：tauri.conf.json 配置任何 csp，Tauri 构建时都会往 style-src 自动追加 nonce；CSP 规范规定 source list 含 nonce/hash 时 'unsafe-inline' 一律失效 → epub.js 全部动态 `<style>` 注入被拦（主题/字体栈/排版/adjustImages 缩放/书内嵌字体/blob 样式表）→ sheet 恒 null——即此前误判为"themes.select 时序"的 null sheet。iframe 是 about:srcdoc，继承 tauri.localhost 的 CSP。**dev 不注入 CSP，所以 dev 永远正常——本 bug 连错 6 版就是因为一直在 dev 验证**。修复=整体移除 csp（回到 v3.0.1 已知良好状态；CSP 本是为放行内联 boot 脚本才引入的）。**不要再给本应用配 csp**；排查安装版问题的唯一可信手段=`temp/cdp-inspect.mjs` 式 CDP 取证（安装版带 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port` 启动）
+- **v3.1 系列（3.1.0→3.1.7）安装版字体/布局/插图全坏的根因 = CSP nonce（已解，v3.1.8）**：tauri.conf.json 配置任何 csp，Tauri 构建时都会往 style-src 自动追加 nonce；CSP 规范规定 source list 含 nonce/hash 时 'unsafe-inline' 一律失效 → epub.js 全部动态 `<style>` 注入被拦（主题/字体栈/排版/adjustImages 缩放/书内嵌字体/blob 样式表）→ sheet 恒 null——即此前误判为"themes.select 时序"的 null sheet。iframe 是 about:srcdoc，继承 tauri.localhost 的 CSP。**dev 不注入 CSP，所以 dev 永远正常——本 bug 连错 6 版就是因为一直在 dev 验证**。修复=整体移除 csp（回到 v3.0.1 已知良好状态；CSP 本是为放行内联 boot 脚本才引入的）。**不要再给本应用配 csp**；排查安装版问题的唯一可信手段=`tools/cdp/inspect-installed.mjs` 式 CDP 取证（安装版带 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port` 启动）
+- **视觉功能必须看画面验收（2026-11-25 用户明确批评）**：翻页动画批次只做了 DOM 计数烟测（iframe 1→2→1）就报"实证通过"，用户一拉慢速就看出五种效果全一样 + 闪烁。计数/单测只能证明路径走通，证明不了效果正确——动画、布局、主题类改动一律截图逐张过目（设置页这批靠看画面抓到两处单测没覆盖的 bug）。动画批次的已知缺陷与根因见 `docs/开发计划-v3.2.md` V-1 节
+- **磁盘空间是硬约束**：书库数据库与设置在 **C 盘**（`%APPDATA%\com.root.bookreading`），C 盘写满时 dev 的 tauri 命令行工具会静默退出（exit 1，窗口成孤儿）、应用存不进进度。本机 C 盘长期接近满（桌面有大文件夹）、F 盘也紧张（`F:\cargo-target\bookreading` debug ≈18GB + release ≈4.5GB）。**动构建前先看 `Get-PSDrive C,F`**；Claude Code 自己的临时目录也在 C 盘，满了会话随时断。清理用户机器上的东西必须先列清单征得同意，只删清单内的
+- **任何 cargo / tauri dev 都必须带 `CARGO_TARGET_DIR=F:/cargo-target/bookreading`**：漏了会编到仓库内 `src-tauri/target`（一次落了 10GB 垃圾，且撞 hashbrown rlib 冲突 exit 101）。清理该目录即可
+- **Radix Select（`WrSelect`）的选项值不能是空串**：不报错，触发器直接显示成一片空白。设置表里用空串表示"默认/根"的键（如 `wenku8.dest_shelf`），界面上要换成占位值、读写时互换
+- **CSS 容器查询量的是内容盒宽度**（要扣掉容器自身 padding）：设置页 `.wr-settings` 左右各 18px 内边距，所以 CSS 写的 600/780 对应实际窗口宽 904/1084。改断点后用 `tools/cdp/verify-breakpoints.mjs` 在分界两侧逐像素实测，别只靠推算
+- **给 weread.css 做多行 Edit 前先确认能匹配**：文件里个别注释行含看不见的异常字符，几十行的 old_string 会整体匹配失败甚至拼坏相邻行（2026-11-25 踩过）。先小块试、或按行号带前置条件校验后拼接；含中文的 PowerShell 脚本不要用 `powershell -File` 跑（无 BOM 会被按 GBK 读坏），用 `[scriptblock]::Create((Get-Content -Raw -Encoding UTF8 …))` 在进程内执行
 - **epub.js themes.select() 必须在首章 display() 完成后调用，且每次 rendered（章节切换重建 iframe）后重新调用**：display 前 iframe 不存在 → sheet null。reader.ts 已如此实现，不要回退
 
 - **Vite 生产构建 minify 疑似破坏 epub.js（未复验——当时症状实为 CSP 根因）**：minify 已锁 false 在 vite.config.ts，保守起见**不要改回 true**

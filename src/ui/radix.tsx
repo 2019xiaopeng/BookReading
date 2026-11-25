@@ -118,9 +118,11 @@ export function WrSelect(props: {
   options: { value: string; label: string }[];
   ariaLabel?: string;
   className?: string;
+  /** 置灰（触发器 data-disabled，V-3 设置页在当前模式下无意义的选项用） */
+  disabled?: boolean;
 }) {
   return (
-    <Select.Root value={String(props.value)} onValueChange={props.onChange}>
+    <Select.Root value={String(props.value)} onValueChange={props.onChange} disabled={props.disabled}>
       <Select.Trigger className={`wr-select wr-select--radix ${props.className ?? ""}`} aria-label={props.ariaLabel}>
         <Select.Value />
         <Select.Icon className="wr-select-caret" aria-hidden="true">

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // F-2 网络设置区：三选写键 / 状态行渲染 / 代理三键与端口校验。
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 const slot = vi.hoisted(() => ({
   getSettings: vi.fn(),
@@ -12,6 +12,12 @@ vi.mock("../tauri/invoke", () => ({ getSettings: slot.getSettings, setSetting: s
 vi.mock("../tauri/wenku8", () => ({ wenku8EndpointStatus: slot.endpointStatus }));
 
 import NetworkSettings, { proxyPortValid } from "./NetworkSettings";
+
+beforeAll(() => {
+  // v3.2 换 Radix Select 后需要：jsdom 没有 scrollIntoView（同 radix.test.tsx 的补丁）
+  const proto = window.HTMLElement.prototype as unknown as Record<string, (...a: unknown[]) => unknown>;
+  proto.scrollIntoView ??= () => {};
+});
 
 afterEach(cleanup);
 
@@ -39,10 +45,13 @@ describe("NetworkSettings（U-11/12 设置接线）", () => {
   });
 
   test("地址三选写 settings 键 wenku8.endpoint", async () => {
-    const { findByLabelText } = mount();
-    const select = await findByLabelText("wenku8 地址");
-    expect((select as HTMLSelectElement).value).toBe("auto");
-    fireEvent.change(select, { target: { value: "relay" } });
+    const { findByRole, findByText } = mount();
+    expect(await findByText(/自动模式本会话在用中继/)).toBeTruthy();
+    // v3.2 换 Radix Select：jsdom 造不出带 pointerType 的 PointerEvent，走键盘开列表（同 radix.test 口径）
+    const trigger = await findByRole("combobox", { name: "wenku8 地址" });
+    expect(trigger.textContent).toContain("自动（中继不通切直连）");
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    fireEvent.click(await findByRole("option", { name: "中继 wenku8-relay.mewx.org" }));
     expect(slot.setSetting).toHaveBeenCalledWith("wenku8.endpoint", "relay");
   });
 
@@ -89,8 +98,8 @@ describe("NetworkSettings（U-11/12 设置接线）", () => {
       "proxy.enabled": "1",
     });
     slot.endpointStatus.mockResolvedValue({ setting: "relay", session: "", relay_ok: true, direct_ok: true });
-    const { findByLabelText } = render(<NetworkSettings />);
-    expect((await findByLabelText("wenku8 地址") as HTMLSelectElement).value).toBe("relay");
+    const { findByLabelText, findByRole } = render(<NetworkSettings />);
+    expect((await findByRole("combobox", { name: "wenku8 地址" })).textContent).toContain("中继 wenku8-relay.mewx.org");
     expect((await findByLabelText("代理主机") as HTMLInputElement).value).toBe("127.0.0.1");
     expect((await findByLabelText("代理端口") as HTMLInputElement).value).toBe("7890");
     expect((await findByLabelText("启用代理") as HTMLInputElement).checked).toBe(true);

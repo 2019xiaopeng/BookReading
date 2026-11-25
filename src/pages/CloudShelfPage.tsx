@@ -31,7 +31,7 @@ function coverUrl(aid: number): string {
   return `http://img.wenku8.com/image/${Math.floor(aid / 1000)}/${aid}/${aid}s.jpg`;
 }
 
-// F4/批次11 D-3 网页版入口统一（照 SettingsDialog openUrl 先例：失败退复制链接提示）
+// F4/批次11 D-3 网页版入口统一（照设置页 GitHub 链接先例：打开失败退复制链接提示）
 async function openWebUrl(url: string) {
   try {
     await openUrl(url);

@@ -24,6 +24,7 @@ vi.mock("../tauri/invoke", async (importOriginal) => {
 
 import { AppLayout } from "./router";
 import { setPageMeta } from "../ui/pageMeta";
+import SettingsPage from "../pages/SettingsPage";
 
 // 假页面照真实页面同款：布局期（useLayoutEffect）注册本页元信息
 function FakeLibrary() {
@@ -71,5 +72,35 @@ describe("AppLayout 常驻壳（批次8 防回归红线）", () => {
     // 页元信息经 pageMeta store 注入常驻壳：标题随新页生效、侧栏 active 换位
     expect(screen.getByRole("heading", { name: "收藏" })).toBeTruthy();
     expect(document.querySelector(".wr-nav-btn[data-active='true']")?.textContent).toContain("收藏");
+  });
+
+  // v3.2（V-3）：设置由弹窗改为壳内独立页面——入口仍是侧栏底部「设置」钮，壳照旧不重挂
+  test("侧栏「设置」钮导航到设置页（不再开弹窗）：标题「设置」、钮带 aria-current、侧栏不被高亮成书架；点书架回来", async () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="/" element={<FakeLibrary />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const side = document.querySelector(".wr-side-bottom");
+    const settingsBtn = screen.getByRole("button", { name: "设置" });
+    expect(settingsBtn.getAttribute("aria-current")).toBeNull();
+
+    fireEvent.click(settingsBtn);
+    await waitFor(() => expect(screen.getByRole("navigation", { name: "设置分区" })).toBeTruthy());
+    expect(screen.getByRole("heading", { level: 1, name: "设置" })).toBeTruthy();
+    expect(settingsBtn.getAttribute("aria-current")).toBe("page");
+    expect(document.querySelector(".wr-side-bottom")).toBe(side);
+    expect(document.querySelector(".wr-nav-btn[data-active='true']")).toBeNull(); // 设置页不冒充书架
+    expect(document.querySelector(".wr-dialog, .wr-dialog--settings")).toBeNull(); // 旧设置弹窗已不存在
+
+    fireEvent.click(document.querySelector(".wr-nav-btn[data-shelf-id='']") as HTMLElement);
+    await waitFor(() => expect(screen.getByTestId("page-library")).toBeTruthy());
+    expect(settingsBtn.getAttribute("aria-current")).toBeNull();
   });
 });

@@ -34,7 +34,6 @@ import { primeCloseAction } from "./closeAction";
 import { startSilentUpdateCheck, subscribeUpdateAvailable, getUpdateAvailable } from "./updater";
 import { showAlert, showConfirm, showPrompt } from "./dialog";
 import { ToastHost } from "./toast";
-import SettingsDialog from "./SettingsDialog";
 
 // 色块 30px + 块间 8 间距 + 12 内边距 + 2 边框（H-8 加 auto 格后 9 格，宽度随格数算）
 const THEME_MENU_WIDTH = THEME_SWATCHES.length * 30 + (THEME_SWATCHES.length - 1) * 8 + 12 * 2 + 2;
@@ -179,7 +178,7 @@ async function runShellStartupOnce(): Promise<void> {
 }
 
 export default function AppShell(props: {
-  active: "library" | "favorites" | "cloud" | "reader";
+  active: "library" | "favorites" | "cloud" | "reader" | "settings";
   title: string;
   search?: {
     value: string;
@@ -215,7 +214,6 @@ export default function AppShell(props: {
   // S-1 树折叠：state 驱动重渲，模块缓存保证路由切换（重挂）不丢
   const [collapsed, setCollapsed] = useState(() => new Set(shelfCollapsedCache));
   const updateAvailable = useSyncExternalStore(subscribeUpdateAvailable, getUpdateAvailable, () => null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [importProgress, setImportProgress] = useState<ImportProgress>(null);
   // V-4 窄窗：档位（JS 驱动树过滤/抽屉/搜索收起；宽度与视觉由 CSS 断点接管）+ 抽屉开关 + 紧凑搜索展开态
@@ -611,12 +609,15 @@ export default function AppShell(props: {
               <span>导入图书</span>
             </button>
           </Tooltip>
+          {/* v3.2（V-3）：设置改为壳内独立页面。带着"发现新版本"红点进来时直达「网络与更新」——
+              那一分区挂载时发现红点亮着会直接弹更新窗（沿原弹窗口径：关掉弹窗仍留在设置里） */}
           <Tooltip content={railMode ? (updateAvailable ? `设置（发现新版本 v${updateAvailable.latest}）` : "设置") : null}>
             <button
               className="wr-small-btn"
               data-badge={updateAvailable ? "true" : undefined}
+              aria-current={props.active === "settings" ? "page" : undefined}
               aria-label={updateAvailable ? `发现新版本 v${updateAvailable.latest}，在设置中查看` : "设置"}
-              onClick={() => setSettingsOpen(true)}
+              onClick={() => nav(updateAvailable ? "/settings?section=network" : "/settings")}
             >
               <IconSettings />
               <span>设置</span>
@@ -802,8 +803,6 @@ export default function AppShell(props: {
           </span>
         </div>
       ) : null}
-
-      {settingsOpen ? <SettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
 
       <ToastHost />
     </div>

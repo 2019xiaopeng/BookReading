@@ -1,9 +1,11 @@
 // F-2（U-11/U-12）网络设置区：wenku8 地址三选 + 连通状态行 + 代理三键。
-// 3.1 落现有设置弹窗（U-13：3.2 迁独立大页面时整体搬走）。
+// v3.2（V-3）：迁入设置大页面「网络与更新」分区——行结构改用 SettingsRow，下拉换主题化的 WrSelect。
 import { useEffect, useState } from "react";
 
 import { getSettings, setSetting } from "../tauri/invoke";
 import { wenku8EndpointStatus, type Wenku8EndpointStatus } from "../tauri/wenku8";
+import { WrSelect } from "./radix";
+import { SettingsRow } from "../settings/controls";
 
 const ENDPOINT_OPTIONS: { value: "auto" | "relay" | "direct"; label: string }[] = [
   { value: "auto", label: "自动（中继不通切直连）" },
@@ -58,91 +60,71 @@ export default function NetworkSettings() {
 
   return (
     <>
-      <div className="wr-settings-group">网络</div>
-      <div className="wr-settings-row">
-        <span className="wr-settings-label">文库地址</span>
-        <span
-          className="wr-settings-value"
-          style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4, whiteSpace: "normal" }}
-        >
-          <select
-            className="wr-select"
-            value={endpoint}
-            aria-label="wenku8 地址"
-            onChange={(e) => {
-              const v = e.currentTarget.value as "auto" | "relay" | "direct";
-              setEndpoint(v);
-              void setSetting("wenku8.endpoint", v);
-            }}
-          >
-            {ENDPOINT_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <span className="wr-settings-hint">
-            {status
-              ? `${sessionLabel} · 中继${status.relay_ok ? "可达" : "不可达"} · 直连${status.direct_ok ? "可达" : "不可达"}`
-              : "连通状态探测中…"}
-          </span>
-        </span>
-      </div>
+      <SettingsRow
+        label="文库地址"
+        hint={
+          status
+            ? `${sessionLabel} · 中继${status.relay_ok ? "可达" : "不可达"} · 直连${status.direct_ok ? "可达" : "不可达"}`
+            : "连通状态探测中…"
+        }
+      >
+        <WrSelect
+          ariaLabel="wenku8 地址"
+          value={endpoint}
+          options={ENDPOINT_OPTIONS}
+          onChange={(v) => {
+            const next = v as "auto" | "relay" | "direct";
+            setEndpoint(next);
+            void setSetting("wenku8.endpoint", next);
+          }}
+        />
+      </SettingsRow>
 
-      <div className="wr-settings-row">
-        <span className="wr-settings-label">
-          代理
-          <span className="wr-settings-hint">（HTTP）</span>
-        </span>
-        <span
-          className="wr-settings-value"
-          style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4, whiteSpace: "normal" }}
-        >
-          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <label className="wr-settings-check" style={{ whiteSpace: "nowrap" }}>
-              <input
-                type="checkbox"
-                checked={proxyOn}
-                aria-label="启用代理"
-                onChange={(e) => {
-                  const on = e.currentTarget.checked;
-                  setProxyOn(on);
-                  void setSetting("proxy.enabled", on ? "1" : "0");
-                }}
-              />
-              启用
-            </label>
-            <input
-              className="wr-input"
-              style={{ width: 160, padding: "6px 12px" }}
-              value={host}
-              placeholder="主机，如 127.0.0.1"
-              aria-label="代理主机"
-              disabled={!proxyOn}
-              onChange={(e) => setHost(e.currentTarget.value)}
-              onBlur={() => void setSetting("proxy.host", host.trim())}
-            />
-            <input
-              className="wr-input"
-              style={{ width: 90, padding: "6px 12px" }}
-              value={port}
-              placeholder="端口"
-              aria-label="代理端口"
-              disabled={!proxyOn}
-              inputMode="numeric"
-              onChange={(e) => setPort(e.currentTarget.value)}
-              onBlur={() => {
-                if (proxyPortValid(port)) void setSetting("proxy.port", port.trim());
-              }}
-            />
-          </span>
-          <span className="wr-settings-hint">
-            {proxyPortValid(port)
-              ? "应用于云书架请求、应用内更新（检查与下载）与备用下载通道"
-              : "端口需为 1-65535 的整数，当前值未保存"}
-          </span>
-        </span>
-      </div>
+      <SettingsRow
+        label="代理"
+        hint={
+          proxyPortValid(port)
+            ? "HTTP 代理，应用于云书架请求、应用内更新（检查与下载）与备用下载通道"
+            : "端口需为 1-65535 的整数，当前值未保存"
+        }
+      >
+        <label className="wr-settings-check" style={{ whiteSpace: "nowrap" }}>
+          <input
+            type="checkbox"
+            checked={proxyOn}
+            aria-label="启用代理"
+            onChange={(e) => {
+              const on = e.currentTarget.checked;
+              setProxyOn(on);
+              void setSetting("proxy.enabled", on ? "1" : "0");
+            }}
+          />
+          启用
+        </label>
+        <input
+          className="wr-input"
+          style={{ width: 160, padding: "6px 12px" }}
+          value={host}
+          placeholder="主机，如 127.0.0.1"
+          aria-label="代理主机"
+          disabled={!proxyOn}
+          onChange={(e) => setHost(e.currentTarget.value)}
+          onBlur={() => void setSetting("proxy.host", host.trim())}
+        />
+        <input
+          className="wr-input"
+          style={{ width: 90, padding: "6px 12px" }}
+          value={port}
+          placeholder="端口"
+          aria-label="代理端口"
+          disabled={!proxyOn}
+          inputMode="numeric"
+          onChange={(e) => setPort(e.currentTarget.value)}
+          onBlur={() => {
+            if (proxyPortValid(port)) void setSetting("proxy.port", port.trim());
+          }}
+        />
+      </SettingsRow>
     </>
   );
 }

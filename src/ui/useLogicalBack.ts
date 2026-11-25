@@ -11,7 +11,7 @@ import { getShelvesCache } from "./AppShell";
  * 纯：侧键逻辑目标（null=无操作）。导出供测试。
  * - /read/:id → 来源书架（location.state.fromShelf），无 state 退书库根
  * - / 且 ?shelf=X（X 非根级）→ 父书架
- * - /favorites 或 /?trash=1 → 书库根
+ * - /favorites、/?trash=1 或 /settings（v3.2 设置大页面）→ 书库根
  * - 其它（书库根等）→ 无操作
  */
 export function logicalBackTarget(pathname: string, search: string, shelves: Shelf[], state: unknown): string | null {
@@ -19,7 +19,7 @@ export function logicalBackTarget(pathname: string, search: string, shelves: She
     const from = (state as { fromShelf?: unknown } | null)?.fromShelf;
     return typeof from === "number" ? `/?shelf=${from}` : "/";
   }
-  if (pathname === "/favorites") return "/";
+  if (pathname === "/favorites" || pathname === "/settings") return "/";
   if (pathname !== "/") return null;
   if (search.includes("trash=1")) return "/";
   const m = /[?&]shelf=(\d+)/.exec(search);
