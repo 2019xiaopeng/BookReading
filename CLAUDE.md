@@ -53,7 +53,7 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 **wenku8 协议**（wenku8.rs，全部实测）：POST `https://wenku8-relay.mewx.org/` 根路径，body `&appver=<magic>&request=<b64(action)>&timetoken=<ms>`（开头有 &，b64 不 urlencode）；appver = `1.29-digital-bento-` + hex(HMAC-SHA256(key="digital-bento", msg="1.29|digital-bento|"+minute))[12..20]，minute=epoch_ms/60000，按分钟缓存。会话 cookie 存 settings（wenku8.cookie/user/pass），errcode "4" 自动重登。reqwest blocking 必须跑专用 std::thread（async 线程内死锁，update.rs 先例）+ `.no_proxy()`（系统代理会劫持）。`endpoint()` 常量是切直连备胎（app.wenku8.com/api.php）留的口。
 
-**阅读器三管线**：`src/reader/` 下 epub（epub.js，hook 挂 rendition.hooks 非 spine.hooks）/ image（漫画）/ pdf（pdf.js）各自独立设置记忆。epubjs 坑：toc href 带 #anchor 而 relocated 不带——比较前两侧剥 hash。
+**阅读器三管线**：`src/reader/` 下 epub（epub.js，hook 挂 rendition.hooks 非 spine.hooks）/ image（漫画）/ pdf（pdf.js）各自独立设置记忆。epubjs 坑：toc href 带 #anchor 而 relocated 不带——比较前两侧剥 hash。`src/reader/epub/epubjsPatch.ts` 是给 epub.js 的 `Resources.replacements` 打的对齐补丁（失败项留 null 占位）——**改它先读下面「类级补丁」那条陷阱**。
 
 ## 设计系统（碳墨）
 
@@ -63,7 +63,7 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 前端 vitest（jsdom 文件级 `// @vitest-environment jsdom` 指令，全局仍是 node 环境）。dev 应用 CDP 实测：`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9223" npm run tauri dev`，然后零依赖 Node22 脚本（WebSocket）驱动——**Playwright page.goto 会整页重载重置 SPA 状态，持久化类验证必须走应用内导航（点侧栏按钮）**。多开 dev 实例会留 WebView2 僵尸进程占数据目录（0x8007139F 崩溃），杀 msedgewebview2 进程重启。
 
-**布局/视觉验证（不占用用户的 dev 窗口）**：起一个独立无头 Chrome（`chrome --headless=new --remote-debugging-port=9333 --user-data-dir=<F 盘临时目录>`）连 Vite dev server（用户的 dev 开着时直接共用它的 14200），用 `tools/cdp/` 里的零依赖脚本驱动——`cdp-lib.mjs`（连接/eval/视口模拟/截图，截图可裁剪放大看圆角）、`verify-settings.mjs`（注入 Tauri IPC 假后端 → 应用内导航 → 设置浮窗与书库体检：六尺寸 × 八分区截图 + 零溢出断言 + **切分区零位移断言**，可选参数 `only=sectionId sizes=720x480,1350x801`）、`verify-settings-extra.mjs`（深浅主题、Esc / 遮罩关闭）、`inspect-installed.mjs`（安装版取证）、`smoke-turn.mjs`。界面改动后先跑前两个并逐张看截图。dev 与安装版**共用正式数据目录**，两者不能同时开；`npm run dev:isolated` 的隔离目录在本机尚不存在（=空书库）。
+**布局/视觉验证（不占用用户的 dev 窗口）**：起一个独立无头 Chrome（`chrome --headless=new --remote-debugging-port=9333 --user-data-dir=<F 盘临时目录>`）连 Vite dev server（用户的 dev 开着时直接共用它的 14200），用 `tools/cdp/` 里的零依赖脚本驱动——`cdp-lib.mjs`（连接/eval/视口模拟/截图，截图可裁剪放大看圆角与边缘）、`ipc-shim.mjs`（Tauri IPC 假后端：假数据 + 调用记录）、`verify-settings.mjs`（应用内导航 → 设置浮窗与书库体检：六尺寸 × 八分区截图 + 零溢出断言 + **切分区零位移断言**，可选参数 `only=sectionId sizes=720x480,1350x801`）、`verify-settings-extra.mjs`（深浅主题、Esc / 遮罩关闭）、`inspect-installed.mjs`（安装版取证）、`reopen-images.mjs`（**真实窗口**：同一本书三轮打开，比对插图状态与 blob 数——"第二次打开才坏"类问题的回归）、`smoke-turn.mjs`。界面改动后先跑前两个并逐张看截图。dev 与安装版**共用正式数据目录**，两者不能同时开；`npm run dev:isolated` 的隔离目录在本机尚不存在（=空书库）。**别把用户书名 / 路径写进入库文件**（脚本用命令行参数传）。
 
 ## 已知陷阱（历史教训，改动前先查）
 
@@ -73,7 +73,9 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 - **任何 cargo / tauri dev 都必须带 `CARGO_TARGET_DIR=F:/cargo-target/bookreading`**：漏了会编到仓库内 `src-tauri/target`（一次落了 10GB 垃圾，且撞 hashbrown rlib 冲突 exit 101）。清理该目录即可
 - **Radix Select（`WrSelect`）的选项值不能是空串**：不报错，触发器直接显示成一片空白。设置表里用空串表示"默认/根"的键（如 `wenku8.dest_shelf`），界面上要换成占位值、读写时互换
 - **CSS 容器查询量的是内容盒宽度**（扣掉容器自身 padding；滚动容器还要扣预留的滚动条槽）：设置浮窗的右面板 `.wr-settings-pane` 是容器，断点 600（设置行上下堆叠）/ 700（主题九宫格一行九个）。改断点后在分界两侧逐像素实测，别只靠推算
-- **"切换内容时抖动"的通用解法**：容器尺寸固定 + 滚动容器 `scrollbar-gutter: stable`（内容有长有短时滚动条时有时无，可用宽度会跳一个滚动条宽）+ 导航项定高定宽、选中只换色。验证不能只看"没溢出"，要**把切换前后的坐标逐位比对**（`verify-settings.mjs` 的 stable 断言）
+- **"切换内容时抖动"的通用解法**：容器尺寸固定 + 滚动容器 `scrollbar-gutter: stable`（内容有长有短时滚动条时有时无，可用宽度会跳一个滚动条宽）+ 导航项定高定宽、选中只换色。验证不能只看"没溢出"，要**把切换前后的坐标逐位比对**（`verify-settings.mjs` 的 stable 断言）。注意这条只适用于**内部滚动容器**；根元素 `html` 不要设（见 weread.css 顶部注释：外壳满窗高内部滚动，根元素从不出现滚动条，设了只会在窗口最右留一条 10px 根底色带，还会让居中弹窗偏左 5px）
+- **类级（prototype）补丁只对"之后的实例"生效——验收必须覆盖第二次**：`epubjsPatch` 在第一本书 `book.ready` 之后才装到类上，所以同一会话里第一本书永远走原版逻辑、第二本起才走补丁。2026-11-25 实锤：补丁改写 `replacements` 时把 manifest 相对 href 直接传给 `createUrl`（它要求书内绝对路径，内部会去掉首字符当压缩包内文件名查找），第二本书起 100 个资源全部替换失败、插图破损——这个 bug 从 v2.9.0 潜伏了 6 天，因为每次验收都只开第一本书。**给第三方库打补丁：先逐行对照原版做同样的前置处理；测试桩必须仿真真实查找口径**（当时的假 `createUrl` 来者不拒，把 bug 固化成了"通过"）。回归工具 `tools/cdp/reopen-images.mjs`
+- **dev 启动后白屏 ≠ 代码问题**：Vite 开发模式逐模块加载，启动瞬间若机器网络变动（网卡 / 代理 / TUN 切换），模块请求成批报 `ERR_NETWORK_CHANGED`，React 根本没挂载（`#root` 为空）。CDP 里 `Page.reload` 一下即可；先用 `tools/cdp/cdp-lib.mjs` 的 `c.logs` 看报错再下结论
 - **"操作进行中不许关闭"之类的闸门要在动作开始处同步置位，不要靠 React effect**：effect 要等下一次渲染提交才执行，那个空档里 Esc / 点遮罩能穿透——全量测试负载下才复现（单跑永远过），这类"单跑过、全量偶发挂"的用例是竞态信号，不要重跑放过
 - **给 weread.css 做多行 Edit 前先确认能匹配**：文件里个别注释行含看不见的异常字符，几十行的 old_string 会整体匹配失败甚至拼坏相邻行（2026-11-25 踩过）。先小块试、或按行号带前置条件校验后拼接；含中文的 PowerShell 脚本不要用 `powershell -File` 跑（无 BOM 会被按 GBK 读坏），用 `[scriptblock]::Create((Get-Content -Raw -Encoding UTF8 …))` 在进程内执行
 - **epub.js themes.select() 必须在首章 display() 完成后调用，且每次 rendered（章节切换重建 iframe）后重新调用**：display 前 iframe 不存在 → sheet null。reader.ts 已如此实现，不要回退

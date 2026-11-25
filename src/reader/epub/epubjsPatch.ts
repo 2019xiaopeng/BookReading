@@ -6,7 +6,11 @@
 // 注意：必须从运行实例取 prototype 打补丁——Vite 依赖优化会把 "epubjs" 主入口与
 // "epubjs/lib/*" 深路径解析成两份模块实例，直接 import 深路径打到的类不在运行链上。
 type AnyResources = {
-  settings: { replacements?: string };
+  settings: {
+    replacements?: string;
+    /** manifest 里的相对 href → 书内绝对路径（/OEBPS/…）；与原版一致，createUrl 必须收绝对路径 */
+    resolver?: (url: string) => string;
+  };
   urls: string[];
   createUrl(url: string): Promise<string>;
   replacementUrls: (string | null)[];
@@ -21,8 +25,13 @@ export function patchEpubjsBook(book: unknown): void {
     resProto.__wrAligned = true;
     resProto.replacements = function (this: AnyResources) {
       if (this.settings.replacements === "none") return Promise.resolve(this.urls);
+      // 先解析成书内绝对路径再 createUrl——Archive.getBlob 会去掉首字符当压缩包内文件名查找，
+      // 把 manifest 里的相对 href 直接传过去必然"找不到"，整本书的图片 / 字体 / CSS 全部替换失败。
+      // （2026-11-25 实锤：补丁装在类上，同一会话里第二本打开的书才会走到这里，插图全破。
+      //   resolver 缺失时保持原值，交给 createUrl 自行失败并留 null 占位。）
+      const resolve = this.settings.resolver;
       return Promise.all(
-        this.urls.map((url) => this.createUrl(url).catch(() => null)),
+        this.urls.map((url) => this.createUrl(resolve ? resolve(url) : url).catch(() => null)),
       ).then((replacementUrls) => {
         // 不 filter：失败条目保留 null 占位，index 与 this.urls 一一对应
         this.replacementUrls = replacementUrls;
