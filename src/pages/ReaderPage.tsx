@@ -973,8 +973,9 @@ export default function ReaderPage() {
         window.clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
       }
-      // 换书/重开清掉翻页动画定时器（controller 销毁后 run() 不会再 resolve）
+      // 换书/重开清掉翻页动画定时器（controller 销毁后 run() 不会再 resolve）；翻页标记一并兜底清掉
       window.clearTimeout(animTimerRef.current);
+      delete document.documentElement.dataset.wrTurn;
       controllerRef.current?.destroy();
       controllerRef.current = null;
     };
@@ -1456,7 +1457,10 @@ export default function ReaderPage() {
       p.style.opacity = "";
       p.style.clipPath = "";
     }
-    if (viewerRef.current) viewerRef.current.style.opacity = "";
+    if (viewerRef.current) {
+      viewerRef.current.style.transition = "";
+      viewerRef.current.style.opacity = "";
+    }
   }, []);
 
   /** v3.1.8 路径（不支持 View Transitions 的老 WebView2）："先画完、再微幅滑入" */

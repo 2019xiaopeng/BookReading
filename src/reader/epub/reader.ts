@@ -153,7 +153,7 @@ export type ReaderController = {
    * rAF 推进——所以直接调 manager.next/prev（= Rendition.next 去掉队列包装），位置上报交给 reportTurn 在回调外补。
    * 返回新页进入的一侧、页面是否真的变了（到书的首尾时不变）。
    */
-  turn: (direction: 1 | -1) => Promise<{ dir: 1 | -1; changed: boolean }>;
+  turn: (direction: 1 | -1) => Promise<{ dir: 1 | -1; changed: boolean; axis: "horizontal" | "vertical" }>;
   /** turn 之后的 relocated 上报（不在更新回调里跑：它内部也用 rAF） */
   reportTurn: () => void;
   display: (target?: string) => Promise<void>;
@@ -570,11 +570,14 @@ export async function createReader(opts: {
     }
   };
 
-  const turn = async (direction: 1 | -1): Promise<{ dir: 1 | -1; changed: boolean }> => {
+  const turn = async (direction: 1 | -1): Promise<{ dir: 1 | -1; changed: boolean; axis: "horizontal" | "vertical" }> => {
     const manager = rendition.manager;
     const viewBefore = lastView();
     const scroller = opts.container.querySelector<HTMLElement>(".epub-container");
-    const x0 = scroller?.scrollLeft ?? 0;
+    // 竖排书纵向分页：翻页是容器竖向滚动
+    const axis: "horizontal" | "vertical" = manager.settings?.axis === "vertical" ? "vertical" : "horizontal";
+    const pos = () => (axis === "vertical" ? scroller?.scrollTop ?? 0 : scroller?.scrollLeft ?? 0);
+    const x0 = pos();
     const seq = renderedSeq;
     try {
       if (direction > 0) await manager.next();
@@ -587,16 +590,16 @@ export async function createReader(opts: {
     const forward: 1 | -1 = manager.settings?.direction === "rtl" ? (direction > 0 ? -1 : 1) : direction;
     if (view === viewBefore) {
       // 章内只是容器横向滚动：滚动方向即新页进入的一侧（RTL 容器的 scrollLeft 语义相反，正好自洽）
-      const x1 = scroller?.scrollLeft ?? 0;
+      const x1 = pos();
       if (view && x1 !== x0) await settlePage(view);
-      return { dir: x1 === x0 ? forward : x1 > x0 ? 1 : -1, changed: !!view && x1 !== x0 };
+      return { dir: x1 === x0 ? forward : x1 > x0 ? 1 : -1, changed: !!view && x1 !== x0, axis };
     }
     if (view) {
       // 跨章：manager.next 的 promise 不保证主题 / 脚本已注入完（那是不被等待的 hooks 链）
       if (renderedSeq === seq) await nextRendered();
       await settlePage(view);
     }
-    return { dir: forward, changed: !!view };
+    return { dir: forward, changed: !!view, axis };
   };
 
   let lastEmitted: RelocatedPayload | null = null;

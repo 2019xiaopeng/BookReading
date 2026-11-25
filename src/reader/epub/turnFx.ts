@@ -201,8 +201,9 @@ export function turnPaperColor(root: Element | null, body: Element | null): stri
   return opaque(v) ? v : null;
 }
 
-/** 提交结果：dir = 新页进入的一侧（RTL 书与滚动方向相反时由提交方换算）；changed=false 表示已到书的首尾、页面没变 */
-export type TurnCommit = { dir: 1 | -1; changed: boolean };
+/** 提交结果：dir = 新页进入的一侧（RTL 书与滚动方向相反时由提交方换算）；changed=false 表示已到书的首尾、页面没变；
+ *  axis=vertical 是竖排书（纵向分页）——这里只有横向画法，竖排只翻不播 */
+export type TurnCommit = { dir: 1 | -1; changed: boolean; axis?: "horizontal" | "vertical" };
 
 export type TurnHandle = { done: Promise<void>; interrupt: () => void };
 
@@ -210,7 +211,8 @@ export type TurnHandle = { done: Promise<void>; interrupt: () => void };
  * 快照翻页：浏览器先拍旧态 → 调 commit 改 DOM → 拍新态 → 播关键帧。
  * commit 运行在浏览器的「DOM 更新回调」里——期间不产帧、requestAnimationFrame 冻结，旧页快照全程盖着
  * （跨章重建 iframe 的空窗因此不露白）；animate=false 时只当遮罩用，新态就绪即换。
- * interrupt()：新态捕获之后（armed）才会立即跳过动画；之前调用无效——那时打断会把未就绪的页面暴露出来。
+ * interrupt()：新态捕获之前调用不会立即生效（那时打断会把未就绪的页面暴露出来），但会记下来——
+ * 新态一捕获就跳过动画。跨章渲染期间按下的一次翻页因此不会被迫看完随后那段动画。
  */
 export function runViewTurn(p: {
   effect: TurnEffect | "none";
@@ -225,13 +227,8 @@ export function runViewTurn(p: {
   const bands: HTMLElement[] = [];
   let anims: Animation[] = [];
   let armed = false;
-  // 关键帧在更新回调里定（提交后才知道新页进哪一侧）；装在对象里，免得控制流把外层变量收窄成 null
-  const state: { plan: TurnKeys | null } = { plan: null };
-  let vt: ViewTransition;
-  const cleanup = () => {
-    delete html.dataset.wrTurn;
-    html.style.removeProperty("--wr-turn-from");
-    while (bands.length) bands.pop()!.remove();
+  let skipWanted = false;
+  const skip = () =>
     anims.forEach((a) => {
       try {
         a.cancel();
@@ -239,13 +236,21 @@ export function runViewTurn(p: {
         // 动画已结束
       }
     });
+  // 关键帧在更新回调里定（提交后才知道新页进哪一侧）；装在对象里，免得控制流把外层变量收窄成 null
+  const state: { plan: TurnKeys | null } = { plan: null };
+  let vt: ViewTransition;
+  const cleanup = () => {
+    delete html.dataset.wrTurn;
+    html.style.removeProperty("--wr-turn-from");
+    while (bands.length) bands.pop()!.remove();
+    skip();
     anims = [];
   };
   try {
     html.dataset.wrTurn = p.animate ? p.effect : "none";
     vt = document.startViewTransition(async () => {
-      const r = await p.commit();
-      if (!p.animate || !r.changed) return;
+      const r: TurnCommit = await p.commit().catch(() => ({ dir: 1, changed: false }));
+      if (!p.animate || !r.changed || r.axis === "vertical") return;
       const w = p.leaf.clientWidth;
       const h = p.leaf.clientHeight;
       if (w < 40 || h < 40) return;
@@ -287,8 +292,12 @@ export function runViewTurn(p: {
       play(plan.new, LEAF_NEW);
       plan.bands.forEach((b) => play(b.frames, `::view-transition-new(${b.name})`));
     }
+    // 先订阅 finished、再允许取消：动画一旦 cancel()，它的 finished 就换成一个新的、永不 settle 的待定 Promise
+    // （Web Animations 规范），之后再订阅就永远等不到——整个翻页队列会就此卡死
+    const settled = anims.map((a) => a.finished.catch(() => {}));
     armed = true;
-    if (p.duration > 0) await Promise.all(anims.map((a) => a.finished.catch(() => {})));
+    if (skipWanted) skip();
+    if (p.duration > 0) await Promise.all(settled);
     // 先撤叶片里的遮罩条再撤快照：否则实况露出的那一帧会看到停着的遮罩条
     cleanup();
     vt.skipTransition();
@@ -296,14 +305,8 @@ export function runViewTurn(p: {
   return {
     done,
     interrupt: () => {
-      if (!armed) return;
-      anims.forEach((a) => {
-        try {
-          a.cancel();
-        } catch {
-          // 动画已结束
-        }
-      });
+      if (armed) skip();
+      else skipWanted = true;
     },
   };
 }

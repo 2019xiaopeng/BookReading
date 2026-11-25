@@ -1,6 +1,6 @@
 // 合成测试书（只用于无头验证：翻页动画 / 插图 / 跨章 / 高亮），内容全部是中性示例句，不含任何真实书名。
-// 用法：node tools/cdp/make-synth-epub.mjs [输出路径]   （默认 temp/synth-turn.epub）
-// 结构：8 章正文（第 3 章带两张插图、第 8 章很短）+ 两段落在第 1、2 章的高亮 CFI（见 HIGHLIGHTS）。
+// 用法：node tools/cdp/make-synth-epub.mjs [输出路径] [long]   （默认 temp/synth-turn.epub；long = 120 章短章的长书）
+// 结构：9 章正文（第 3 章带两张插图、第 8 章很短、第 9 章竖排）+ 两段落在第 1、2 章的高亮 CFI（见 HIGHLIGHTS）。
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { deflateRawSync, deflateSync } from "node:zlib";
@@ -73,7 +73,7 @@ function png(w, h, from, to) {
   const chunk = (type, data) => {
     const body = concat([enc.encode(type), data]);
     const crc = CRC(body);
-    return concat([new Uint8Array([body.length >>> 24, (body.length >>> 16) & 255, (body.length >>> 8) & 255, body.length & 255]), body, new Uint8Array([crc >>> 24, (crc >>> 16) & 255, (crc >>> 8) & 255, crc & 255])]);
+    return concat([new Uint8Array([data.length >>> 24, (data.length >>> 16) & 255, (data.length >>> 8) & 255, data.length & 255]), body, new Uint8Array([crc >>> 24, (crc >>> 16) & 255, (crc >>> 8) & 255, crc & 255])]);
   };
   return concat([
     new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -98,7 +98,10 @@ const SENTENCES = [
 const paras = (n, seed = 0) =>
   Array.from({ length: n }, (_, i) => SENTENCES[(i + seed) % SENTENCES.length] + SENTENCES[(i * 3 + seed + 1) % SENTENCES.length] + SENTENCES[(i * 7 + seed + 4) % SENTENCES.length] + SENTENCES[(i * 5 + seed + 6) % SENTENCES.length] + SENTENCES[(i * 2 + seed + 8) % SENTENCES.length]).map((s) => `<p>${s}</p>`);
 
-const CHAPTERS = [
+const LONG = process.argv[3] === "long";
+const CHAPTERS = LONG
+  ? Array.from({ length: 120 }, (_, i) => ({ n: 2, seed: i })) // 每章恰好一个版面：连翻每一步都跨章
+  : [
   { n: 18 },
   { n: 16, seed: 3 },
   { n: 16, seed: 6, figures: [3, 9] },
@@ -107,13 +110,14 @@ const CHAPTERS = [
   { n: 16, seed: 5 },
   { n: 16, seed: 8 },
   { n: 2, seed: 1 },
+  { n: 16, seed: 4, vertical: true }, // 竖排章：纵向分页
 ];
 const chapterXhtml = (i) => {
   const c = CHAPTERS[i];
   const body = paras(c.n, c.seed).map((p, k) => (c.figures?.includes(k) ? `<figure><img src="../images/fig${(c.figures.indexOf(k) % 2) + 1}.png" alt="插图"/><figcaption>图 ${k + 1} 示例插图</figcaption></figure>${p}` : p));
   return `<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-CN" lang="zh-CN">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-CN" lang="zh-CN"${c.vertical ? ' style="writing-mode:vertical-rl"' : ""}>
 <head><meta charset="utf-8"/><title>第${i + 1}章</title><link rel="stylesheet" type="text/css" href="../style.css"/></head>
 <body><h1>第${i + 1}章 示例章节</h1>${body.join("\n")}</body>
 </html>`;
@@ -125,7 +129,7 @@ const files = [
     "OEBPS/content.opf",
     `<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="zh-CN">
-<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bookid">urn:uuid:synth-turn-book</dc:identifier><dc:title>合成测试书（翻页验证用）</dc:title><dc:creator>示例作者</dc:creator><dc:language>zh-CN</dc:language><meta property="dcterms:modified">2026-11-25T00:00:00Z</meta></metadata>
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bookid">urn:uuid:synth-turn-book</dc:identifier><dc:title>合成测试书（翻页验证用${LONG ? "·长书" : ""}）</dc:title><dc:creator>示例作者</dc:creator><dc:language>zh-CN</dc:language><meta property="dcterms:modified">2026-11-25T00:00:00Z</meta></metadata>
 <manifest>
 <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
 <item id="css" href="style.css" media-type="text/css"/>

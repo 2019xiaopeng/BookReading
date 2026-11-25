@@ -16,6 +16,9 @@ window.__VT = {
     return {
       spine: view ? Number(view.getAttribute("ref")) : null,
       scrollLeft: scroller ? Math.round(scroller.scrollLeft) : null,
+      scrollTop: scroller ? Math.round(scroller.scrollTop) : 0,
+      // 竖排章：epub.js 把滚动容器改成纵向分页
+      vertical: !!(scroller && scroller.scrollHeight > scroller.clientHeight + 2),
       pageWidth: leaf ? leaf.clientWidth : null,
       iframes: leaf ? leaf.querySelectorAll("iframe").length : 0,
       turning: document.documentElement.dataset.wrTurn ?? null,
