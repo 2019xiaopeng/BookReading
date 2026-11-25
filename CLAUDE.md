@@ -79,6 +79,7 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 - **类级（prototype）补丁只对"之后的实例"生效——验收必须覆盖第二次**：`epubjsPatch` 在第一本书 `book.ready` 之后才装到类上，所以同一会话里第一本书永远走原版逻辑、第二本起才走补丁。2026-11-25 实锤：补丁改写 `replacements` 时把 manifest 相对 href 直接传给 `createUrl`（它要求书内绝对路径，内部会去掉首字符当压缩包内文件名查找），第二本书起 100 个资源全部替换失败、插图破损——这个 bug 从 v2.9.0 潜伏了 6 天，因为每次验收都只开第一本书。**给第三方库打补丁：先逐行对照原版做同样的前置处理；测试桩必须仿真真实查找口径**（当时的假 `createUrl` 来者不拒，把 bug 固化成了"通过"）。回归工具 `tools/cdp/reopen-images.mjs`
 - **dev 启动后白屏 ≠ 代码问题**：Vite 开发模式逐模块加载，启动瞬间若机器网络变动（网卡 / 代理 / TUN 切换），模块请求成批报 `ERR_NETWORK_CHANGED`，React 根本没挂载（`#root` 为空）。CDP 里 `Page.reload` 一下即可；先用 `tools/cdp/cdp-lib.mjs` 的 `c.logs` 看报错再下结论
 - **"操作进行中不许关闭"之类的闸门要在动作开始处同步置位，不要靠 React effect**：effect 要等下一次渲染提交才执行，那个空档里 Esc / 点遮罩能穿透——全量测试负载下才复现（单跑永远过），这类"单跑过、全量偶发挂"的用例是竞态信号，不要重跑放过
+- **断言异步回填的值必须包在 `waitFor` 里**：`await findByRole(...)` 只等"元素出现"，控件一挂载就在，紧接着读 `.textContent` / `.value` 读到的是初始值。本机 mock 瞬间 resolve 所以总能过，CI 慢就偶发失败（v3.1.9 首次 CI 构建因此挂掉）。实测扫描：旧写法在后端延迟 ≥10ms 时 0/8 通过，`waitFor` 写法 72/72。写"回填 / 懒加载后的值"的断言时先问一句：这个值是同步就有的吗？不是就 `waitFor`
 - **给 weread.css 做多行 Edit 前先确认能匹配**：文件里个别注释行含看不见的异常字符，几十行的 old_string 会整体匹配失败甚至拼坏相邻行（2026-11-25 踩过）。先小块试、或按行号带前置条件校验后拼接；含中文的 PowerShell 脚本不要用 `powershell -File` 跑（无 BOM 会被按 GBK 读坏），用 `[scriptblock]::Create((Get-Content -Raw -Encoding UTF8 …))` 在进程内执行
 - **epub.js themes.select() 必须在首章 display() 完成后调用，且每次 rendered（章节切换重建 iframe）后重新调用**：display 前 iframe 不存在 → sheet null。reader.ts 已如此实现，不要回退
 

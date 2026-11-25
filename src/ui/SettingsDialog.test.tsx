@@ -230,14 +230,19 @@ describe("SettingsDialog（V-3 设置浮窗）", () => {
     fireEvent.click(within(group).getByRole("button", { name: "护眼" }));
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("green"));
     expect(slot.setSetting).toHaveBeenCalledWith("theme", "green");
-    expect(within(dlg()).getByRole("combobox", { name: "关闭按钮行为" }).textContent).toContain("最小化到托盘");
+    await waitFor(() =>
+      expect(within(dlg()).getByRole("combobox", { name: "关闭按钮行为" }).textContent).toContain("最小化到托盘"),
+    );
   });
 
   test("阅读：显示已存默认值；切到上下滚动后一次批量写全部 15 个全局键，翻页类项置灰", async () => {
     mount("reading");
     // 选项与显示值跟随翻页矩阵总开关：矩阵关闭时已存的 paper 按渐隐显示（文案=v3.1.8 的「淡入淡出」）
     const expected = visiblePageAnimations().find((o) => o.value === effectivePageAnimation("paper"))?.label ?? "";
-    expect((await within(dlg()).findByRole("combobox", { name: "翻页动画" })).textContent).toContain(expected);
+    // 设置是异步回填的：浮窗一挂载控件就在，但显示的是初始值——必须等到已存值到位再断言（CI 慢时会读到初始值）
+    await waitFor(() =>
+      expect(within(dlg()).getByRole("combobox", { name: "翻页动画" }).textContent).toContain(expected),
+    );
     expect((within(dlg()).getByRole("slider", { name: "字号" }) as HTMLInputElement).value).toBe("125");
     fireEvent.click(within(dlg()).getByRole("button", { name: "上下滚动" }));
     await waitFor(() => expect(slot.setSettings).toHaveBeenCalledTimes(1));
@@ -251,9 +256,11 @@ describe("SettingsDialog（V-3 设置浮窗）", () => {
   test("漫画增强：漫画与 PDF 各读各的键；改漫画只写漫画键并保留其余字段", async () => {
     mount("manga");
     const manga = await within(dlg()).findByRole("region", { name: "漫画" });
-    const pdf = within(dlg()).getByRole("region", { name: "PDF" });
-    expect(within(manga).getByRole("button", { name: "双页" }).getAttribute("aria-pressed")).toBe("true");
-    expect(within(pdf).getByRole("button", { name: "连续滚动" }).getAttribute("aria-pressed")).toBe("true");
+    // 同上：等已存的生效值回填（漫画=双页、PDF=连续滚动）再断言
+    await waitFor(() => {
+      expect(within(manga).getByRole("button", { name: "双页" }).getAttribute("aria-pressed")).toBe("true");
+      expect(within(dlg()).getByRole("button", { name: "连续滚动" }).getAttribute("aria-pressed")).toBe("true");
+    });
     fireEvent.click(within(manga).getByRole("button", { name: "条漫" }));
     await waitFor(() => expect(slot.setSetting).toHaveBeenCalledWith("image_reader_settings", expect.any(String)));
     const written = JSON.parse(slot.setSetting.mock.calls.find((c) => c[0] === "image_reader_settings")![1] as string);
@@ -305,8 +312,10 @@ describe("SettingsDialog（V-3 设置浮窗）", () => {
     fireEvent.click(await screen.findByRole("option", { name: /日漫/ }));
     expect(slot.setSetting).toHaveBeenCalledWith("wenku8.dest_shelf", "3");
 
+    await waitFor(() =>
+      expect(within(dlg()).getByRole("combobox", { name: "云书架排序" }).textContent).toContain("最近更新"),
+    );
     const sort = within(dlg()).getByRole("combobox", { name: "云书架排序" });
-    expect(sort.textContent).toContain("最近更新");
     fireEvent.keyDown(sort, { key: "ArrowDown" });
     fireEvent.click(await screen.findByRole("option", { name: "书名" }));
     expect(slot.setSetting).toHaveBeenCalledWith("wenku8.sort", "title");

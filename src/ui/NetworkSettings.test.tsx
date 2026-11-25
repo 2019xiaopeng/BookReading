@@ -98,11 +98,15 @@ describe("NetworkSettings（U-11/12 设置接线）", () => {
       "proxy.enabled": "1",
     });
     slot.endpointStatus.mockResolvedValue({ setting: "relay", session: "", relay_ok: true, direct_ok: true });
-    const { findByLabelText, findByRole } = render(<NetworkSettings />);
-    expect((await findByRole("combobox", { name: "wenku8 地址" })).textContent).toContain("中继 wenku8-relay.mewx.org");
-    expect((await findByLabelText("代理主机") as HTMLInputElement).value).toBe("127.0.0.1");
-    expect((await findByLabelText("代理端口") as HTMLInputElement).value).toBe("7890");
-    expect((await findByLabelText("启用代理") as HTMLInputElement).checked).toBe(true);
+    const { getByLabelText, getByRole } = render(<NetworkSettings />);
+    // 设置是异步回填的：等四个值都到位再断言。逐个 findBy 读元素会在元素一出现时就读到初始值——
+    // 本机时序快总能过，CI 慢就偶发失败（v3.1.9 首次 CI 构建因此挂掉）
+    await waitFor(() => {
+      expect(getByRole("combobox", { name: "wenku8 地址" }).textContent).toContain("中继 wenku8-relay.mewx.org");
+      expect((getByLabelText("代理主机") as HTMLInputElement).value).toBe("127.0.0.1");
+      expect((getByLabelText("代理端口") as HTMLInputElement).value).toBe("7890");
+      expect((getByLabelText("启用代理") as HTMLInputElement).checked).toBe(true);
+    });
     await waitFor(() => expect(slot.endpointStatus).toHaveBeenCalled());
   });
 });
