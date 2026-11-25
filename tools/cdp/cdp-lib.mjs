@@ -57,7 +57,7 @@ export async function connect(port = 9223, match = /localhost:14200|tauri\.local
     viewportClear: () => send("Emulation.clearDeviceMetricsOverride"),
     /** 截图落盘（PNG）；clip={x,y,width,height,scale} 时只截该区域并放大（看圆角、滚动条细节） */
     screenshot: async (file, clip) => {
-      const r = await send("Page.captureScreenshot", { format: "png", ...(clip ? { clip } : {}) });
+      const r = await send("Page.captureScreenshot", { format: "png", ...(clip ? { clip: { ...clip, scale: clip.scale ?? 1 } } : {}) });
       writeFileSync(file, Buffer.from(r.data, "base64"));
       return file;
     },
