@@ -66,6 +66,14 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 **布局/视觉验证（不占用用户的 dev 窗口）**：起一个独立无头 Chrome（`chrome --headless=new --remote-debugging-port=9333 --user-data-dir=<F 盘临时目录>`）连 Vite dev server（用户的 dev 开着时直接共用它的 14200），用 `tools/cdp/` 里的零依赖脚本驱动——`cdp-lib.mjs`（连接/eval/视口模拟/截图，截图可裁剪放大看圆角与边缘）、`ipc-shim.mjs`（Tauri IPC 假后端：假数据 + 调用记录）、`verify-settings.mjs`（应用内导航 → 设置浮窗与书库体检：六尺寸 × 八分区截图 + 零溢出断言 + **切分区零位移断言**，可选参数 `only=sectionId sizes=720x480,1350x801`）、`verify-settings-extra.mjs`（深浅主题、Esc / 遮罩关闭）、`inspect-installed.mjs`（安装版取证）、`reopen-images.mjs`（**真实窗口**：同一本书三轮打开，比对插图状态与 blob 数——"第二次打开才坏"类问题的回归）、`smoke-turn.mjs`。界面改动后先跑前两个并逐张看截图。dev 与安装版**共用正式数据目录**，两者不能同时开；`npm run dev:isolated` 的隔离目录在本机尚不存在（=空书库）。**别把用户书名 / 路径写进入库文件**（脚本用命令行参数传）。
 
+## 接续与红线（v3.2 期间）
+
+- **新对话接续**：先读 `docs/开发计划-v3.2.md` 的 V-8「接续清单」（按序推进），再看第七节施工记录。最新发布 = v3.1.9（2026-11-25）。
+- **自动识别的产品红线（用户 2026-11-25 原话要点）**：导入新书时的自动识别要直觉、合乎人性，**不要生硬机械的排列，不要强制归类**；任何自动动作都不覆盖用户手动改过的作者 / 书架 / 标签。V-8 规则已获用户确认（作者子架阈值 3、5 个状态标签 已汉化 / 生肉 / 无修正 / DL版 / AI生成、入口两处），**不做**「书架转标签」、作者标签、宣传页过滤、轻小说自动分类。
+- **隐私红线**：公开仓库里不得出现个人书籍文件、真实书名、个人书架名（2026-11-25 清理过一次根目录的书）。README 更新用 `beautify-github-readme` skill，截图只用合成书。
+- **发布者名称**：`identifier` 是 `com.root.bookreading`，不要改（决定 appdata 目录）；对外显示的发布者用 `bundle.publisher` 设为 `qcb`（待办）。
+- **未经用户同意不改翻页动画与阅读器字体 / 主题 / 插图注入逻辑**；翻页矩阵总开关见「已知陷阱」。
+
 ## 已知陷阱（历史教训，改动前先查）
 
 - **v3.1 系列（3.1.0→3.1.7）安装版字体/布局/插图全坏的根因 = CSP nonce（已解，v3.1.8）**：tauri.conf.json 配置任何 csp，Tauri 构建时都会往 style-src 自动追加 nonce；CSP 规范规定 source list 含 nonce/hash 时 'unsafe-inline' 一律失效 → epub.js 全部动态 `<style>` 注入被拦（主题/字体栈/排版/adjustImages 缩放/书内嵌字体/blob 样式表）→ sheet 恒 null——即此前误判为"themes.select 时序"的 null sheet。iframe 是 about:srcdoc，继承 tauri.localhost 的 CSP。**dev 不注入 CSP，所以 dev 永远正常——本 bug 连错 6 版就是因为一直在 dev 验证**。修复=整体移除 csp（回到 v3.0.1 已知良好状态；CSP 本是为放行内联 boot 脚本才引入的）。**不要再给本应用配 csp**；排查安装版问题的唯一可信手段=`tools/cdp/inspect-installed.mjs` 式 CDP 取证（安装版带 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port` 启动）
