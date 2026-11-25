@@ -30,6 +30,12 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 
 版本三处 bump：`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`，然后 `cargo check` 锁 Cargo.lock → push main → `git tag vX.Y.Z && git push origin vX.Y.Z` → CI 自动出 NSIS 挂 Release。发布文档四件：CHANGELOG / release-notes / README 版本段 / 开发计划（`docs/开发计划-v*.md` 是每个版本的需求与批次账本，新版本需求往最新一份里加）。
 
+**CI 完成后必做（不可跳过）**：
+1. 写 `docs/release-notes-vX.Y.Z.md`（格式参照 `docs/release-notes-v3.1.0.md`：分区标题+条目列表+中文）——**不要用简陋一行文字**
+2. `gh release edit vX.Y.Z --notes-file docs/release-notes-vX.Y.Z.md` 附上完整 release notes
+3. `gh release view vX.Y.Z` 验证 assets（setup.exe + .sig + latest.json 三件齐全）
+4. 需要给用户本地测试时：`gh release download` → 拷贝安装包到桌面 → 手机通知（ntfy PowerShell curl）
+
 ## 架构大图
 
 **双进程壳**：React 前端（WebView2）↔ Rust 后端（全部 IO/重活），边界 = `#[tauri::command]`。前端 invoke 封装集中在 `src/tauri/invoke.ts` 与 `src/tauri/wenku8.ts`（契约层：改 Rust 命令签名必须同步 TS wrapper，多 agent 并行时先冻结契约再各自实现）。
@@ -55,6 +61,12 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 前端 vitest（jsdom 文件级 `// @vitest-environment jsdom` 指令，全局仍是 node 环境）。dev 应用 CDP 实测：`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9223" npm run tauri dev`，然后零依赖 Node22 脚本（WebSocket）驱动——**Playwright page.goto 会整页重载重置 SPA 状态，持久化类验证必须走应用内导航（点侧栏按钮）**。多开 dev 实例会留 WebView2 僵尸进程占数据目录（0x8007139F 崩溃），杀 msedgewebview2 进程重启。
 
 ## 已知陷阱（历史教训，改动前先查）
+
+- **Vite 生产构建 minify 会破坏 epub.js**：esbuild identifier mangling 导致 themes 系统 insertRule 对 null sheet—— 已锁定在 vite.config.ts，**不要改回 true**（dev 不 minify 所以 dev 永远正常，安装版才是验证标准）
+- **epub.js themes.select() 在 iframe 未就绪时调用必失败**：rendition.ready 后重试注入（reader.ts registerThemes 内）——不要移除重试逻辑
+- **regex 清 CSS 极危险**：grep 关键词可能误删同名前缀类（如清理 V-4 窄窗时误删 Drawer CSS 含 'drawer' 关键词）——删除前必须逐条核实每个命中行
+- **tauri-plugin-window-state 默认恢复 decorated:true**：必须排除 DECORATIONS flag 否则无边框被覆盖出双标题栏
+- **快速连按翻页必须 clearTimeout 抢占**：残留定时器会在下一帧醒来强制设 opacity:0 造成闪烁
 
 - 改 `src-tauri/icons/` **不会**触发 build.rs 重嵌图标——touch `build.rs` 强制重跑，否则 exe/NSIS 图标停在旧版（窗口左上角是运行时读的所以会假性"已更新"）
 - `tauri.conf.json` 的 `bundle.windows.nsis` 段是 deny_unknown_fields：非法键（如 headerIcon，合法的是 installerIcon/uninstallerIcon/headerImage/installMode/template/languages）会**静默拒绝整段且构建流程 EXIT 假绿**——改完必须 grep 构建日志确认 "Finished 1 bundle"
