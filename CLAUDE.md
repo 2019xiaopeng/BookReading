@@ -78,7 +78,7 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 - **翻页动画（2026-11-25 晚）已改为 View Transitions 快照双叶并打开 `TURN_FX_ENABLED`，用户 2026-11-26 验收通过，随 v3.2.0 发布**。EPUB 处理链 / 展示链的审计发现均未处理，见开发计划第八节，动手前先复核。
 - **自动识别的产品红线（用户 2026-11-25 原话要点）**：导入新书时的自动识别要直觉、合乎人性，**不要生硬机械的排列，不要强制归类**；任何自动动作都不覆盖用户手动改过的作者 / 书架 / 标签。V-8 规则已获用户确认（作者子架阈值 3、5 个状态标签 已汉化 / 生肉 / 无修正 / DL版 / AI生成、入口两处），**不做**「书架转标签」、作者标签、宣传页过滤、轻小说自动分类。
 - **隐私红线**：公开仓库里不得出现个人书籍文件、真实书名、个人书架名（2026-11-25 清理过一次根目录的书）。README 更新用 `beautify-github-readme` skill，截图只用合成书。
-- **发布者名称**：`identifier` 是 `com.root.bookreading`，不要改（决定 appdata 目录）；对外显示的发布者 = `bundle.publisher`（v3.2.0 起为 `qcb`，Cargo `authors` 同）。
+- **发布者名称**：`identifier` 是 `com.root.bookreading`，不要改（决定 appdata 目录）；对外显示的发布者 = `bundle.publisher`（v3.2.0 起为 `qcb`，Cargo `authors` 同）。**陷阱（2026-11-26 实锤）：Tauri 的 NSIS 安装器把「上次安装目录」记在 `HKCU\Software\<发布者>\<应用名>` 下，键名含发布者——改发布者会让装在非默认目录的用户升级时换目录、旧快捷方式仍指旧版。不要再直接改 `bundle.publisher`；处置见开发计划第九节 R0。
 - **未经用户同意不改翻页动画与阅读器字体 / 主题 / 插图注入逻辑**；翻页矩阵总开关见「已知陷阱」。
 
 ## 已知陷阱（历史教训，改动前先查）

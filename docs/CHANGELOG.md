@@ -7,6 +7,7 @@
 - 连按每次恰好一页：队列有积压时快进、队尾才播；动画期间再翻立即接续；过渡期间热区点击 / 滚轮照常；竖排书只翻不播；reduced-motion 不播；不支持 View Transitions 的老 WebView2 自动回落 v3.1.8 路径
 - **发布者 / 作者信息**：`bundle.publisher` 与 Cargo `authors` 设为 qcb，程序描述不再是模板占位文字（identifier 不变）
 - 技术：回归工具 `tools/cdp/verify-turn.mjs`（合成测试书 + 暂停动画定位进度截图，28 场景）与 `make-synth-epub.mjs`；vitest 53 文件 374 用例
+- **已知问题（发版后发现）**：安装器按「发布者」记住上次安装目录（`HKCU\Software\<发布者>\bookreading` 的默认值）。发布者变更后，装在非默认目录的旧安装升级时新版落到默认目录 `%LOCALAPPDATA%\bookreading`，旧目录文件与旧快捷方式不更新。数据目录不受影响。处置方案见开发计划第九节 R0，3.2.1 修
 
 ## v3.1.9 · 2026-11-25（设置浮窗 + 书库体检批量处理 + 二次打开插图修复）
 
