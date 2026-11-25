@@ -23,6 +23,7 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading HTTP_PROXY= HTTPS_PROXY= http_proxy
 CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 # 产物：$CARGO_TARGET_DIR/release/bundle/nsis/bookreading_<ver>_x64-setup.exe
 # 本地构建无 TAURI_SIGNING_PRIVATE_KEY 时 updater 签名步骤 exit 1——NSIS 包已产出，本地装验照用；.sig/latest.json 由 CI 出
+# 发版构建一律走 GitHub CI（tag 触发，见「发布流程」），不在本地构建——本机 C / F 盘空间紧张（用户 2026-11-25 裁定）；本地构建只用于安装版取证，且先看 Get-PSDrive C,F
 ```
 
 网络规则（本机实测）：cargo/npm/gh API 直连（unset 代理）；git push 直连失败用 `HTTPS_PROXY=http://127.0.0.1:7897` 重试；NSIS 下载与 GitHub 网页走代理。中文路径下 gh 的 glob 参数会炸（"no matches found"），换 ASCII 路径。PS 5.1 原生传参会吞参数里的英文双引号（git -m / gh --jq 都会炸——双引号内容换中文引号或不用）；gh run list 的 displayTitle 是提交信息，tag 触发的 run 按 headBranch==tag 过滤。
@@ -73,6 +74,7 @@ CARGO_TARGET_DIR=F:/cargo-target/bookreading npm run tauri build
 - **任何 cargo / tauri dev 都必须带 `CARGO_TARGET_DIR=F:/cargo-target/bookreading`**：漏了会编到仓库内 `src-tauri/target`（一次落了 10GB 垃圾，且撞 hashbrown rlib 冲突 exit 101）。清理该目录即可
 - **Radix Select（`WrSelect`）的选项值不能是空串**：不报错，触发器直接显示成一片空白。设置表里用空串表示"默认/根"的键（如 `wenku8.dest_shelf`），界面上要换成占位值、读写时互换
 - **CSS 容器查询量的是内容盒宽度**（扣掉容器自身 padding；滚动容器还要扣预留的滚动条槽）：设置浮窗的右面板 `.wr-settings-pane` 是容器，断点 600（设置行上下堆叠）/ 700（主题九宫格一行九个）。改断点后在分界两侧逐像素实测，别只靠推算
+- **翻页动画矩阵总开关 `TURN_FX_ENABLED`（`src/reader/epub/turnFx.ts`，v3.1.9 起为 false）**：GhostView 双容器路径 + 覆盖 / 纸页两个新效果带已知缺陷（根因见 `docs/开发计划-v3.2.md` V-1「已知缺陷」），关闭时翻页逻辑逐行等于 v3.1.8、设置选项恢复「无 / 淡入淡出 / 滑动」。**在动画阶段修完根因、逐帧截图验收之前不要改回 true**；用户明示过未经同意不改翻页动画与阅读器字体 / 主题 / 插图注入逻辑
 - **"切换内容时抖动"的通用解法**：容器尺寸固定 + 滚动容器 `scrollbar-gutter: stable`（内容有长有短时滚动条时有时无，可用宽度会跳一个滚动条宽）+ 导航项定高定宽、选中只换色。验证不能只看"没溢出"，要**把切换前后的坐标逐位比对**（`verify-settings.mjs` 的 stable 断言）。注意这条只适用于**内部滚动容器**；根元素 `html` 不要设（见 weread.css 顶部注释：外壳满窗高内部滚动，根元素从不出现滚动条，设了只会在窗口最右留一条 10px 根底色带，还会让居中弹窗偏左 5px）
 - **类级（prototype）补丁只对"之后的实例"生效——验收必须覆盖第二次**：`epubjsPatch` 在第一本书 `book.ready` 之后才装到类上，所以同一会话里第一本书永远走原版逻辑、第二本起才走补丁。2026-11-25 实锤：补丁改写 `replacements` 时把 manifest 相对 href 直接传给 `createUrl`（它要求书内绝对路径，内部会去掉首字符当压缩包内文件名查找），第二本书起 100 个资源全部替换失败、插图破损——这个 bug 从 v2.9.0 潜伏了 6 天，因为每次验收都只开第一本书。**给第三方库打补丁：先逐行对照原版做同样的前置处理；测试桩必须仿真真实查找口径**（当时的假 `createUrl` 来者不拒，把 bug 固化成了"通过"）。回归工具 `tools/cdp/reopen-images.mjs`
 - **dev 启动后白屏 ≠ 代码问题**：Vite 开发模式逐模块加载，启动瞬间若机器网络变动（网卡 / 代理 / TUN 切换），模块请求成批报 `ERR_NETWORK_CHANGED`，React 根本没挂载（`#root` 为空）。CDP 里 `Page.reload` 一下即可；先用 `tools/cdp/cdp-lib.mjs` 的 `c.logs` 看报错再下结论

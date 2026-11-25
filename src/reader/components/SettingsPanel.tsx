@@ -9,6 +9,7 @@ import { resetIframeFontCache } from "../epub/iframeFont";
 import { setTheme, THEME_SWATCHES, useTheme } from "../../ui/theme";
 import type { FontFamily, ReaderSettings } from "../settings/types";
 import { sliderCommitValue } from "../settings/normalize";
+import { effectivePageAnimation, visiblePageAnimations } from "../epub/turnFx";
 import { ttsVoiceLabel } from "../tts";
 
 /**
@@ -335,7 +336,7 @@ export default function SettingsPanel(props: {
         <select
           className="wr-select"
           aria-label="翻页动画"
-          value={v.pageAnimation}
+          value={effectivePageAnimation(v.pageAnimation)}
           disabled={scrolled}
           aria-disabled={scrolled}
           title={scrolled ? "滚动模式下不可用" : undefined}
@@ -347,11 +348,11 @@ export default function SettingsPanel(props: {
             }
           }}
         >
-          <option value="none">无</option>
-          <option value="slide">平移</option>
-          <option value="cover">覆盖</option>
-          <option value="fade">渐隐</option>
-          <option value="paper">纸页翻动</option>
+          {visiblePageAnimations().map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
         </select>
       </div>
 

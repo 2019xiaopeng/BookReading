@@ -46,7 +46,7 @@ import {
 } from "../reader/epub/reader";
 import { readerFontFaceCss } from "../reader/epub/iframeFont";
 import { tocLabelFor } from "../reader/epub/tocLabel";
-import { TURN_EFFECT_MS, runTurnAnimation } from "../reader/epub/turnFx";
+import { TURN_EFFECT_MS, TURN_FX_ENABLED, effectivePageAnimation, runTurnAnimation } from "../reader/epub/turnFx";
 import BookmarksPanel from "../reader/components/BookmarksPanel";
 import HighlightsPanel from "../reader/components/HighlightsPanel";
 import ImageLightbox from "../reader/components/ImageLightbox";
@@ -1438,10 +1438,13 @@ export default function ReaderPage() {
   // GhostView 就绪 → 双 live 叶片整幅动画（平移/覆盖/渐隐/纸页，零截图零克隆）；
   // 未就绪/降级 → 旧路径"先画完再微幅滑入"（2026-11-24 处方，覆盖/纸页回落到 fade 微幅）。
   const doAnimateTurn = useCallback(async (direction: "next" | "prev", token: number) => {
-    try {
-      await turnLockRef.current;
-    } catch {
-      // 上一轮异常不阻塞本次
+    // TURN_FX_ENABLED=false（v3.1.9）：整段翻页逻辑与 v3.1.8 逐行一致——不排队、不建 GhostView、不预热
+    if (TURN_FX_ENABLED) {
+      try {
+        await turnLockRef.current;
+      } catch {
+        // 上一轮异常不阻塞本次
+      }
     }
     setSelection(null);
     setNoteDraft(null);
@@ -1466,7 +1469,7 @@ export default function ReaderPage() {
         logFrontend(`reader: turn failed ${direction} ${String(e)}`);
       }
     };
-    const anim = settingsRef.current.pageAnimation;
+    const anim = effectivePageAnimation(settingsRef.current.pageAnimation);
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const k = settingsRef.current.turnSpeedMs / 260;
 
@@ -1485,8 +1488,8 @@ export default function ReaderPage() {
       return;
     }
 
-    // 2. GhostView 双容器路径（slide/cover/fade/paper）
-    if (anim === "slide" || anim === "cover" || anim === "fade" || anim === "paper") {
+    // 2. GhostView 双容器路径（slide/cover/fade/paper）——仅在翻页矩阵开启时走
+    if (TURN_FX_ENABLED && (anim === "slide" || anim === "cover" || anim === "fade" || anim === "paper")) {
       const dir = direction === "next" ? 1 : -1;
       const ghostEl = await ctrl.prepareTurnView(dir, 450);
       if (token !== turnTokenRef.current) {
@@ -1560,7 +1563,7 @@ export default function ReaderPage() {
       }, Math.round(180 * k) + 50);
     }
     // 兜底路径同样预热（冷构建 450ms 内没就绪 → 本轮微幅；预热完成后下一轮起走 ghost 全幅动画）
-    void ctrl.prepareTurnView(1).catch(() => {});
+    if (TURN_FX_ENABLED) void ctrl.prepareTurnView(1).catch(() => {});
   }, []);
 
   const animateTurn = useCallback((direction: "next" | "prev") => {

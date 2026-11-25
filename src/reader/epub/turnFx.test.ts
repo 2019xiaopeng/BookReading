@@ -1,5 +1,41 @@
 import { describe, expect, test } from "vitest";
-import { TURN_EFFECT_MS, turnFrame } from "./turnFx";
+
+import type { PageAnimation } from "../settings/types";
+import {
+  TURN_EFFECT_MS,
+  TURN_FX_ENABLED,
+  effectivePageAnimation,
+  turnFrame,
+  visiblePageAnimations,
+} from "./turnFx";
+
+describe("翻页矩阵总开关 TURN_FX_ENABLED（v3.1.9 发版态=关）", () => {
+  const ALL: PageAnimation[] = ["none", "slide", "cover", "fade", "paper"];
+
+  test("关闭：选项恢复 v3.1.8 的三项与文案；已存的 cover / paper 按渐隐生效（下拉显示与实际翻页一致）", () => {
+    if (TURN_FX_ENABLED) return;
+    expect(visiblePageAnimations()).toEqual([
+      { value: "none", label: "无" },
+      { value: "fade", label: "淡入淡出" },
+      { value: "slide", label: "滑动" },
+    ]);
+    expect(effectivePageAnimation("cover")).toBe("fade");
+    expect(effectivePageAnimation("paper")).toBe("fade");
+    expect(effectivePageAnimation("slide")).toBe("slide");
+    expect(effectivePageAnimation("none")).toBe("none");
+  });
+
+  test("打开：五项齐全、存储值原样生效", () => {
+    if (!TURN_FX_ENABLED) return;
+    expect(visiblePageAnimations().map((o) => o.value)).toEqual(ALL);
+    for (const a of ALL) expect(effectivePageAnimation(a)).toBe(a);
+  });
+
+  test("无论开关如何：每个存储值的生效值都在可见选项里（两处设置面板的下拉不会显示空白）", () => {
+    const visible = visiblePageAnimations().map((o) => o.value);
+    for (const a of ALL) expect(visible).toContain(effectivePageAnimation(a));
+  });
+});
 
 const W = 1000;
 const H = 800;

@@ -11,15 +11,9 @@ import { normalizePageAnimation, normalizeTtsRate } from "../reader/settings/nor
 import type { FontFamily, ReaderSettings } from "../reader/settings/types";
 import type { ImageFit, ImagePageAnimation, ImagePageLayout, ImageReaderSettings } from "../reader/image/layout";
 import { readerSettingsFromMap, readerSettingsToMap, visualSettingsFromMap } from "./readerDefaults";
+import { effectivePageAnimation, visiblePageAnimations } from "../reader/epub/turnFx";
 import { SectionHeader, Seg, type SettingsCtx, SettingsGroup, SettingsRow, Slider } from "./controls";
 
-const PAGE_ANIMATION_OPTIONS = [
-  { value: "none", label: "无" },
-  { value: "slide", label: "平移" },
-  { value: "cover", label: "覆盖" },
-  { value: "fade", label: "渐隐" },
-  { value: "paper", label: "纸页翻动" },
-];
 const LAYOUT_OPTIONS = [
   { value: "auto", label: "自动" },
   { value: "single", label: "单栏" },
@@ -103,9 +97,9 @@ export function ReadingSection({ ctx }: { ctx: SettingsCtx }) {
         <SettingsRow label="翻页动画" hint={scrolled ? SCROLLED_HINT : undefined}>
           <WrSelect
             ariaLabel="翻页动画"
-            value={reader.pageAnimation}
+            value={effectivePageAnimation(reader.pageAnimation)}
             disabled={scrolled}
-            options={PAGE_ANIMATION_OPTIONS}
+            options={visiblePageAnimations()}
             onChange={(v) => update({ pageAnimation: normalizePageAnimation(v) })}
           />
         </SettingsRow>

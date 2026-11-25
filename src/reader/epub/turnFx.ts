@@ -1,6 +1,42 @@
 // V-1 翻页动画矩阵（对标 Wenku8_Flutter lib/reader_sheet_motion.dart，2026-11-25 源码拆解）：
 // 单一 progress 纯函数 + 效果=纯画法差异；叶片=宿主容器（对 div 施 transform/clip-path，
 // iframe 整体参与 GPU 合成，内部零重排零截图）。数值全为相对页宽，包络 e=sin(πt)（中段最大两端归零）。
+import type { PageAnimation } from "../settings/types";
+
+/**
+ * 翻页动画矩阵总开关。
+ * v3.1.9 发版时关闭（用户 2026-11-25 裁定 B）：GhostView 双容器路径与覆盖 / 纸页两个新效果带已知缺陷
+ * （新叶嵌在旧叶里、夜间底色半透明、兜底路径混入——见 docs/开发计划-v3.2.md V-1「已知缺陷」），
+ * 关闭后翻页与设置选项完全回到 v3.1.8 的行为。
+ * shortcut: 关闭期间已存的 cover / paper 值按渐隐处理且不在选项里显示；动画阶段修完三处根因、逐帧验收后置 true
+ */
+export const TURN_FX_ENABLED = false;
+
+const MATRIX_OPTIONS: { value: PageAnimation; label: string }[] = [
+  { value: "none", label: "无" },
+  { value: "slide", label: "平移" },
+  { value: "cover", label: "覆盖" },
+  { value: "fade", label: "渐隐" },
+  { value: "paper", label: "纸页翻动" },
+];
+
+/** v3.1.8 的选项与文案（矩阵关闭时原样恢复） */
+const LEGACY_OPTIONS: { value: PageAnimation; label: string }[] = [
+  { value: "none", label: "无" },
+  { value: "fade", label: "淡入淡出" },
+  { value: "slide", label: "滑动" },
+];
+
+/** 当前开关下设置面板应显示的翻页动画选项（阅读页抽屉与设置浮窗共用同一份） */
+export function visiblePageAnimations(): { value: PageAnimation; label: string }[] {
+  return TURN_FX_ENABLED ? MATRIX_OPTIONS : LEGACY_OPTIONS;
+}
+
+/** 存储值在当前开关下的生效值：矩阵关闭时 cover / paper 按 fade 处理，保证下拉显示与实际翻页一致 */
+export function effectivePageAnimation(stored: PageAnimation): PageAnimation {
+  if (TURN_FX_ENABLED) return stored;
+  return stored === "cover" || stored === "paper" ? "fade" : stored;
+}
 
 export type TurnEffect = "slide" | "cover" | "fade" | "paper";
 

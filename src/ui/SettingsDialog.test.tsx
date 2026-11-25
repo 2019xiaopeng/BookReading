@@ -44,6 +44,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(() => Promise.resol
 
 import { setTheme } from "./theme";
 import SettingsDialog from "./SettingsDialog";
+import { effectivePageAnimation, visiblePageAnimations } from "../reader/epub/turnFx";
 import type { SettingsSectionId } from "../settings/sections";
 
 const SETTINGS = {
@@ -234,7 +235,9 @@ describe("SettingsDialog（V-3 设置浮窗）", () => {
 
   test("阅读：显示已存默认值；切到上下滚动后一次批量写全部 15 个全局键，翻页类项置灰", async () => {
     mount("reading");
-    expect((await within(dlg()).findByRole("combobox", { name: "翻页动画" })).textContent).toContain("纸页翻动");
+    // 选项与显示值跟随翻页矩阵总开关：矩阵关闭时已存的 paper 按渐隐显示（文案=v3.1.8 的「淡入淡出」）
+    const expected = visiblePageAnimations().find((o) => o.value === effectivePageAnimation("paper"))?.label ?? "";
+    expect((await within(dlg()).findByRole("combobox", { name: "翻页动画" })).textContent).toContain(expected);
     expect((within(dlg()).getByRole("slider", { name: "字号" }) as HTMLInputElement).value).toBe("125");
     fireEvent.click(within(dlg()).getByRole("button", { name: "上下滚动" }));
     await waitFor(() => expect(slot.setSettings).toHaveBeenCalledTimes(1));
