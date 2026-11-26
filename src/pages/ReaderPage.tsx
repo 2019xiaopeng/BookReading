@@ -405,6 +405,35 @@ const ReaderFooter = memo(function ReaderFooter(props: {
   );
 });
 
+/**
+ * 进书加载：纸面中央一枚不断翻动的书页 + 文案。绝对定位浮在纸面上，不占布局（原先的加载块在文档流里，
+ * 换成正文时纸面尺寸会跳）；内容就绪后加载层淡出、正文同步淡入，不再是「加载块 → 正文」硬切。
+ * 收尾动画结束后才卸载；「减少动态效果」下没有 animationend，靠 CSS 直接隐藏 .is-done。
+ */
+function BookLoader({ show, text, sub }: { show: boolean; text: string; sub?: string }) {
+  const [mounted, setMounted] = useState(show);
+  useEffect(() => {
+    if (show) setMounted(true);
+  }, [show]);
+  if (!mounted) return null;
+  return (
+    <div
+      className={`wr-book-loading${show ? "" : " is-done"}`}
+      role="status"
+      aria-live="polite"
+      onAnimationEnd={(e) => {
+        if (!show && e.animationName === "wr-book-loading-out") setMounted(false);
+      }}
+    >
+      <div className="wr-book-loading-mark" aria-hidden="true">
+        <i />
+      </div>
+      <div className="wr-book-loading-text">{text}</div>
+      {sub ? <div className="wr-state-sub">{sub}</div> : null}
+    </div>
+  );
+}
+
 export default function ReaderPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -437,6 +466,21 @@ export default function ReaderPage() {
   const [bookGone, setBookGone] = useState(false);
   // B-2 大书守卫：>64MB 且 .opt 缺失 → "生成优化副本"占位进度（done/total），完成自动重试开书
   const [optProgress, setOptProgress] = useState<{ done: number; total: number } | null>(null);
+  // 进书正文入场：加载结束的那一刻给叶片挂一段淡入（与加载层的淡出交叉），播完撤类
+  const [bookEnter, setBookEnter] = useState(false);
+  const bookWasLoadingRef = useRef(false);
+  useEffect(() => {
+    if (readerError) return;
+    if (!book || tocLoading || optProgress) {
+      bookWasLoadingRef.current = true;
+      return;
+    }
+    if (!bookWasLoadingRef.current) return;
+    bookWasLoadingRef.current = false;
+    setBookEnter(true);
+    const t = window.setTimeout(() => setBookEnter(false), 700);
+    return () => window.clearTimeout(t);
+  }, [book, tocLoading, optProgress, readerError]);
   // P-1：iframe 内 img 点击 → 全屏 Lightbox（src=当前 blob，rendition 存续期内有效，关闭不 revoke）
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
   // V-1：原书音视频清单（非空才显示媒体 tab；非 epub 后端返回空数组）
@@ -2234,19 +2278,17 @@ export default function ReaderPage() {
                     </div>
                   </div>
                 ) : !readerError && (!book || tocLoading || optProgress) ? (
-                  <div className="wr-state wr-state-loading" style={{ margin: "auto" }}>
-                    <span className="wr-state-icon" aria-hidden="true">
-                      <IconRefresh />
-                    </span>
-                    <div className="wr-state-title">
-                      {optProgress
+                  <BookLoader
+                    show={!book || tocLoading || !!optProgress}
+                    text={
+                      optProgress
                         ? `正在生成优化副本…${optProgress.total > 0 ? `（${optProgress.done}/${optProgress.total}）` : ""}`
                         : heavyEpub
                           ? "正在加载大部头…"
-                          : "加载中"}
-                    </div>
-                    {optProgress ? <div className="wr-state-sub">大书首次打开需要几分钟，完成后自动进入</div> : null}
-                  </div>
+                          : "正在翻开…"
+                    }
+                    sub={optProgress ? "大书首次打开需要几分钟，完成后自动进入" : undefined}
+                  />
                 ) : null}
                 <div
                   className={
@@ -2262,7 +2304,7 @@ export default function ReaderPage() {
                 >
                   {bgUrl ? <div className="wr-reader-bg-veil" aria-hidden="true" style={{ opacity: bgVeil / 100 }} /> : null}
                   {/* V-1 叶片：正文 + 页码徽标，翻页时作为整体进快照 */}
-                  <div className="wr-reader-leaf" ref={leafRef}>
+                  <div className={`wr-reader-leaf${bookEnter ? " wr-reader-enter" : ""}`} ref={leafRef}>
                     <div ref={containerRef} style={{ height: "100%", position: "relative" }} />
                     {/* B12 页码徽标：locations 就绪显示全书"位置页" X / Y（1024 字/页估算；双页两角 X 与 X+1 近似）；未就绪回退章内页码 */}
                     {locPage ? (

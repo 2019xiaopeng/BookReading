@@ -41,8 +41,8 @@ export function AppLayout() {
       {...meta}
       intro={intro}
       onIntroEnd={(e) => {
-        // 主栏那段带 80ms 延迟、最后结束；侧栏先结束时不能撤类，否则主栏会从半透明直接跳到不透明
-        if (e.animationName === "wr-intro-in" && (e.target as HTMLElement).classList.contains("wr-main")) setIntro(false);
+        // animationend 会从子孙冒泡上来：只认开场动画自己、且 target 是壳体（不是别的元素上的同名事件）
+        if (e.animationName === "wr-intro-in" && (e.target as HTMLElement).classList.contains("wr-shell-body")) setIntro(false);
       }}
     >
       <Outlet />

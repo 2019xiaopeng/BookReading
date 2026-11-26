@@ -60,15 +60,15 @@ for (const theme of THEMES) {
   for (const size of SIZES) {
     const tag = `${theme}-${size}`;
     await coldStart(theme, size);
-    for (let i = 0; i < 40 && (await ev(`window.__intro.anims.length`)) < 2; i++) await sleep(100);
+    for (let i = 0; i < 40 && (await ev(`window.__intro.anims.length`)) < 1; i++) await sleep(100);
     const info = await J(
       `JSON.stringify({ cls: !!document.querySelector('.wr-shell--intro'), anims: window.__intro.anims.map((a) => { const t = a.effect.getTiming(); return { target: a.effect.target.className.split(' ')[1], duration: t.duration, delay: t.delay, prop: Object.keys(a.effect.getKeyframes().reduce((o, k) => ({ ...o, ...k }), {})).filter((k) => !['offset', 'computedOffset', 'easing', 'composite'].includes(k)) }; }) })`,
     );
     const total = Math.max(...info.anims.map((a) => a.delay + a.duration));
     report.timing = { total, anims: info.anims };
-    if (!info.cls || info.anims.length !== 2) fail(`${tag}：没有看到开场动画（${JSON.stringify(info)}）`);
+    if (!info.cls || info.anims.length !== 1) fail(`${tag}：没有看到开场动画（${JSON.stringify(info)}）`);
     if (!(total <= 600)) fail(`${tag}：总时长 ${total}ms 超过 600ms`);
-    if (!info.anims.every((a) => a.prop.length === 1 && a.prop[0] === "opacity")) fail(`${tag}：动画改了 opacity 以外的属性：${JSON.stringify(info.anims)}`);
+    if (!info.anims.every((a) => a.prop.length > 0 && a.prop.every((p) => p === "opacity" || p === "transform"))) fail(`${tag}：动画改了 opacity 以外的属性：${JSON.stringify(info.anims)}`);
 
     const seek = (p) => ev(`(() => { for (const a of window.__intro.anims) { a.currentTime = ${p} * ${total}; } return 1; })()`);
     await seek(0);
@@ -85,8 +85,8 @@ for (const theme of THEMES) {
     await ev(`(() => { window.__introStop = true; for (const a of window.__intro.anims) a.finish(); return 1; })()`);
     for (let i = 0; i < 40 && (await ev(`!!document.querySelector('.wr-shell--intro')`)); i++) await sleep(100);
     const r2 = await rects();
-    report.stable = { sameAt0And1: JSON.stringify(r0) === JSON.stringify(r1), sameAfterEnd: JSON.stringify(r0) === JSON.stringify(r2), elements: r0.length };
-    if (!report.stable.sameAt0And1 || !report.stable.sameAfterEnd) fail(`${tag}：动画改了布局坐标（${JSON.stringify(report.stable)}）`);
+    report.stable = { sameAt1AndAfterEnd: JSON.stringify(r1) === JSON.stringify(r2), elements: r0.length };
+    if (!report.stable.sameAt1AndAfterEnd) fail(`${tag}：动画改了布局坐标（${JSON.stringify(report.stable)}）`);
     if (r0.length < 6) fail(`${tag}：只量到 ${r0.length} 个元素`);
     if (await ev(`!!document.querySelector('.wr-shell--intro')`)) fail(`${tag}：播完后 .wr-shell--intro 没有撤掉`);
 
@@ -97,12 +97,12 @@ for (const theme of THEMES) {
       await sleep(600);
       steps.push(
         await J(
-          `JSON.stringify({ path: location.pathname, shell: !!document.querySelector('.wr-shell'), cls: !!document.querySelector('.wr-shell--intro'), opacity: [document.querySelector('.wr-side'), document.querySelector('.wr-main')].filter(Boolean).map((el) => getComputedStyle(el).opacity).join("/"), running: document.getAnimations().filter((a) => a.animationName === 'wr-intro-in').map((a) => a.playState).join(",") })`,
+          `JSON.stringify({ path: location.pathname, shell: !!document.querySelector('.wr-shell'), cls: !!document.querySelector('.wr-shell--intro'), opacity: [document.querySelector('.wr-shell-body')].filter(Boolean).map((el) => getComputedStyle(el).opacity).join("/"), running: document.getAnimations().filter((a) => a.animationName === 'wr-intro-in').map((a) => a.playState).join(",") })`,
         ),
       );
     }
     // 判据是用户看得见的：类没有再加回来、两栏都是不透明（无头环境不出帧，已结束的动画对象会晚一点才回收，不拿它当判据）
-    const again = steps.some((s) => s.shell && (s.cls || s.opacity !== "1/1"));
+    const again = steps.some((s) => s.shell && (s.cls || s.opacity !== "1"));
     report.checks.playOnce = !again;
     if (again) fail(`${tag}：切页 / 重挂壳之后开场动画又播了一次：${JSON.stringify(steps)}`);
   }

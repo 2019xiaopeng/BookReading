@@ -47,7 +47,7 @@ const fail = (scenario, msg) => {
 };
 
 /** 打开合成书到阅读页（每次重设假设置：效果 / 主题 / 速度 / 起始位置）。visual = 视觉书（漫画 / PDF，数据在页面里现造） */
-async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [1350, 801], state = null, epub = "temp/synth-turn.epub", readingMode = "paginated", visual = null, corruptOpt = false }) {
+async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [1350, 801], state = null, epub = "temp/synth-turn.epub", readingMode = "paginated", visual = null, corruptOpt = false, slowMs = 0, noWait = false }) {
   const epubB64 = epubB64Of(epub);
   if (scriptId) await c.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: scriptId });
   const mock = JSON.parse(JSON.stringify(MOCK));
@@ -83,7 +83,7 @@ async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [13
     "    switch (cmd) {\n" +
     `      case "get_book": return a.bookId === "${id}" ? { ...M.data.books[0] } : null;\n` +
     // corruptOpt：假装库里有一个被截断的 .opt.epub（R1 取证）
-    `      case "read_library_file":${corruptOpt ? ' if (String(a.rel).endsWith(".opt.epub")) return epub.subarray(0, Math.floor(epub.length * 0.5));' : ""} return ${visual?.kind === "pdf" ? `window.__SYN.pdf(${PAGES})` : "epub"};\n` +
+    `      case "read_library_file":${slowMs ? ` await new Promise((r) => setTimeout(r, ${slowMs}));` : ""}${corruptOpt ? ' if (String(a.rel).endsWith(".opt.epub")) return epub.subarray(0, Math.floor(epub.length * 0.5));' : ""} return ${visual?.kind === "pdf" ? `window.__SYN.pdf(${PAGES})` : "epub"};\n` +
     `      case "list_image_pages": return Array.from({ length: ${PAGES} }, (_, i) => String(i + 1).padStart(3, "0") + ".png");\n` +
     `      case "list_image_page_meta": return Array.from({ length: ${PAGES} }, (_, i) => (i % 2 ? { width: 800, height: 450 } : { width: 400, height: 600 }));\n` +
     '      case "read_image_page": return window.__SYN.png(a.index);\n' +
@@ -128,6 +128,7 @@ async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [13
   // 同一本书重开时地址不变：以 timeOrigin 换代为准，免得在还没被替换的旧文档上判成就绪
   const origin = await ev(`performance.timeOrigin`).catch(() => 0);
   await c.send("Page.navigate", { url: `http://localhost:14200/read/${id}` });
+  if (noWait) return; // load 场景：加载态就要开始拍
   for (let i = 0; i < 120; i++) {
     const ok = await ev(`performance.timeOrigin !== ${origin} && ${ready}`).catch(() => false);
     if (ok) break;
@@ -861,6 +862,42 @@ async function doLoc() {
   report.scenarios[name] = { normal, longChapter: { approxPages: pages, first300: longHead, whole: longAll }, errors: errs };
 }
 
+// ───── load：进书加载——加载层不占布局，内容到了与它交叉淡入 ─────
+async function doLoad() {
+  const name = "load";
+  const files = [];
+  const paper = () => J(`JSON.stringify((() => { const p = document.querySelector(".wr-reader-paper"); if (!p) return null; const b = p.getBoundingClientRect(); return [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)]; })())`);
+  for (const theme of ["ink", "dark"]) {
+    await open({ effect: "none", theme, slowMs: 1600, noWait: true });
+    for (let i = 0; i < 150 && !(await ev(`!!document.querySelector(".wr-book-loading")`).catch(() => false)); i++) await sleep(100);
+    await sleep(450); // 加载层自己的淡入走完
+    const p0 = await paper();
+    await c.screenshot(`${OUT}/load-${theme}-loading.png`);
+    files.push([`load-${theme}-loading`, `${theme} 加载中`]);
+    for (let i = 0; i < 120; i++) {
+      if (await ev(`!!(document.querySelector(".wr-reader-leaf iframe") && document.querySelector(".wr-reader-leaf .epub-view"))`).catch(() => false)) break;
+      await sleep(100);
+    }
+    // 交叉淡入的中段与终态
+    await sleep(180);
+    const p1 = await paper();
+    const mid = await J(`JSON.stringify({ loader: !!document.querySelector(".wr-book-loading"), loaderOpacity: document.querySelector(".wr-book-loading") ? getComputedStyle(document.querySelector(".wr-book-loading")).opacity : null, enter: !!document.querySelector(".wr-reader-enter"), leafOpacity: getComputedStyle(document.querySelector(".wr-reader-leaf")).opacity })`);
+    await c.screenshot(`${OUT}/load-${theme}-enter.png`);
+    await sleep(900);
+    const end = await J(`JSON.stringify({ loader: !!document.querySelector(".wr-book-loading"), enter: !!document.querySelector(".wr-reader-enter"), leafOpacity: getComputedStyle(document.querySelector(".wr-reader-leaf")).opacity })`);
+    const p2 = await paper();
+    await c.screenshot(`${OUT}/load-${theme}-done.png`);
+    files.push([`load-${theme}-enter`, `${theme} 交叉淡入`], [`load-${theme}-done`, `${theme} 完成`]);
+    want(name, !!p0 && JSON.stringify(p0) === JSON.stringify(p1) && JSON.stringify(p0) === JSON.stringify(p2), `${theme}：加载前后纸面尺寸变了：${JSON.stringify({ p0, p1, p2 })}`);
+    want(name, mid.enter && Number(mid.leafOpacity) > 0, `${theme}：没有拍到正文入场：${JSON.stringify(mid)}`);
+    want(name, !end.loader && !end.enter && end.leafOpacity === "1", `${theme}：收尾后还有残留：${JSON.stringify(end)}`);
+    const errs = errors();
+    want(name, errs.length === 0, `控制台报错：${errs.slice(0, 3).join(" | ")}`);
+  }
+  report.scenarios[name] = { files };
+  await buildSheet("load", files);
+}
+
 const PLAN = {
   long: doLong,
   legacy: doLegacy,
@@ -868,6 +905,7 @@ const PLAN = {
   chrome: doChrome,
   edge: doEdge,
   life: doLife,
+  load: doLoad,
   fold: doFold,
   loc: doLoc,
   sheet: async () => {
@@ -906,7 +944,7 @@ const PLAN = {
   reduced: doReduced,
 };
 
-const order = ["sheet", "cross", "rapid", "input", "end", "edge", "life", "fold", "loc", "reduced", "spread", "figures", "chrome", "legacy", "long"];
+const order = ["sheet", "cross", "rapid", "input", "end", "edge", "life", "load", "fold", "loc", "reduced", "spread", "figures", "chrome", "legacy", "long"];
 for (const id of order) {
   if (only.length && !only.some((o) => id.includes(o))) continue;
   try {

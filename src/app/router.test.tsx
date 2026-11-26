@@ -134,7 +134,7 @@ describe("V-3 开场动画（只播一次）", () => {
     </MemoryRouter>
   );
 
-  test("进程内第一次挂载壳才带 .wr-shell--intro；主栏那段播完才撤类；壳重挂不重播", async () => {
+  test("进程内第一次挂载壳才带 .wr-shell--intro；开场动画自己的 animationend 才撤类；壳重挂不重播", async () => {
     introState.pending = true;
     render(tree);
     expect(hasIntro()).toBe(true);
@@ -155,13 +155,13 @@ describe("V-3 开场动画（只播一次）", () => {
     expect(hasIntro()).toBe(false);
   });
 
-  test("主栏那段开场动画结束 → 撤类", async () => {
+  test("壳体那段开场动画结束 → 撤类", async () => {
     introState.pending = true;
     render(tree);
     expect(hasIntro()).toBe(true);
     const e = new Event("animationend", { bubbles: true });
     Object.defineProperty(e, "animationName", { value: "wr-intro-in" });
-    document.querySelector(".wr-main")!.dispatchEvent(e);
+    document.querySelector(".wr-shell-body")!.dispatchEvent(e);
     await waitFor(() => expect(hasIntro()).toBe(false));
   });
 });
