@@ -8,18 +8,20 @@ function centered(el) {
 
 /** V-13 用：视觉书的合成数据——图片页在页面里用 canvas 现画成 PNG；PDF 是手写的最小 PDF（xref 偏移留空，pdf.js 会重建） */
 window.__SYN = {
+  /** 页面尺寸竖横交替（偶数页 400×600、奇数页 800×450）：fold 场景要用「竖页翻向横页」看覆盖层底色 */
   async png(i) {
+    const wide = i % 2 === 1;
     const c = document.createElement("canvas");
-    c.width = 400;
-    c.height = 600;
+    c.width = wide ? 800 : 400;
+    c.height = wide ? 450 : 600;
     const g = c.getContext("2d");
     g.fillStyle = ["#f3e9d2", "#dfe9f3", "#e9f3e1", "#f3dfe6", "#ececec"][i % 5];
-    g.fillRect(0, 0, 400, 600);
+    g.fillRect(0, 0, c.width, c.height);
     g.fillStyle = "#2b2b28";
     g.font = "bold 160px sans-serif";
     g.textAlign = "center";
     g.textBaseline = "middle";
-    g.fillText(String(i + 1), 200, 300);
+    g.fillText(String(i + 1), c.width / 2, c.height / 2);
     const blob = await new Promise((r) => c.toBlob(r, "image/png"));
     return new Uint8Array(await blob.arrayBuffer());
   },
@@ -47,6 +49,7 @@ window.__VT = {
     window.__anims.length = 0;
   },
   key(k) {
+    this.lastKeyAt = Math.round(performance.now());
     for (const type of ["keydown", "keyup"]) {
       window.dispatchEvent(new KeyboardEvent(type, { key: k, bubbles: true, cancelable: true }));
     }
@@ -103,14 +106,46 @@ window.__VT = {
     }
     return window.__anims.map((x) => x.pseudo);
   },
-  cancel() {
-    for (const x of [...window.__anims, ...window.__hintAnims]) {
+  /** 取消已记录的动画：翻页的全部；提示胶囊只取消前 hintLimit 条——截图期间新冒出来的淡出动画不能动
+   *  （取消了它，元素就停在透明度 1，看起来像「没有淡出」） */
+  cancel(hintLimit = Infinity) {
+    for (const x of [...window.__anims, ...(window.__hintAnims ?? []).slice(0, hintLimit)]) {
       try {
         x.a.cancel();
       } catch (e) {
         // 已结束
       }
     }
+  },
+  /** E6：按 relocated 的算法（TreeWalker 从 body 开头逐文本节点取矩形）走前 limit 个节点，返回 { nodes, ms } */
+  cfiWalk(limit) {
+    const doc = document.querySelector(".wr-reader-leaf iframe")?.contentDocument;
+    if (!doc?.body) return null;
+    const t0 = performance.now();
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    const range = doc.createRange();
+    let n = 0;
+    for (let node = walker.nextNode(); node && n < limit; node = walker.nextNode(), n++) {
+      range.selectNodeContents(node);
+      range.getBoundingClientRect();
+    }
+    return { nodes: n, ms: +(performance.now() - t0).toFixed(2) };
+  },
+  /** 取截图上一点的像素（dataUrl=CDP 截图）：E10 判「新页有没有从旧页四周透出来」用 */
+  pixel(dataUrl, x, y) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const g = document.createElement("canvas").getContext("2d");
+        g.canvas.width = img.width;
+        g.canvas.height = img.height;
+        g.drawImage(img, 0, 0);
+        const d = g.getImageData(x, y, 1, 1).data;
+        resolve([d[0], d[1], d[2]]);
+      };
+      img.onerror = () => resolve(null);
+      img.src = dataUrl;
+    });
   },
   async waitIdle(timeout) {
     const t0 = performance.now();

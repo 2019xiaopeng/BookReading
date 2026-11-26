@@ -5,7 +5,7 @@ import type { Book, Shelf, Tag } from "../tauri/invoke";
 import {
   computeBookStats,
   createTag,
-  deleteBook,
+  deleteBooks,
   exportAnnotations,
   listReadingTimes,
   revealBookLocation,
@@ -403,7 +403,9 @@ export default function BookDetailsDialog({
           <button className="wr-btn wr-btn-primary" disabled={saving || !title.trim() || !dirty} onClick={() => void onSave()}>
             {saving ? "保存中…" : "保存"}
           </button>
-          {/* N-2 详情页删除：与 ⋯ 菜单同款软删入回收站 */}
+          {/* N-2 详情页删除：与 ⋯ 菜单同款软删入回收站。
+              2026-11-26 审计修复：此前这里调的是 delete_book——文案说「移入回收站」，实际把文件和记录一并硬删；
+              delete_book 已从后端移除，不会再被误用 */}
           <button
             className="wr-btn wr-btn-danger"
             disabled={saving}
@@ -412,7 +414,7 @@ export default function BookDetailsDialog({
                 const ok = await showConfirm("删除", `把《${b.title ?? "未命名"}》移入回收站？`, { danger: true, confirmText: "移入回收站" });
                 if (!ok) return;
                 try {
-                  await deleteBook(b.id);
+                  await deleteBooks([b.id]);
                   onChanged();
                   onClose();
                 } catch (e) {

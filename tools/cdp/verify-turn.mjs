@@ -2,10 +2,12 @@
 // 前置：① node tools/cdp/make-synth-epub.mjs（生成 temp/synth-turn.epub，合成测试书）
 //       ② Vite dev server 在 14200（npx vite）
 //       ③ 无头 Chrome 在 9333（chrome --headless=new --remote-debugging-port=9333 --user-data-dir=<F 盘临时目录>）
-// 用法：node tools/cdp/verify-turn.mjs [场景片段，逗号分隔：sheet/cross/rapid/input/end/edge/reduced/spread]
+// 用法：node tools/cdp/verify-turn.mjs [场景片段，逗号分隔：sheet/cross/rapid/input/end/edge/life/fold/loc/reduced/spread]
 // 手法：合成书 + Tauri IPC 假后端 → 应用内真实翻页 → **暂停伪元素动画并定位到指定进度后截图**（确定性逐帧）→ 拼成对照表；
 //       每帧做像素统计（偏离中位亮度的像素占比）判空白；跨章更新期间连拍；连按 / 输入 / 书末 / reduced-motion / 双页各一组断言。
-//       edge = V-13 首/末页轻提示（EPUB 分页与滚动、漫画、PDF：合成图片与最小 PDF 在页面里现造）。
+//       edge = V-13 首/末页轻提示（EPUB 分页与滚动、漫画、PDF：合成图片与最小 PDF 在页面里现造）；
+//       life = 关书收尾（主题样式表不重复、blob 释放、坏 .opt 回落原书、滚动模式章首翻屏）；
+//       fold = 折页转场的覆盖层底色（夜间主题）；loc = 长章章首 / 章末 relocated 耗时。
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { connect, sleep } from "./cdp-lib.mjs";
 import { MOCK, ipcShimSource } from "./ipc-shim.mjs";
@@ -45,7 +47,7 @@ const fail = (scenario, msg) => {
 };
 
 /** 打开合成书到阅读页（每次重设假设置：效果 / 主题 / 速度 / 起始位置）。visual = 视觉书（漫画 / PDF，数据在页面里现造） */
-async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [1350, 801], state = null, epub = "temp/synth-turn.epub", readingMode = "paginated", visual = null }) {
+async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [1350, 801], state = null, epub = "temp/synth-turn.epub", readingMode = "paginated", visual = null, corruptOpt = false }) {
   const epubB64 = epubB64Of(epub);
   if (scriptId) await c.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: scriptId });
   const mock = JSON.parse(JSON.stringify(MOCK));
@@ -53,7 +55,12 @@ async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [13
   const id = visual ? `synth-${visual.kind}` : "synth-turn";
   if (visual) {
     const key = visual.kind === "images" ? "image_reader_settings" : "pdf_reader_settings";
-    mock.settings[key] = JSON.stringify({ ...JSON.parse(mock.settings[key]), mode: visual.mode, layout: "single" });
+    mock.settings[key] = JSON.stringify({
+      ...JSON.parse(mock.settings[key]),
+      mode: visual.mode,
+      layout: "single",
+      ...(visual.pageAnimation ? { pageAnimation: visual.pageAnimation } : {}),
+    });
   }
   mock.books = [
     visual
@@ -69,13 +76,16 @@ async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [13
     `  const epub = Uint8Array.from(atob(${JSON.stringify(epubB64)}), (ch) => ch.charCodeAt(0));\n` +
     `  M.highlights = ${JSON.stringify(HIGHLIGHTS)};\n` +
     `  M.state = ${state ? JSON.stringify(state) : "null"};\n` +
+    "  M.logs = [];\n" +
     "  I.invoke = async (cmd, args = {}) => {\n" +
     "    const a = args;\n" +
+    "    if (cmd === 'append_frontend_log') M.logs.push(String(a.line ?? a.message ?? JSON.stringify(args)));\n" +
     "    switch (cmd) {\n" +
     `      case "get_book": return a.bookId === "${id}" ? { ...M.data.books[0] } : null;\n` +
-    `      case "read_library_file": return ${visual?.kind === "pdf" ? `window.__SYN.pdf(${PAGES})` : "epub"};\n` +
+    // corruptOpt：假装库里有一个被截断的 .opt.epub（R1 取证）
+    `      case "read_library_file":${corruptOpt ? ' if (String(a.rel).endsWith(".opt.epub")) return epub.subarray(0, Math.floor(epub.length * 0.5));' : ""} return ${visual?.kind === "pdf" ? `window.__SYN.pdf(${PAGES})` : "epub"};\n` +
     `      case "list_image_pages": return Array.from({ length: ${PAGES} }, (_, i) => String(i + 1).padStart(3, "0") + ".png");\n` +
-    `      case "list_image_page_meta": return Array.from({ length: ${PAGES} }, () => ({ width: 400, height: 600 }));\n` +
+    `      case "list_image_page_meta": return Array.from({ length: ${PAGES} }, (_, i) => (i % 2 ? { width: 800, height: 450 } : { width: 400, height: 600 }));\n` +
     '      case "read_image_page": return window.__SYN.png(a.index);\n' +
     '      case "get_reading_state": return M.state ? { ...M.state } : null;\n' +
     '      case "upsert_reading_state": M.state = { book_id: a.bookId, cfi: a.cfi, percent: a.percent, updated_at: 0 }; return null;\n' +
@@ -97,9 +107,15 @@ async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [13
     "  Element.prototype.animate = function (kf, opts) {\n" +
     "    const a = animate.call(this, kf, opts);\n" +
     "    if (opts && opts.pseudoElement) window.__anims.push({ a, pseudo: opts.pseudoElement, duration: opts.duration });\n" +
-    "    else if (opts && this.classList.contains('wr-toast--center')) window.__hintAnims.push({ a, duration: opts.duration });\n" +
+    "    else if (opts && this.classList.contains('wr-toast--center')) { window.__hintAnims.push({ a, duration: opts.duration }); (window.__hintLog ??= []).push({ t: Math.round(performance.now()), from: kf[0].opacity, to: kf[1].opacity }); }\n" +
     "    return a;\n" +
     "  };\n" +
+    "  // E1 取证：blob 地址台账——新建的入账、revoke 的销账（同一地址可能被 revoke 两次，计数会算错）\n" +
+    "  window.__blobs = { created: 0, live: new Set() };\n" +
+    "  const createObjectURL = URL.createObjectURL.bind(URL);\n" +
+    "  const revokeObjectURL = URL.revokeObjectURL.bind(URL);\n" +
+    "  URL.createObjectURL = (o) => { const u = createObjectURL(o); window.__blobs.created += 1; window.__blobs.live.add(u); return u; };\n" +
+    "  URL.revokeObjectURL = (u) => { window.__blobs.live.delete(u); return revokeObjectURL(u); };\n" +
     "})();\n" +
     pageSource;
   const r = await c.send("Page.addScriptToEvaluateOnNewDocument", { source });
@@ -530,6 +546,7 @@ async function edgePress(file, dir, t = 1) {
   await key(dir);
   await ev(`window.__VT.waitIdle(8000)`);
   await ev(`window.__VT.waitAnims(300, "hint")`); // 提示已在显示时再触发没有新动画，等一小会儿即可
+  const held = await ev(`window.__hintAnims.length`); // 此刻在账上的才归这次截图管
   await ev(`window.__VT.seek(${t})`);
   const h = await hintNow();
   if (file) {
@@ -537,7 +554,7 @@ async function edgePress(file, dir, t = 1) {
     const rect = await ev(`JSON.stringify(window.__VT.paperRect(${PAD}))`).then(JSON.parse);
     await c.screenshot(file, rect ? { ...rect, scale: 1 } : undefined);
   }
-  await ev(`window.__VT.cancel()`);
+  await ev(`window.__VT.cancel(${held})`);
   return h;
 }
 /** 连按 n 次方向键（每次间隔 250ms，等页面换完） */
@@ -587,7 +604,14 @@ async function doEdge() {
   await expectHint("EPUB 分页·书末（淡入半程）", 1, "已是最后一页", `${OUT}/edge-epub-end-half.png`, 0.5);
   await expectHint("EPUB 分页·书末·再触发", 1, "已是最后一页", `${OUT}/edge-epub-end.png`);
   want(name, (await ev(`document.querySelectorAll(".wr-toast--center").length`)) === 1, "连按叠出了多个提示");
-  await sleep(1300);
+  // 淡出轨迹：每 200ms 取一次透明度（留档，排查「没淡出」用）
+  const keyAt = await ev(`window.__VT.lastKeyAt`);
+  const fade = [];
+  for (let i = 0; i < 8; i++) {
+    await sleep(200);
+    fade.push({ dt: (await ev(`Math.round(performance.now())`)) - keyAt, opacity: (await hintNow())?.opacity ?? "none" });
+  }
+  const hintLog = (await J(`JSON.stringify(window.__hintLog ?? [])`)).filter((e) => e.t >= keyAt - 50);
   const gone = await hintNow();
   want(name, gone && gone.opacity === "0", `1s 后没有淡出：${JSON.stringify(gone)}`);
   await open({ effect: "paper", theme: "dark" });
@@ -644,8 +668,197 @@ async function doEdge() {
 
   const errs = errors();
   want(name, errs.length === 0, `控制台报错：${errs.slice(0, 3).join(" | ")}`);
-  report.scenarios[name] = { files, errors: errs };
+  report.scenarios[name] = { files, fade, hintLog, errors: errs };
   await buildSheet("edge", files);
+}
+
+// ───── life：关书后的收尾——主题样式表不重复（E7）、blob 释放（E1）、坏 .opt 回落原书（R1）─────
+/** 应用内导航（不整页重载）：pushState + popstate 让路由换页 */
+const go = (path) => ev(`(() => { history.pushState({}, "", ${JSON.stringify(path)}); window.dispatchEvent(new PopStateEvent("popstate")); return 1; })()`);
+const blobs = () => J(`JSON.stringify({ created: window.__blobs.created, live: window.__blobs.live.size })`);
+async function waitReader(want, timeout = 30000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeout) {
+    if ((await ev(`!!document.querySelector(".wr-reader-root")`).catch(() => false)) === want) return true;
+    await sleep(100);
+  }
+  return false;
+}
+
+async function doLife() {
+  const name = "life";
+  const rec = {};
+  report.scenarios[name] = rec;
+  // E7：首章 iframe 里当前主题的样式表规则数（上游 Themes.add 是追加：主题 hook、rendered、首显各注入一次 → 三份）
+  await open({ effect: "none", theme: "ink" });
+  rec.rulesAfterOpen = await ev(
+    `(() => { const d = document.querySelector(".wr-reader-leaf iframe")?.contentDocument; const s = d && d.getElementById("epubjs-inserted-css-ink"); return s ? s.sheet.cssRules.length : -1; })()`,
+  );
+  want(name, rec.rulesAfterOpen > 0, `没找到主题样式表：${rec.rulesAfterOpen}`);
+  // E7 续：来回切主题——新主题即时生效（body 类名换了、样式表在），切回来的主题规则数不涨。
+  // 模块要拿应用自己加载的那一份（资源条目里的 URL 带 HMR 时间戳，直接 import 路径会是另一个实例）
+  const switchTheme = (t) =>
+    ev(
+      `(async () => { const url = performance.getEntriesByType("resource").map((e) => e.name).find((n) => n.includes("/src/ui/theme.ts")); const m = await import(url ?? "/src/ui/theme.ts"); m.setTheme(${JSON.stringify(t)}); return url ?? "fallback"; })()`,
+    );
+  const themeState = (theme) =>
+    J(
+      `JSON.stringify((() => { const d = document.querySelector(".wr-reader-leaf iframe")?.contentDocument; const s = d && d.getElementById("epubjs-inserted-css-${theme}"); return { rules: s ? s.sheet.cssRules.length : -1, bodyClass: d?.body?.className ?? "" }; })())`,
+    );
+  await switchTheme("dark");
+  await sleep(500);
+  const d1 = await themeState("dark");
+  await switchTheme("ink");
+  await sleep(500);
+  const i1 = await themeState("ink");
+  await switchTheme("dark");
+  await sleep(500);
+  const d2 = await themeState("dark");
+  rec.themeSwitch = { dark: d1, ink: i1, darkAgain: d2 };
+  want(name, d1.bodyClass.split(/\s+/).includes("dark") && d1.rules === rec.rulesAfterOpen, `切到夜间主题没有即时生效：${JSON.stringify(d1)}`);
+  want(name, i1.bodyClass.split(/\s+/).includes("ink") && i1.rules === rec.rulesAfterOpen, `切回纸墨主题没有即时生效：${JSON.stringify(i1)}`);
+  want(name, d2.rules === d1.rules, `来回切主题后规则数在涨：${d1.rules} → ${d2.rules}`);
+  await switchTheme("ink");
+
+  // E1：开 → 关 → 开 → 关 → 开，每轮新建的 blob 数相同、关书后仍存活的 blob 数不增长
+  const live = [];
+  let createdSoFar = 0;
+  for (let round = 0; round < 3; round++) {
+    if (round > 0) {
+      await go("/read/synth-turn");
+      if (!(await waitReader(true))) return fail(name, "重开阅读页超时");
+      await sleep(1800);
+    }
+    const opened = await blobs();
+    await go("/");
+    if (!(await waitReader(false))) return fail(name, "关书后阅读页没有卸载");
+    await sleep(600);
+    const closed = await blobs();
+    live.push({ created: opened.created - createdSoFar, liveAfterClose: closed.live });
+    createdSoFar = opened.created;
+  }
+  rec.blobs = live;
+  want(name, live[0].created > 0, "没观察到 blob（计数桩失效）");
+  want(name, live.every((x) => x.created === live[0].created), `每轮新建的 blob 数不一致：${JSON.stringify(live)}`);
+  want(name, live.every((x) => x.liveAfterClose === live[0].liveAfterClose), `关书后仍存活的 blob 在增长：${JSON.stringify(live)}`);
+
+  // R1：库里的 .opt.epub 是半截文件 → 回落原书照常渲染，并留一条日志
+  await open({ effect: "none", theme: "ink", corruptOpt: true });
+  const text = await ev(`(document.querySelector(".wr-reader-leaf iframe")?.contentDocument?.body?.innerText ?? "").length`);
+  const logs = await J(`JSON.stringify(window.__MOCK__.logs)`);
+  rec.optFallback = { textChars: text, logs };
+  want(name, text > 50, `坏 .opt 下没有渲染出正文（${text} 字）`);
+  want(name, logs.some((l) => l.includes(".opt.epub")), `日志里没有回落记录：${JSON.stringify(logs.slice(0, 5))}`);
+
+  // E4（核实后未复现，留作回归哨兵）：滚动模式章首按 PageDown、跳章落到章顶后按 PageDown，
+  // 位置都要照常上报（落库的 cfi / percent 变化）。调研担心 epub.js 的 ignore 标志残留会吞掉这一次 relocated——
+  // 两条路径修复前后实测都照常上报
+  await open({ effect: "none", theme: "ink", readingMode: "scrolled" });
+  const where = () => J(`JSON.stringify(window.__MOCK__.state && { cfi: window.__MOCK__.state.cfi, percent: window.__MOCK__.state.percent })`);
+  await sleep(2200); // 等 relocated 落库（1.5s 防抖）
+  const s0 = await where();
+  await key("PageDown");
+  await sleep(2200);
+  const s1 = await where();
+  rec.scrollStep = { before: s0, after: s1 };
+  want(name, s1 && (!s0 || s1.cfi !== s0.cfi || s1.percent !== s0.percent), `章首 PageDown 后位置没变（relocated 被吞）：${JSON.stringify({ s0, s1 })}`);
+  const hop = [];
+  for (let i = 0; i < 4; i++) {
+    await key(1); // 滚动模式方向键 = 下一章
+    await sleep(2200);
+    const a0 = await where();
+    await key("PageDown");
+    await sleep(2200);
+    const a1 = await where();
+    hop.push({ after: a1, moved: !!a1 && (!a0 || a1.cfi !== a0.cfi || a1.percent !== a0.percent) });
+  }
+  rec.scrollStepAfterChapterJump = hop.map((h) => h.moved);
+  want(name, hop.every((h) => h.moved), `跳章后的第一次翻屏有被吞的：${JSON.stringify(hop)}`);
+
+  const errs = errors();
+  want(name, errs.length === 0, `控制台报错：${errs.slice(0, 3).join(" | ")}`);
+  rec.errors = errs;
+}
+
+// ───── fold：折页转场的覆盖层底色（E10）——横竖页交替的合成漫画，竖页翻向横页 ─────
+// 折页是 rAF 按时间戳推进的（不是 WAAPI，没法暂停定位）：给 rAF 回调的时间戳乘 0.12，600ms 的折页放慢到 5s，
+// 在固定的几个进度上截图，各主题 / 改动前后才是同一帧。
+async function doFold() {
+  const name = "fold";
+  const files = [];
+  const probes = [];
+  for (const theme of ["ink", "dark", "ink-dark"]) {
+    await open({ effect: "none", theme, turnSpeedMs: "600", visual: { kind: "images", mode: "paged", pageAnimation: "fold" } });
+    await ev(
+      "(() => { const raf = window.requestAnimationFrame.bind(window); const base = performance.now();" +
+        "  window.requestAnimationFrame = (cb) => raf((now) => cb(base + (now - base) * 0.12));" +
+        "  window.__VT.restoreRaf = () => { window.requestAnimationFrame = raf; }; return 1; })()",
+    );
+    await ev(`window.__VT.foldT0 = performance.now(); 1`);
+    await key(-1); // 假设置是 RTL：方向键左 = 往后翻（竖页 → 横页）
+    // 实测进度（按时间戳放慢 10 倍）：1.2s≈20°、1.6s≈45°、2.0s≈78°——越过 90° 后背面隐藏，只看得到新页
+    let waited = 0;
+    for (const at of [1200, 1620, 2000]) {
+      await sleep(at - waited);
+      waited = at;
+      const probe = await J(
+        `JSON.stringify((() => { const el = document.querySelector(".wr-fold-layer"); const m = el ? getComputedStyle(el).transform : ""; const c = m.startsWith("matrix3d(") ? m.slice(9).split(",")[0] : ""; return { sinceKey: Math.round(performance.now() - window.__VT.foldT0), layer: !!el, deg: c ? Math.round(Math.acos(Math.max(-1, Math.min(1, Number(c)))) * 180 / Math.PI) : null }; })())`,
+      );
+      const f = `fold-${theme}-${probe.deg ?? "x"}deg`;
+      const shotRes = await c.send("Page.captureScreenshot", { format: "png" });
+      writeFileSync(`${OUT}/${f}.png`, Buffer.from(shotRes.data, "base64"));
+      files.push([f, `${theme} ≈${probe.deg}°`]);
+      // E10 断言（只在 ≈20° 那一帧做）：横过来的新页左端在 (330, 400) 一带——旧页的纸必须把它挡住。
+      // 夜间两档修复前这里透出浅色新页（亮度 ≈228），修复后是深色纸面
+      if (probe.deg >= 10 && probe.deg <= 35) {
+        const px = JSON.parse(
+          await ev(`(async () => JSON.stringify(await window.__VT.pixel("data:image/png;base64,${shotRes.data}", 330, 400)))()`),
+        );
+        probe.pixel = px;
+        const lum = px ? 0.299 * px[0] + 0.587 * px[1] + 0.114 * px[2] : -1;
+        probe.lum = Math.round(lum);
+        want(name, px && (theme === "ink" ? lum > 200 : lum < 90), `${theme} ≈${probe.deg}°：新页从旧页四周透出来了，像素 ${JSON.stringify(px)}`);
+      }
+      probes.push(probe);
+    }
+    await ev(`window.__VT.restoreRaf()`);
+    await sleep(900);
+    want(name, !(await ev(`!!document.querySelector(".wr-fold-layer")`)), `${theme}：折页结束后覆盖层没有撤掉`);
+  }
+  const errs = errors();
+  want(name, errs.length === 0, `控制台报错：${errs.slice(0, 3).join(" | ")}`);
+  report.scenarios[name] = { files, probes, errors: errs };
+  if (files.length) await buildSheet("fold", files);
+}
+
+// ───── loc：章内页码越靠后 relocated 越慢（E6）——量个数留档 ─────
+// relocated 的页码定位（epub.js Mapping.findStart）是从 body 开头逐文本节点取矩形、走到当前页为止：
+// 耗时 ∝ 章内文本节点数 × 页码 / 总页数。徽标不能当信号（它优先显示按字数切的全局「位置页」），
+// 所以直接按同一算法在真实排版上走一遍：普通章节 vs 一章 3000 段的超长章。
+async function doLoc() {
+  const name = "loc";
+  const median = async (limit, n = 5) => {
+    const xs = [];
+    for (let i = 0; i < n; i++) {
+      const r = await J(`JSON.stringify(window.__VT.cfiWalk(${limit}))`);
+      if (!r) return fail(name, "cfiWalk 没拿到 iframe 文档");
+      xs.push(r);
+    }
+    xs.sort((a, b) => a.ms - b.ms);
+    const mid = xs[Math.floor(xs.length / 2)];
+    return { nodes: mid.nodes, ms: mid.ms, perNodeUs: mid.nodes ? +((mid.ms * 1000) / mid.nodes).toFixed(1) : 0 };
+  };
+  await open({ effect: "none", theme: "ink" });
+  await sleep(800);
+  const normal = await median(1e9);
+  await open({ effect: "none", theme: "ink", epub: "temp/synth-chapter.epub" });
+  await sleep(800);
+  const pages = await ev(`(() => { const s = document.querySelector(".epub-container"); return s ? Math.ceil(s.scrollWidth / s.clientWidth) : 0; })()`);
+  const longHead = await median(300);
+  const longAll = await median(1e9, 3);
+  const errs = errors();
+  want(name, errs.length === 0, `控制台报错：${errs.slice(0, 3).join(" | ")}`);
+  report.scenarios[name] = { normal, longChapter: { approxPages: pages, first300: longHead, whole: longAll }, errors: errs };
 }
 
 const PLAN = {
@@ -654,6 +867,9 @@ const PLAN = {
   figures: doFigures,
   chrome: doChrome,
   edge: doEdge,
+  life: doLife,
+  fold: doFold,
+  loc: doLoc,
   sheet: async () => {
     for (const [effect, dir, theme, name] of [
       ["slide", 1, "ink", "ink-slide-next"],
@@ -690,7 +906,7 @@ const PLAN = {
   reduced: doReduced,
 };
 
-const order = ["sheet", "cross", "rapid", "input", "end", "edge", "reduced", "spread", "figures", "chrome", "legacy", "long"];
+const order = ["sheet", "cross", "rapid", "input", "end", "edge", "life", "fold", "loc", "reduced", "spread", "figures", "chrome", "legacy", "long"];
 for (const id of order) {
   if (only.length && !only.some((o) => id.includes(o))) continue;
   try {

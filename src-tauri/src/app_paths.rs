@@ -80,10 +80,6 @@ pub fn covers_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(library_dir(app)?.join("covers"))
 }
 
-pub fn trash_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    Ok(library_dir(app)?.join("trash"))
-}
-
 pub fn db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(roots(app)?.db.clone())
 }

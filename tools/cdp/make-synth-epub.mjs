@@ -1,5 +1,6 @@
 // 合成测试书（只用于无头验证：翻页动画 / 插图 / 跨章 / 高亮），内容全部是中性示例句，不含任何真实书名。
-// 用法：node tools/cdp/make-synth-epub.mjs [输出路径] [long]   （默认 temp/synth-turn.epub；long = 120 章短章的长书）
+// 用法：node tools/cdp/make-synth-epub.mjs [输出路径] [long|chapter]   （默认 temp/synth-turn.epub；
+//       long = 120 章短章的长书；chapter = 一章 3000 段的超长章，量「章内页码越靠后 relocated 越慢」用）
 // 结构：9 章正文（第 3 章带两张插图、第 8 章很短、第 9 章竖排）+ 两段落在第 1、2 章的高亮 CFI（见 HIGHLIGHTS）。
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -98,9 +99,12 @@ const SENTENCES = [
 const paras = (n, seed = 0) =>
   Array.from({ length: n }, (_, i) => SENTENCES[(i + seed) % SENTENCES.length] + SENTENCES[(i * 3 + seed + 1) % SENTENCES.length] + SENTENCES[(i * 7 + seed + 4) % SENTENCES.length] + SENTENCES[(i * 5 + seed + 6) % SENTENCES.length] + SENTENCES[(i * 2 + seed + 8) % SENTENCES.length]).map((s) => `<p>${s}</p>`);
 
-const LONG = process.argv[3] === "long";
+const MODE = process.argv[3] ?? "";
+const LONG = MODE === "long";
 const CHAPTERS = LONG
   ? Array.from({ length: 120 }, (_, i) => ({ n: 2, seed: i })) // 每章恰好一个版面：连翻每一步都跨章
+  : MODE === "chapter"
+  ? [{ n: 3000 }]
   : [
   { n: 18 },
   { n: 16, seed: 3 },

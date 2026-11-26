@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use image::ImageEncoder;
+use image::{ImageDecoder, ImageEncoder};
 use rusqlite::{params, Connection};
 use tauri::Manager;
 use uuid::Uuid;
@@ -18,6 +18,7 @@ use crate::commands::library::{
     insert_book, now_ts, require_library_rel, thumbs_dir,
 };
 use crate::db;
+use crate::epub::read_limited;
 use crate::models::{Book, PageMetaOut};
 
 const IMAGE_EXTS: [&str; 7] = ["png", "jpg", "jpeg", "webp", "gif", "avif", "bmp"];
@@ -111,9 +112,7 @@ fn read_cbz_page(path: &Path, index: usize) -> Result<Vec<u8>, String> {
             continue;
         }
         if page == index {
-            let mut buf = Vec::new();
-            entry.read_to_end(&mut buf).map_err(|e| format!("failed to read cbz page: {e}"))?;
-            return Ok(buf);
+            return read_limited(&mut entry, MAX_PAGE_BYTES).map_err(|e| format!("failed to read cbz page: {e}"));
         }
         page += 1;
     }
@@ -153,13 +152,20 @@ pub struct AppState {
 
 // 宽高嗅探只读文件头（JPEG SOF/PNG IHDR 等都在前 128KB 内；失败得 0/0，前端回退占位）
 const DIMENSIONS_HEAD_BYTES: u64 = 128 * 1024;
+// 单页读取上限——按实际读出的字节算，不信 zip 头里（可伪造的）声明大小
+const MAX_PAGE_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(crate) fn sniff_dimensions(head: &[u8]) -> (u32, u32) {
-    image::ImageReader::new(std::io::Cursor::new(head))
-        .with_guessed_format()
-        .ok()
-        .and_then(|r| r.into_dimensions().ok())
-        .unwrap_or((0, 0))
+    let Ok(reader) = image::ImageReader::new(std::io::Cursor::new(head)).with_guessed_format() else {
+        return (0, 0);
+    };
+    let Ok(mut decoder) = reader.into_decoder() else {
+        return (0, 0);
+    };
+    let (w, h) = decoder.dimensions();
+    // EXIF 方向 5–8 是转 90°/270°：浏览器显示原图时会转正，宽高对调（与 decode_upright 同口径）
+    let turned = decoder.orientation().is_ok_and(|o| (5..=8).contains(&o.to_exif()));
+    if turned { (h, w) } else { (w, h) }
 }
 
 fn file_head(path: &Path) -> Vec<u8> {
@@ -498,7 +504,8 @@ pub fn list_image_page_meta(app: tauri::AppHandle, book_id: String) -> Result<Ve
 // 带透明的出 PNG（无损保 alpha），其余不透明格式也出 JPEG；解码失败回退原图字节
 fn downscale_page(bytes: Vec<u8>, known_width: u32, max_width: u32) -> Vec<u8> {
     let shrink = || -> Result<Vec<u8>, String> {
-        let img = image::load_from_memory(&bytes).map_err(|e| format!("decode: {e}"))?;
+        // 按 EXIF 方向转正：原图由浏览器自动转正，降采样后的重编码副本得自己转，否则切分辨率时图会躺倒
+        let img = crate::commands::library::decode_upright(&bytes).map_err(|e| format!("decode: {e}"))?;
         if img.width() <= max_width {
             return Ok(bytes.clone());
         }
@@ -551,11 +558,7 @@ pub fn read_image_page(
             let mut entry = zip
                 .by_index(meta.entry)
                 .map_err(|e| format!("failed to read cbz entry: {e}"))?;
-            let mut buf = Vec::new();
-            entry
-                .read_to_end(&mut buf)
-                .map_err(|e| format!("failed to read cbz page: {e}"))?;
-            buf
+            read_limited(&mut entry, MAX_PAGE_BYTES).map_err(|e| format!("failed to read cbz page: {e}"))?
         }
     };
     // 不传 max_width = 原图直出（现状行为）

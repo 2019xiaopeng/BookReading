@@ -1,7 +1,7 @@
 // v2.7 V-1/P-1：多媒体 EPUB 的原书条目访问。.opt 剥掉音视频后，观看/原图入口回到原书 zip——
 // 只读目录与单条目字节，不解压整包，大视频不进内存全书。
 use std::fs;
-use std::io::{BufReader, Read};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use zip::ZipArchive;
@@ -10,9 +10,14 @@ use crate::app_paths;
 use crate::commands::epub_optimize::{ext_lower, is_media_entry};
 use crate::commands::library::fetch_book_by_id;
 use crate::db;
+use crate::epub::read_limited;
 
 // P-1 lightbox 原图条目白名单（svg/avif/bmp 前端按 blob 展示同样可行）
 const IMAGE_ENTRY_EXTS: [&str; 8] = ["png", "jpg", "jpeg", "webp", "gif", "svg", "avif", "bmp"];
+// 单条目读取上限——按实际读出的字节算，不信 zip 头里（可伪造的）声明大小。
+// 原图 512 MiB（image 解码器自身上限的量级）；音视频整条读进内存再交给前端，1 GiB 封顶
+const MAX_IMAGE_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_MEDIA_ENTRY_BYTES: u64 = 1024 * 1024 * 1024;
 
 fn is_image_entry(name: &str) -> bool {
     IMAGE_ENTRY_EXTS.contains(&ext_lower(name).as_str())
@@ -63,15 +68,18 @@ fn list_media_entries(path: &Path) -> Result<Vec<MediaEntry>, String> {
 }
 
 // 按条目名读单条字节；白名单闸防把 xhtml/opf 等任意条目当媒体读出（名字即 zip 键，无路径穿越面）
-fn read_allowed_entry(path: &Path, name: &str, allow: fn(&str) -> bool) -> Result<Vec<u8>, String> {
+fn read_allowed_entry(
+    path: &Path,
+    name: &str,
+    allow: fn(&str) -> bool,
+    max_bytes: u64,
+) -> Result<Vec<u8>, String> {
     if name.is_empty() || !allow(name) {
         return Err(format!("不允许读取的条目: {name}"));
     }
     let mut zip = open_zip(path)?;
     let mut entry = zip.by_name(name).map_err(|_| format!("条目不存在: {name}"))?;
-    let mut buf = Vec::new();
-    entry.read_to_end(&mut buf).map_err(|e| format!("failed to read {name}: {e}"))?;
-    Ok(buf)
+    read_limited(&mut entry, max_bytes).map_err(|e| format!("failed to read {name}: {e}"))
 }
 
 #[tauri::command(async)]
@@ -89,7 +97,7 @@ pub fn read_book_media(
 ) -> Result<tauri::ipc::Response, String> {
     let conn = db::open_db(&app)?;
     let abs = original_book_abs(&app, &conn, &book_id)?;
-    let bytes = read_allowed_entry(&abs, &name, is_media_entry)?;
+    let bytes = read_allowed_entry(&abs, &name, is_media_entry, MAX_MEDIA_ENTRY_BYTES)?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -101,7 +109,7 @@ pub fn read_epub_image(
 ) -> Result<tauri::ipc::Response, String> {
     let conn = db::open_db(&app)?;
     let abs = original_book_abs(&app, &conn, &book_id)?;
-    let bytes = read_allowed_entry(&abs, &entry_name, is_image_entry)?;
+    let bytes = read_allowed_entry(&abs, &entry_name, is_image_entry, MAX_IMAGE_ENTRY_BYTES)?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -152,15 +160,15 @@ mod tests {
             ("OEBPS/images/pic.PNG", b"png-bytes".to_vec()),
         ]);
         // 媒体白名单：能读 mp4，不能借道读 xhtml
-        assert_eq!(read_allowed_entry(&path, "OEBPS/video/v1.mp4", is_media_entry).unwrap(), vec![9u8; 32]);
-        assert!(read_allowed_entry(&path, "OEBPS/ch1.xhtml", is_media_entry).is_err());
-        assert!(read_allowed_entry(&path, "OEBPS/nope.mp4", is_media_entry).is_err());
+        assert_eq!(read_allowed_entry(&path, "OEBPS/video/v1.mp4", is_media_entry, 1 << 20).unwrap(), vec![9u8; 32]);
+        assert!(read_allowed_entry(&path, "OEBPS/ch1.xhtml", is_media_entry, 1 << 20).is_err());
+        assert!(read_allowed_entry(&path, "OEBPS/nope.mp4", is_media_entry, 1 << 20).is_err());
         // 图片白名单：能读 png（大写扩展名过），不能读 xhtml
         assert_eq!(
-            read_allowed_entry(&path, "OEBPS/images/pic.PNG", is_image_entry).unwrap(),
+            read_allowed_entry(&path, "OEBPS/images/pic.PNG", is_image_entry, 1 << 20).unwrap(),
             b"png-bytes".to_vec()
         );
-        assert!(read_allowed_entry(&path, "OEBPS/ch1.xhtml", is_image_entry).is_err());
+        assert!(read_allowed_entry(&path, "OEBPS/ch1.xhtml", is_image_entry, 1 << 20).is_err());
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 }

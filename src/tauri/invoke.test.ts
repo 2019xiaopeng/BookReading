@@ -15,7 +15,6 @@ import {
   computeBookStats,
   createShelf,
   createTag,
-  deleteBook,
   deleteBookmark,
   deleteBooks,
   deleteFavoriteQuote,
@@ -55,12 +54,6 @@ import {
 } from "./invoke";
 
 describe("tauri invoke arg casing", () => {
-  test("deleteBook uses bookId", async () => {
-    hoisted.invokeMock.mockResolvedValueOnce(null);
-    await deleteBook("b1");
-    expect(hoisted.invokeMock).toHaveBeenLastCalledWith("delete_book", { bookId: "b1" });
-  });
-
   test("repairBookMetadata uses bookId", async () => {
     hoisted.invokeMock.mockResolvedValueOnce(null);
     await repairBookMetadata("b1");

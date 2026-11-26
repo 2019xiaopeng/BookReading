@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use roxmltree::Document;
@@ -14,6 +14,31 @@ const MAX_COVER_HEADER_BYTES: u64 = 64 * 1024;
 // 尺寸合理性上限（1e12 px²）：超出视为损坏头
 const MAX_IMAGE_AREA: u64 = 1_000_000_000_000;
 
+/// 实际限量读取：超过 max_bytes 即报错。只对照 zip 头里声明的大小不够——声明可伪造，
+/// 而 zip 解压器对输出不设上限（伪造的小尺寸能让实际输出放大上千倍）
+pub(crate) fn read_limited<R: Read>(r: &mut R, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    r.take(max_bytes + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > max_bytes {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "zip entry too large"));
+    }
+    Ok(buf)
+}
+
+/// 入库校验：是读得开的 zip，且里面有 container.xml——这才是 EPUB 的最低门槛
+/// （只验 zip 的话，改名成 .epub 的 docx / cbz 同样能入库，打开才报错）
+pub fn validate_zip(path: &Path) -> Result<(), String> {
+    let f = File::open(path).map_err(|e| format!("failed to open {}: {e}", path.display()))?;
+    let mut zip = ZipArchive::new(BufReader::new(f))
+        .map_err(|_| "不是有效的 EPUB 文件（不是合法的 zip 压缩包）".to_string())?;
+    let has_container =
+        zip.by_name("META-INF/container.xml").is_ok() || zip.by_name("meta-inf/container.xml").is_ok();
+    if !has_container {
+        return Err("不是有效的 EPUB 文件（压缩包里没有 META-INF/container.xml）".to_string());
+    }
+    Ok(())
+}
+
 fn read_zip_text_limited<R: Read + std::io::Seek>(
     zip: &mut ZipArchive<R>,
     name: &str,
@@ -23,9 +48,8 @@ fn read_zip_text_limited<R: Read + std::io::Seek>(
     if f.size() > max_bytes {
         return Err(format!("zip entry too large: {name}"));
     }
-    let mut s = String::new();
-    f.read_to_string(&mut s).map_err(|e| format!("failed to read {name}: {e}"))?;
-    Ok(s)
+    let bytes = read_limited(&mut f, max_bytes).map_err(|e| format!("failed to read {name}: {e}"))?;
+    String::from_utf8(bytes).map_err(|e| format!("invalid utf-8 in {name}: {e}"))
 }
 
 fn read_zip_bytes_limited<R: Read + std::io::Seek>(
@@ -37,9 +61,7 @@ fn read_zip_bytes_limited<R: Read + std::io::Seek>(
     if f.size() > max_bytes {
         return Err(format!("zip entry too large: {name}"));
     }
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf).map_err(|e| format!("failed to read {name}: {e}"))?;
-    Ok(buf)
+    read_limited(&mut f, max_bytes).map_err(|e| format!("failed to read {name}: {e}"))
 }
 
 /// 读 zip entry 前 max_bytes 字节（解析图片头用；entry 超大也只读头部）
@@ -155,7 +177,8 @@ fn find_cover_candidates(doc: &Document) -> (Vec<(String, Option<String>)>, Opti
     let mut out: Vec<(String, Option<String>)> = Vec::new();
     let mut meta_pref: Option<usize> = None;
 
-    // 1) meta name=cover → item@id（或 href==id 兜底）
+    // 1) meta name=cover → item@id（或 href==id 兜底）。EPUB 2 的 meta cover 常指向「封面页」xhtml——
+    //    那不是图：跳过它，让后面的图片候选接管（原先把 xhtml 当封面读出来，扩展名过不了白名单，整本没封面）
     let cover_id = doc.descendants().find_map(|n| {
         if !n.is_element() || !n.tag_name().name().eq_ignore_ascii_case("meta") {
             return None;
@@ -169,12 +192,13 @@ fn find_cover_candidates(doc: &Document) -> (Vec<(String, Option<String>)>, Opti
     if let Some(id) = cover_id {
         let found = doc
             .descendants()
-            .find(|n| is_item(n) && n.attribute("id").is_some_and(|v| v == id))
+            .find(|n| is_item(n) && is_image(n) && n.attribute("id").is_some_and(|v| v == id))
             .and_then(item_of)
             .or_else(|| {
                 doc.descendants()
                     .find(|n| {
                         is_item(n)
+                            && is_image(n)
                             && (n.attribute("href").unwrap_or("") == id
                                 || n.attribute("href")
                                     .unwrap_or("")
@@ -194,6 +218,7 @@ fn find_cover_candidates(doc: &Document) -> (Vec<(String, Option<String>)>, Opti
             .descendants()
             .find(|n| {
                 is_item(n)
+                    && is_image(n)
                     && n.attribute("properties")
                         .is_some_and(|p| p.split_whitespace().any(|v| v.eq_ignore_ascii_case("cover-image")))
             })
@@ -242,6 +267,40 @@ fn ext_from_media_type(media_type: &str) -> Option<&'static str> {
     None
 }
 
+/// 封面文件扩展名：优先 href 的扩展名，其次 media-type；None = 前端显示不了的类型（svg / gif 等，
+/// 与 library.rs 入库时的白名单同一份口径）
+fn cover_ext(href: &str, media_type: Option<&str>) -> Option<String> {
+    let ext = Path::new(href)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .or_else(|| media_type.and_then(ext_from_media_type).map(|s| s.to_string()))?;
+    (["png", "jpg", "jpeg", "webp"].contains(&ext.as_str())).then_some(ext)
+}
+
+/// href 里的 %XX 还原（EPUB 的 href 允许百分号编码，zip 条目名存的是还原后的名字）；
+/// 没有百分号或不是合法编码 / UTF-8 时返回 None
+fn percent_decoded(s: &str) -> Option<String> {
+    if !s.contains('%') {
+        return None;
+    }
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let hi = (b[i + 1] as char).to_digit(16)?;
+            let lo = (b[i + 2] as char).to_digit(16)?;
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 fn normalize_zip_path(base: &Path, href: &str) -> Option<PathBuf> {
     let mut out = PathBuf::from(base);
     for c in Path::new(&href.replace('\\', "/")).components() {
@@ -285,12 +344,27 @@ pub fn extract_epub_metadata(epub_path: &Path) -> Result<EpubMetadata, String> {
     // 各候选读 zip entry 前 64KB 解析 PNG/JPEG 头得面积，取面积最大者；元数据封面（meta/cover-image）
     // 仅在其面积 ≥ 最大图 60% 时优先（保元数据语义又防小图）；全都解析失败时回退优先级第一个候选。
     let (candidates, meta_pref) = find_cover_candidates(&doc);
+    // 候选在 zip 里的条目名：先按 href 原样，再按还原百分号编码后的（EPUB 两种做法都有）
+    let cover_names = |href: &str| -> Vec<String> {
+        let to_name = |h: &str| {
+            normalize_zip_path(&opf_dir, h)
+                .map(|p| p.to_string_lossy().to_string().replace('\\', "/"))
+        };
+        let mut names: Vec<String> = to_name(href).into_iter().collect();
+        if let Some(d) = percent_decoded(href).and_then(|h| to_name(&h)) {
+            if !names.contains(&d) {
+                names.push(d);
+            }
+        }
+        names
+    };
     let mut areas: Vec<Option<u64>> = Vec::with_capacity(candidates.len());
     let mut best: Option<(usize, u64)> = None;
     for (i, (href, _media)) in candidates.iter().enumerate() {
-        let cover_path = normalize_zip_path(&opf_dir, href).unwrap_or_else(|| PathBuf::from(&opf_dir));
-        let cover_name = cover_path.to_string_lossy().to_string().replace('\\', "/");
-        let head = read_zip_head_limited(&mut zip, &cover_name, MAX_COVER_HEADER_BYTES).unwrap_or_default();
+        let head = cover_names(href)
+            .into_iter()
+            .find_map(|name| read_zip_head_limited(&mut zip, &name, MAX_COVER_HEADER_BYTES))
+            .unwrap_or_default();
         let area = image_dimensions(&head)
             .map(|(w, h)| (w as u64) * (h as u64))
             .filter(|&a| a <= MAX_IMAGE_AREA);
@@ -304,21 +378,20 @@ pub fn extract_epub_metadata(epub_path: &Path) -> Result<EpubMetadata, String> {
     let pick = match (best, meta_pref) {
         (Some((bi, ba)), Some(mi)) if mi == bi || areas[mi].is_some_and(|a| a * 10 >= ba * 6) => Some(mi),
         (Some((bi, _)), _) => Some(bi),
-        // 全部解析失败（webp/无图/损坏）：维持既有启发式——优先级第一个候选
-        (None, _) => (0..candidates.len()).next(),
+        // 全部解析失败（webp/无图/损坏）：维持既有启发式——优先级第一个候选，
+        // 但跳过前端显示不了的类型（svg / gif）——轮到它当第一个，整本就没封面了
+        (None, _) => candidates
+            .iter()
+            .position(|(href, media)| cover_ext(href, media.as_deref()).is_some())
+            .or_else(|| (0..candidates.len()).next()),
     };
 
     let (cover_bytes, cover_ext) = match pick.and_then(|i| candidates.get(i)) {
         Some((href, media_type)) => {
-            let cover_path = normalize_zip_path(&opf_dir, href).unwrap_or_else(|| PathBuf::from(&opf_dir));
-            let cover_name = cover_path.to_string_lossy().to_string().replace('\\', "/");
-            let bytes = read_zip_bytes_limited(&mut zip, &cover_name, MAX_COVER_BYTES).ok();
-            let ext = cover_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|s| s.to_lowercase())
-                .or_else(|| media_type.as_deref().and_then(ext_from_media_type).map(|s| s.to_string()));
-            (bytes, ext)
+            let bytes = cover_names(href)
+                .into_iter()
+                .find_map(|name| read_zip_bytes_limited(&mut zip, &name, MAX_COVER_BYTES).ok());
+            (bytes, cover_ext(href, media_type.as_deref()))
         }
         None => (None, None),
     };
@@ -455,6 +528,88 @@ mod tests {
         assert_eq!(image_dimensions(&[]), None);
         assert_eq!(image_dimensions(&[0xff, 0xd8, 0xff]), None); // JPEG 头截断
         assert_eq!(image_dimensions(&png_bytes(0, 100)), None); // 零宽无效
+    }
+
+    // ---- R4：实际限量读取 / 入库校验 ----
+
+    #[test]
+    fn read_limited_counts_real_bytes() {
+        assert_eq!(read_limited(&mut Cursor::new(b"abc".to_vec()), 3).unwrap(), b"abc");
+        assert!(read_limited(&mut Cursor::new(b"abcd".to_vec()), 3).is_err());
+        assert!(read_limited(&mut Cursor::new(Vec::<u8>::new()), 0).unwrap().is_empty());
+    }
+
+    // 改名成 .epub 的普通文件、被截断的 zip、别的 zip 格式（docx 之类）都过不了入库校验
+    #[test]
+    fn validate_zip_rejects_plain_and_truncated_files() {
+        let dir = std::env::temp_dir().join(format!("bookreading-zipval-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = dir.join("plain.epub");
+        std::fs::write(&plain, b"just some text, not a zip").unwrap();
+        assert!(validate_zip(&plain).unwrap_err().contains("EPUB"));
+
+        let good = write_test_epub(&[("cover-item", "cover.png")], &[("cover.png", png_bytes(20, 30))]);
+        assert!(validate_zip(&good).is_ok());
+        let bytes = std::fs::read(&good).unwrap();
+        let truncated = dir.join("cut.epub");
+        std::fs::write(&truncated, &bytes[..bytes.len() / 2]).unwrap();
+        assert!(validate_zip(&truncated).is_err());
+
+        // 合法 zip 但不是 EPUB（没有 container.xml）
+        let other = dir.join("docx.epub");
+        {
+            let mut w = zip::ZipWriter::new(File::create(&other).unwrap());
+            w.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(b"<w/>").unwrap();
+            w.finish().unwrap();
+        }
+        assert!(validate_zip(&other).unwrap_err().contains("container.xml"));
+
+        let _ = std::fs::remove_file(&good);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- R5：封面丢失的三种情形 ----
+
+    // EPUB 2 的 meta cover 指向封面页 xhtml：不当封面，落到后面的图片候选
+    #[test]
+    fn cover_meta_pointing_at_xhtml_cover_page_falls_back_to_images() {
+        let opf = r#"<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+          <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>t</dc:title>
+            <meta name="cover" content="cover-page"/></metadata>
+          <manifest>
+            <item id="cover-page" href="text/cover.xhtml" media-type="application/xhtml+xml" />
+            <item id="cover-img" href="images/cover.jpg" media-type="image/jpeg" />
+          </manifest></package>"#;
+        let doc = Document::parse(opf).unwrap();
+        let (candidates, meta) = find_cover_candidates(&doc);
+        assert_eq!(meta, None, "xhtml 封面页不该成为元数据封面");
+        assert_eq!(candidates[0].0, "images/cover.jpg");
+    }
+
+    // 候选尺寸全都解析不了时，回退到第一个前端显示得了的类型（跳过 svg）
+    #[test]
+    fn cover_fallback_prefers_displayable_type_when_nothing_parses() {
+        let path = write_test_epub(
+            &[("x1", "a.svg"), ("x2", "b.webp")],
+            &[("a.svg", b"<svg/>".to_vec()), ("b.webp", b"RIFF-webp".to_vec())],
+        );
+        let meta = extract_epub_metadata(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(meta.cover_ext.as_deref(), Some("webp"));
+        assert_eq!(meta.cover_bytes.as_deref(), Some(b"RIFF-webp".as_slice()));
+    }
+
+    // href 带百分号编码、zip 条目名是还原后的名字
+    #[test]
+    fn cover_resolves_percent_encoded_href() {
+        let path = write_test_epub(&[("cover-item", "my%20cover.png")], &[("my cover.png", png_bytes(40, 60))]);
+        let meta = extract_epub_metadata(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let bytes = meta.cover_bytes.expect("cover bytes");
+        assert_eq!(image_dimensions(&bytes), Some((40, 60)));
+        assert_eq!(percent_decoded("a%2Fb%zz"), None, "非法编码不算解码");
+        assert_eq!(percent_decoded("plain.png"), None);
     }
 
     // ---- B13 封面选最大图（zip 集成）----

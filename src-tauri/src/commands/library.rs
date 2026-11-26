@@ -2,8 +2,9 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 
-use image::ImageEncoder;
+use image::{ImageDecoder, ImageEncoder};
 use rusqlite::{params, Connection};
 use tauri::Emitter;
 use time::OffsetDateTime;
@@ -53,7 +54,11 @@ fn abs_from_library_rel(app: &tauri::AppHandle, rel: &str) -> Result<PathBuf, St
 }
 
 pub(crate) fn atomic_copy_to(src: &str, tmp: &Path, final_path: &Path) -> Result<(), String> {
-    fs::copy(src, tmp).map_err(|e| format!("failed to copy file: {e}"))?;
+    // 写一半失败（磁盘写满 / 被打断）时把半截文件带走，不留 .part 孤儿
+    if let Err(e) = fs::copy(src, tmp) {
+        let _ = fs::remove_file(tmp);
+        return Err(format!("failed to copy file: {e}"));
+    }
     if let Err(e) = fs::rename(tmp, final_path) {
         let _ = fs::remove_file(tmp);
         return Err(format!("failed to rename into place: {e}"));
@@ -62,7 +67,10 @@ pub(crate) fn atomic_copy_to(src: &str, tmp: &Path, final_path: &Path) -> Result
 }
 
 pub(crate) fn atomic_write_to(tmp: &Path, final_path: &Path, bytes: &[u8]) -> Result<(), String> {
-    fs::write(tmp, bytes).map_err(|e| format!("failed to write file: {e}"))?;
+    if let Err(e) = fs::write(tmp, bytes) {
+        let _ = fs::remove_file(tmp);
+        return Err(format!("failed to write file: {e}"));
+    }
     if let Err(e) = fs::rename(tmp, final_path) {
         let _ = fs::remove_file(tmp);
         return Err(format!("failed to rename into place: {e}"));
@@ -170,19 +178,6 @@ pub(crate) fn attach_book_tags(conn: &Connection, books: &mut [Book]) -> Result<
         b.tags = by_book.remove(&b.id).unwrap_or_default();
     }
     Ok(())
-}
-
-fn delete_book_by_id(conn: &Connection, book_id: &str) -> Result<(Option<String>, Option<String>), rusqlite::Error> {
-    let mut stmt = conn.prepare("SELECT library_path, cover_path FROM books WHERE id = ?1")?;
-    let mut rows = stmt.query([book_id])?;
-
-    let (library_path, cover_path): (Option<String>, Option<String>) = if let Some(row) = rows.next()? {
-        (Some(row.get(0)?), row.get(1)?)
-    } else {
-        (None, None)
-    };
-
-    Ok((library_path, cover_path))
 }
 
 pub(crate) fn fetch_book_by_id(conn: &Connection, book_id: &str) -> Result<Book, rusqlite::Error> {
@@ -467,6 +462,13 @@ pub fn import_book(app: tauri::AppHandle, req: ImportBookRequest) -> Result<Book
     let extracted = if is_txt || is_pdf {
         None
     } else {
+        // R4：入库前先验是合法 zip。此前改名成 .epub 的任意文件都能入库（move 模式下源文件此时已进回收站），打开才报错
+        if let Err(e) = epub::validate_zip(&final_book_abs) {
+            if !matches!(kind, ImportKind::Reference) {
+                let _ = fs::remove_file(&final_book_abs);
+            }
+            return Err(format!("{}: {e}", req.source_path));
+        }
         epub::extract_epub_metadata(&final_book_abs).ok()
     };
 
@@ -682,60 +684,40 @@ pub fn set_book_manual_status(
     fetch_book_by_id(&conn, &book_id).map_err(|e| format!("failed to fetch book: {e}"))
 }
 
-#[tauri::command(async)]
-pub fn delete_book(app: tauri::AppHandle, book_id: String) -> Result<(), String> {    let conn = db::open_db(&app)?;
-    let (library_path, cover_path) =
-        delete_book_by_id(&conn, &book_id).map_err(|e| format!("failed to load book paths: {e}"))?;
+// 详情页的删除原先走 delete_book（文件与 DB 行一并硬删），而确认框写的是「移入回收站」——
+// 2026-11-26 审计复核时发现并移除：详情页改调软删 delete_books，与 ⋯ 菜单同一条路。
 
-    let trash_dir = app_paths::trash_dir(&app)?;
-    fs::create_dir_all(&trash_dir).map_err(|e| format!("failed to create trash dir: {e}"))?;
+/// R3：清掉导入 / 写封面 / 生成 .opt 中途失败留下的半截文件（*.part*）。后台线程跑，
+/// 只清 library 根下、修改时间早于一天前的——当天的可能正有导入在写。
+pub fn sweep_part_files(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        if let Ok(root) = app_paths::library_dir(&app) {
+            let cutoff = SystemTime::now() - Duration::from_secs(86_400);
+            let _ = sweep_part_in(&root, cutoff);
+        }
+    });
+}
 
-    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
-
-    if let Some(rel) = library_path.as_deref() {
-        if let Ok(abs) = abs_from_library_rel(&app, rel) {
-            if abs.exists() {
-                let ext = abs.extension().and_then(|e| e.to_str()).unwrap_or("epub");
-                let trash = trash_dir.join(format!("{}-{}.{}", book_id, Uuid::new_v4(), ext));
-                if let Err(e) = fs::rename(&abs, &trash) {
-                    for (t, o) in moved.iter() {
-                        let _ = fs::rename(t, o);
-                    }
-                    return Err(format!("failed to move book to trash: {e}"));
-                }
-                moved.push((trash, abs));
+/// 递归删除 dir 下名字含 ".part" 且修改时间早于 cutoff 的文件；返回删掉的个数。
+/// library 根是应用自己的目录（原地引用的书不在这里），正常文件名里不会带 .part。
+fn sweep_part_in(dir: &Path, cutoff: SystemTime) -> std::io::Result<usize> {
+    let mut n = 0;
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            n += sweep_part_in(&path, cutoff)?;
+        } else if path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .is_some_and(|f| f.contains(".part"))
+            && fs::metadata(&path).and_then(|m| m.modified()).is_ok_and(|t| t < cutoff)
+        {
+            if fs::remove_file(&path).is_ok() {
+                n += 1;
             }
         }
     }
-
-    if let Some(rel) = cover_path.as_deref() {
-        if let Ok(abs) = abs_from_library_rel(&app, rel) {
-            if abs.exists() {
-                let ext = abs.extension().and_then(|e| e.to_str()).unwrap_or("img");
-                let trash = trash_dir.join(format!("{}-{}.{}", book_id, Uuid::new_v4(), ext));
-                if let Err(e) = fs::rename(&abs, &trash) {
-                    for (t, o) in moved.iter() {
-                        let _ = fs::rename(t, o);
-                    }
-                    return Err(format!("failed to move cover to trash: {e}"));
-                }
-                moved.push((trash, abs));
-            }
-        }
-    }
-
-    if let Err(e) = conn.execute("DELETE FROM books WHERE id = ?1", [&book_id]) {
-        for (trash, original) in moved.iter() {
-            let _ = fs::rename(trash, original);
-        }
-        return Err(format!("failed to delete book: {e}"));
-    }
-
-    for (trash, _) in moved {
-        let _ = fs::remove_file(trash);
-    }
-
-    Ok(())
+    Ok(n)
 }
 
 // png/jpg/webp 且 ≤8MB：阅读背景与自定义封面共用校验，返回小写扩展名
@@ -886,6 +868,18 @@ pub(crate) fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<
     Ok(buf)
 }
 
+/// 解码并按 EXIF 方向转正。浏览器显示原图时会自动转正、image 解码不转——凡是"解码后重新编码"的地方
+/// （插图优化副本 / 封面缩略档 / 大页降采样）不补这一步，重编码出来的图就是躺倒的
+pub(crate) fn decode_upright(bytes: &[u8]) -> image::ImageResult<image::DynamicImage> {
+    let mut decoder = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()?
+        .into_decoder()?;
+    let orientation = decoder.orientation()?;
+    let mut img = image::DynamicImage::from_decoder(decoder)?;
+    img.apply_orientation(orientation);
+    Ok(img)
+}
+
 /// 封面缩略档（A5）：covers/thumbs/{id}.{webp|jpg} 宽 480，只缩不放——原图宽 ≤480 或解码
 /// 失败时跳过（前端回退原图路径）。best-effort：任何失败静默放弃，绝不影响主封面写入。
 /// 扩展名与实际格式一致：不透明封面 JPEG q80（.jpg），带透明封面无损 webp（.webp），前端按扩展名推 mime。
@@ -893,7 +887,7 @@ pub(crate) fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<
 pub(crate) fn gen_cover_thumb(thumbs_dir: &Path, book_id: &str, cover_abs: &Path) {
     let build = || -> Result<(), String> {
         let bytes = fs::read(cover_abs).map_err(|e| format!("failed to read cover: {e}"))?;
-        let img = image::load_from_memory(&bytes).map_err(|e| format!("failed to decode cover: {e}"))?;
+        let img = decode_upright(&bytes).map_err(|e| format!("failed to decode cover: {e}"))?;
         if img.width() <= THUMB_WIDTH {
             return Ok(()); // 小图源不放大也不落盘
         }
@@ -1836,6 +1830,84 @@ mod tests {
         assert!(copy_verified(dir.join("gone.epub").to_str().unwrap(), &tmp, &dir.join("x.epub")).is_err());
         assert!(!dir.join("x.epub").exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // R3：.part 孤儿清扫——只动名字带 .part 且早于截止时间的文件（下钻子目录）
+    #[test]
+    fn sweep_part_removes_only_stale_part_files() {
+        let dir = temp_bg_dir("sweep");
+        let books = dir.join("books");
+        fs::create_dir_all(&books).unwrap();
+        fs::write(books.join("b1.epub.part"), b"x").unwrap();
+        fs::write(books.join("b1.opt.epub.part-1234"), b"x").unwrap();
+        fs::write(books.join("b2.epub"), b"book").unwrap();
+        fs::write(dir.join("note.txt"), b"n").unwrap();
+        // 截止时间在一天前：刚写的都算新的，不动
+        let past = SystemTime::now() - Duration::from_secs(86_400);
+        assert_eq!(sweep_part_in(&dir, past).unwrap(), 0);
+        assert!(books.join("b1.epub.part").exists());
+        // 截止时间在未来：.part 清掉，其余保留
+        let soon = SystemTime::now() + Duration::from_secs(60);
+        assert_eq!(sweep_part_in(&dir, soon).unwrap(), 2);
+        assert!(!books.join("b1.epub.part").exists());
+        assert!(!books.join("b1.opt.epub.part-1234").exists());
+        assert!(books.join("b2.epub").exists() && dir.join("note.txt").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // R4：半截文件不留成 .part 孤儿
+    #[test]
+    fn atomic_write_removes_tmp_on_failure() {
+        let dir = temp_bg_dir("atomic");
+        let tmp = dir.join("sub").join("x.part"); // 父目录不存在：写必失败
+        assert!(atomic_write_to(&tmp, &dir.join("x.epub"), b"abc").is_err());
+        assert!(!dir.join("sub").exists());
+        assert!(atomic_copy_to(dir.join("missing.epub").to_str().unwrap(), &dir.join("y.part"), &dir.join("y.epub")).is_err());
+        assert!(!dir.join("y.part").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 40×20 的 JPEG，EXIF 方向 = 6（应顺时针转 90° 再显示 → 20×40）
+    fn jpeg_with_exif_orientation() -> Vec<u8> {
+        let img = image::RgbImage::from_fn(40, 20, |x, _| image::Rgb([x as u8, 0, 0]));
+        let mut plain = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut plain, 90)
+            .write_image(img.as_raw(), 40, 20, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        // TIFF（小端）：IFD0 一条 Orientation(0x0112, SHORT, 1) = 6
+        let tiff = [
+            b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let len = (6 + tiff.len() + 2) as u16; // "Exif\0\0" + TIFF + 长度字段本身
+        let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(b"Exif\0\0");
+        out.extend_from_slice(&tiff);
+        out.extend_from_slice(&plain[2..]); // 跳过 SOI，APP1 紧跟其后
+        out
+    }
+
+    // R5：重编码前按 EXIF 方向转正；尺寸嗅探同口径（浏览器显示原图时是转正后的宽高）
+    #[test]
+    fn decode_upright_applies_exif_orientation() {
+        let bytes = jpeg_with_exif_orientation();
+        let plain = image::load_from_memory(&bytes).unwrap();
+        assert_eq!((plain.width(), plain.height()), (40, 20), "image 解码本身不转，正是要补的一步");
+        let upright = decode_upright(&bytes).unwrap();
+        assert_eq!((upright.width(), upright.height()), (20, 40));
+        assert_eq!(
+            crate::commands::images::sniff_dimensions(&bytes),
+            (20, 40),
+            "嗅探出的宽高应与浏览器显示一致"
+        );
+        // 不带 EXIF 的图不受影响
+        let mut bare = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bare, 90)
+            .write_image(plain.to_rgb8().as_raw(), 40, 20, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let img = decode_upright(&bare).unwrap();
+        assert_eq!((img.width(), img.height()), (40, 20));
+        assert_eq!(crate::commands::images::sniff_dimensions(&bare), (40, 20));
     }
 
     #[test]

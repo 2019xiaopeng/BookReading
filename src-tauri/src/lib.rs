@@ -13,7 +13,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager, WindowEvent};
 
 use commands::library::{
-    delete_book, delete_reader_font, generate_cover_thumbs, get_book, import_book, list_books,
+    delete_reader_font, generate_cover_thumbs, get_book, import_book, list_books,
     reextract_all_covers, repair_book_metadata, reveal_book_location, save_reader_background,
     save_reader_font, scan_library_health, set_book_cover, set_book_manual_status,
     update_book_metadata,
@@ -115,6 +115,8 @@ pub fn run() {
             let _ = optimize_epub_images(handle.clone());
             // V-12：清掉上次应用内更新留下的安装包（%TEMP%\bookreading-update）
             commands::update::cleanup_update_dir();
+            // R3：清掉导入中途失败留下的 .part 半截文件（一天前的）
+            commands::library::sweep_part_files(handle.clone());
 
             // 批次19：系统托盘——✕ 最小化到托盘后的常驻入口；左键单击恢复主窗口，右键菜单 显示/退出。
             // 常驻：窗口 hide 后任务栏图标消失（Windows 默认），托盘不随窗口隐藏消失。
@@ -228,7 +230,6 @@ pub fn run() {
             wenku8_book_info,
             wenku8_download,
             wenku8_catalog,
-            delete_book,
             list_shelves,
             create_shelf,
             rename_shelf,

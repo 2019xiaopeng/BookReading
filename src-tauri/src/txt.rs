@@ -22,38 +22,85 @@ const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 </container>
 "#;
 
-pub fn decode_txt(bytes: &[u8]) -> Result<String, String> {
-    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]) {
-        return std::str::from_utf8(rest)
-            .map(|s| s.to_string())
-            .map_err(|_| DECODE_ERR.to_string());
+/// U+FFFE / U+FFFF 不是 XML 1.0 的合法字符（UTF-8 / UTF-16 都可能带进来），转 EPUB 后那一章会解析失败
+fn strip_noncharacters(text: String) -> String {
+    text.replace(['\u{FFFE}', '\u{FFFF}'], "")
+}
+
+/// 无 BOM 的 UTF-16 探测：UTF-8 / GBK 正文里不该有 0x00，有就看它落在偶数位（BE：高字节为 0）还是奇数位（LE）。
+/// 只看前 4KB；两种位置都有（零星 NUL 的普通文本）不算。
+fn sniff_utf16(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
+    let n = bytes.len().min(4096) / 2 * 2;
+    let (mut even, mut odd) = (0usize, 0usize);
+    for (i, &b) in bytes[..n].iter().enumerate() {
+        if b == 0 {
+            if i % 2 == 0 {
+                even += 1;
+            } else {
+                odd += 1;
+            }
+        }
     }
-    if bytes.starts_with(&[0xFF, 0xFE]) {
-        let (text, had_errors) = encoding_rs::UTF_16LE.decode_with_bom_removal(bytes);
-        return if had_errors {
-            Err(DECODE_ERR.to_string())
-        } else {
-            Ok(text.into_owned())
-        };
+    if even + odd < 2 {
+        return None;
     }
-    if bytes.starts_with(&[0xFE, 0xFF]) {
-        let (text, had_errors) = encoding_rs::UTF_16BE.decode_with_bom_removal(bytes);
-        return if had_errors {
-            Err(DECODE_ERR.to_string())
-        } else {
-            Ok(text.into_owned())
-        };
+    if odd > even * 8 {
+        Some(encoding_rs::UTF_16LE)
+    } else if even > odd * 8 {
+        Some(encoding_rs::UTF_16BE)
+    } else {
+        None
     }
-    if let Ok(text) = std::str::from_utf8(bytes) {
-        return Ok(text.to_string());
+}
+
+/// UTF-8 错误序列个数（from_utf8 只报第一处，逐段往后数）
+fn utf8_error_count(mut rest: &[u8]) -> usize {
+    let mut n = 0;
+    while let Err(e) = std::str::from_utf8(rest) {
+        n += 1;
+        let skip = e.valid_up_to() + e.error_len().unwrap_or(rest.len() - e.valid_up_to());
+        rest = &rest[skip..];
     }
-    // WHATWG "gbk" label is the gb18030 decoder, a superset of GBK
-    let (text, had_errors) = encoding_rs::GBK.decode_with_bom_removal(bytes);
+    n
+}
+
+fn decode_utf16(enc: &'static encoding_rs::Encoding, bytes: &[u8]) -> Result<String, String> {
+    let (text, had_errors) = enc.decode_with_bom_removal(bytes);
     if had_errors {
         Err(DECODE_ERR.to_string())
     } else {
         Ok(text.into_owned())
     }
+}
+
+pub fn decode_txt(bytes: &[u8]) -> Result<String, String> {
+    let text = if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]) {
+        std::str::from_utf8(rest)
+            .map(|s| s.to_string())
+            .map_err(|_| DECODE_ERR.to_string())?
+    } else if bytes.starts_with(&[0xFF, 0xFE]) {
+        decode_utf16(encoding_rs::UTF_16LE, bytes)?
+    } else if bytes.starts_with(&[0xFE, 0xFF]) {
+        decode_utf16(encoding_rs::UTF_16BE, bytes)?
+    } else if let Some(enc) = sniff_utf16(bytes) {
+        decode_utf16(enc, bytes)?
+    } else {
+        match std::str::from_utf8(bytes) {
+            Ok(s) => s.to_string(),
+            // 个别坏字节的 UTF-8（坏序列 ≤ 千分之一）按 UTF-8 容错解码，坏处换成替换符；坏得多才当 GBK。
+            // 原先只要有一个坏字节就整本落 GB18030，恰好合法时全书乱码
+            Err(_) if utf8_error_count(bytes) * 1000 <= bytes.len() => String::from_utf8_lossy(bytes).into_owned(),
+            Err(_) => {
+                // WHATWG "gbk" label is the gb18030 decoder, a superset of GBK
+                let (text, had_errors) = encoding_rs::GBK.decode_with_bom_removal(bytes);
+                if had_errors {
+                    return Err(DECODE_ERR.to_string());
+                }
+                text.into_owned()
+            }
+        }
+    };
+    Ok(strip_noncharacters(text))
 }
 
 pub struct Chapter {
@@ -389,6 +436,37 @@ mod tests {
     #[test]
     fn decode_txt_rejects_invalid_bytes() {
         assert!(decode_txt(b"\xFF").is_err());
+    }
+
+    // R6：无 BOM 的 UTF-16——按 0x00 落在奇数位还是偶数位判字节序
+    #[test]
+    fn decode_txt_bomless_utf16_by_zero_distribution() {
+        let s = "第一章 起点\n这是第一段。Chapter 1, line 2.\n第二行。";
+        let (le, _, _) = encoding_rs::UTF_16LE.encode(s);
+        let (be, _, _) = encoding_rs::UTF_16BE.encode(s);
+        assert_eq!(decode_txt(le.as_ref()).unwrap(), s);
+        assert_eq!(decode_txt(be.as_ref()).unwrap(), s);
+        // 普通 UTF-8 / GBK 文本不带 0x00，不会被误判（各自的 round trip 用例已覆盖）
+        assert_eq!(sniff_utf16(s.as_bytes()), None);
+        assert_eq!(sniff_utf16(&encoding_rs::GBK.encode(s).0), None);
+    }
+
+    // R6：UTF-8 里零星几个坏字节——仍按 UTF-8 解，坏处换成替换符，而不是整本落 GBK
+    #[test]
+    fn decode_txt_tolerates_sparse_bad_bytes_in_utf8() {
+        let mut bytes = "第一段正文。".repeat(200).into_bytes();
+        bytes[5] = 0xFF;
+        let text = decode_txt(&bytes).unwrap();
+        assert!(text.contains("第一段正文。"), "{text}");
+        assert!(text.contains('\u{FFFD}'), "坏字节应换成替换符：{text}");
+        // 坏得多（真 GBK 被当成 UTF-8 时的坏序列量级）才走 GBK：GBK round trip 用例即此路径
+    }
+
+    // R6：U+FFFE / U+FFFF 不是 XML 合法字符，输出前剔掉
+    #[test]
+    fn decode_txt_strips_noncharacters() {
+        let bytes = "正文\u{FFFE}中间\u{FFFF}结尾".as_bytes().to_vec();
+        assert_eq!(decode_txt(&bytes).unwrap(), "正文中间结尾");
     }
 
     #[test]

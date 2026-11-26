@@ -1,6 +1,7 @@
 // v2.6.0 一·八 A+B：EPUB 阅读优化副本（.opt.epub）——插图降采样 + xhtml img 尺寸注入。
 // v2.7 B-1 v2：剥离音视频条目 + xhtml 移除 <video>/<audio> + jpg/png 字节阈值重编码。
-// 只换 media 资源不动结构（CFI 不受影响）；OPF/xhtml 除注入尺寸外字节级保留。
+// 只换 media 资源不动结构（CFI 按元素序号定位，<video>/<audio> 换成等量的空占位，后面元素的下标不变）；
+// OPF/xhtml 除注入尺寸外字节级保留。
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufReader, Read, Write};
@@ -16,8 +17,9 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::app_paths;
 use crate::commands::images::sniff_dimensions;
-use crate::commands::library::{encode_jpeg, encode_webp_lossless};
+use crate::commands::library::{decode_upright, encode_jpeg, encode_webp_lossless};
 use crate::db;
+use crate::epub::read_limited;
 
 // 长边 >1800 才缩；缩到 1520（纸面 2x DPR 上限）
 const TRIGGER_LONG: u32 = 1800;
@@ -26,6 +28,8 @@ const TARGET_LONG: u32 = 1520;
 const BYTES_TRIGGER: usize = 300 * 1024;
 // 尺寸嗅探只读条目头部（PNG IHDR/JPEG SOF 都在前 128KB 内）
 const HEAD_BYTES: u64 = 128 * 1024;
+// 单条目解压上限：zip 头里声明的大小可伪造，不按实际读出的字节设限就是个解压炸弹
+const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
 
 pub(crate) fn ext_lower(name: &str) -> String {
     Path::new(name)
@@ -52,14 +56,47 @@ fn is_stripped_entry(name: &str) -> bool {
     is_media_entry(name) || ext_lower(name) == "smil"
 }
 
-fn basename_lower(name: &str) -> String {
-    name.rsplit(['/', '\\']).next().unwrap_or(name).to_lowercase()
+/// zip 条目键：反斜杠转斜杠、去开头斜杠、小写（Windows 上做的 EPUB 常见 href 与条目名大小写不一）
+fn zip_key(name: &str) -> String {
+    name.replace('\\', "/").trim_start_matches('/').to_lowercase()
+}
+
+/// xhtml 里的图片 src → zip 条目键：相对 xhtml 所在目录解析（认 ../ 与包内绝对路径 /OEBPS/…，去 query / fragment）。
+/// 原先按文件基名建键：分章各带 images/001.jpg 的书，不同目录的同名图互相覆盖，注入的宽高张冠李戴
+fn href_key(xhtml_name: &str, href: &str) -> String {
+    let href = href.split(['?', '#']).next().unwrap_or(href);
+    let mut parts: Vec<&str> = Vec::new();
+    let name = xhtml_name.replace('\\', "/");
+    if !href.starts_with('/') {
+        if let Some((dir, _)) = name.rsplit_once('/') {
+            parts.extend(dir.split('/').filter(|s| !s.is_empty() && *s != "."));
+        }
+    }
+    for seg in href.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    zip_key(&parts.join("/"))
 }
 
 /// 同目录 {stem}.opt.epub（foo.epub → foo.opt.epub）
 pub(crate) fn opt_path(src: &Path) -> PathBuf {
     let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
     src.with_file_name(format!("{stem}.opt.epub"))
+}
+
+/// 已有的 .opt 还读得开吗（zip 目录完整）。断电等情况会留下截断的 .opt：阅读侧打不开它、
+/// 又因为它"存在"永不重建——启动补生成时顺手把坏的重做
+fn opt_is_readable(opt: &Path) -> bool {
+    let Ok(f) = fs::File::open(opt) else {
+        return false;
+    };
+    ZipArchive::new(BufReader::new(f)).is_ok()
 }
 
 // 缩放后目标尺寸，与 image::resize 的取整口径一致（round(边×比例)）。
@@ -81,7 +118,8 @@ fn process_image(bytes: &[u8], ext: &str) -> Vec<u8> {
     if ext == "gif" {
         return passthrough();
     }
-    let Ok(img) = image::load_from_memory(bytes) else {
+    // 按 EXIF 方向转正后再缩 / 重编码：浏览器显示原图时会自动转正，重编码的副本不带 EXIF，不转就是躺倒的
+    let Ok(img) = decode_upright(bytes) else {
         return passthrough();
     };
     let big = img.width().max(img.height()) > TRIGGER_LONG;
@@ -114,26 +152,27 @@ fn process_image(bytes: &[u8], ext: &str) -> Vec<u8> {
 }
 
 // B-1 v2：xhtml 内整体移除 <video>/<audio> 元素（含自闭合变体），其余内容保留。
+// 换成等量的空 <span> 而不是直接删：CFI 按兄弟序号定位，删掉元素会让后面所有元素的书签 / 高亮 / 进度错位。
 // shortcut: 正则非贪婪配对，未闭合的 <video> 不动（EPUB XHTML 要求良构，罕见）
 fn strip_av_elements(html: &str) -> String {
     static AV: OnceLock<Regex> = OnceLock::new();
     let re = AV.get_or_init(|| {
         Regex::new(r"(?is)<(video|audio)\b[^>]*/>|<(video|audio)\b[^>]*>.*?</(video|audio)\s*>").unwrap()
     });
-    re.replace_all(html, "").into_owned()
+    re.replace_all(html, "<span></span>").into_owned()
 }
 
-// R2：往缺 width/height 的 <img> 注入实量尺寸（仅当 src 基名在已测图片表内）；
-// B-1 v2：同时移除 <video>/<audio> 元素。非 UTF-8 的 xhtml 原样返回。
+// R2：往缺 width/height 的 <img> 注入实量尺寸（仅当 src 解析到的图片条目在已测图片表内）；
+// B-1 v2：同时把 <video>/<audio> 换成空占位。非 UTF-8 的 xhtml 原样返回。
 // shortcut: 纯正则匹配、src 不做 URL 解码、SVG 包装的 <image xlink:href>（Z-Library 风格）本轮不处理
-fn rebuild_xhtml(bytes: &[u8], dims: &HashMap<String, (u32, u32)>) -> Vec<u8> {
+fn rebuild_xhtml(bytes: &[u8], dims: &HashMap<String, (u32, u32)>, xhtml_name: &str) -> Vec<u8> {
     match std::str::from_utf8(bytes) {
-        Ok(text) => strip_av_elements(&inject_img_dims_str(text, dims)).into_bytes(),
+        Ok(text) => strip_av_elements(&inject_img_dims_str(text, dims, xhtml_name)).into_bytes(),
         Err(_) => bytes.to_vec(),
     }
 }
 
-fn inject_img_dims_str(html: &str, dims: &HashMap<String, (u32, u32)>) -> String {
+fn inject_img_dims_str(html: &str, dims: &HashMap<String, (u32, u32)>, xhtml_name: &str) -> String {
     static IMG_TAG: OnceLock<Regex> = OnceLock::new();
     static DIM_ATTR: OnceLock<Regex> = OnceLock::new();
     static SRC_ATTR: OnceLock<Regex> = OnceLock::new();
@@ -152,7 +191,7 @@ fn inject_img_dims_str(html: &str, dims: &HashMap<String, (u32, u32)>) -> String
             let found = src_attr
                 .captures(tag)
                 .and_then(|c| c.get(1).or_else(|| c.get(2)))
-                .and_then(|src| dims.get(&basename_lower(src.as_str())));
+                .and_then(|src| dims.get(&href_key(xhtml_name, src.as_str())));
             match found {
                 Some(&(w, h)) if w > 0 && h > 0 => {
                     let (body, close) = if let Some(b) = tag.strip_suffix("/>") {
@@ -200,7 +239,7 @@ pub fn optimize_epub_file(src: &Path) -> Result<bool, String> {
         let _ = Read::take(&mut entry, HEAD_BYTES).read_to_end(&mut head);
         let d = sniff_dimensions(&head);
         if d.0 > 0 && d.1 > 0 {
-            dims.insert(basename_lower(entry.name()), final_dims(d));
+            dims.insert(zip_key(entry.name()), final_dims(d));
         }
     }
     if dims.is_empty() {
@@ -221,11 +260,14 @@ pub fn optimize_epub_file(src: &Path) -> Result<bool, String> {
         if !entry.is_dir() && is_stripped_entry(&name) {
             continue; // B-1 v2：音视频/媒体叠加条目不进阅读副本
         }
-        let mut bytes = Vec::new();
-        if let Err(e) = entry.read_to_end(&mut bytes) {
-            error = Some(format!("failed to read {name}: {e}"));
-            break;
-        }
+        // take(n) 才是真限量：zip 头里声明的大小可伪造，解压器对输出不设上限
+        let bytes = match read_limited(&mut entry, MAX_ENTRY_BYTES) {
+            Ok(b) => b,
+            Err(e) => {
+                error = Some(format!("failed to read {name}: {e}"));
+                break;
+            }
+        };
         let is_mimetype = name == "mimetype";
         let opts = if is_mimetype {
             SimpleFileOptions::default().compression_method(CompressionMethod::Stored)
@@ -240,7 +282,7 @@ pub fn optimize_epub_file(src: &Path) -> Result<bool, String> {
             } else if is_opt_image(&name) {
                 process_image(&bytes, &ext_lower(&name))
             } else if is_xhtml(&name) {
-                rebuild_xhtml(&bytes, &dims)
+                rebuild_xhtml(&bytes, &dims, &name)
             } else {
                 bytes
             };
@@ -311,7 +353,9 @@ pub fn optimize_epub_images(app: tauri::AppHandle) -> Result<u32, String> {
         sized.sort_by(|a, b| b.0.cmp(&a.0));
         for (i, (_, lp)) in sized.into_iter().enumerate() {
             let abs = root.join(lp.strip_prefix("library/").unwrap_or(&lp));
-            if !opt_path(&abs).exists() {
+            // 不存在或已损坏（截断 / 不是 zip）都重做
+            if !opt_is_readable(&opt_path(&abs)) {
+                let _ = fs::remove_file(opt_path(&abs));
                 if let Err(e) = optimize_epub_file(&abs) {
                     eprintln!("[epub-opt] {}: {e}", abs.display());
                 }
@@ -338,7 +382,7 @@ pub fn optimize_epub_now(app: tauri::AppHandle, book_id: String) -> Result<bool,
         return Ok(false); // 引用书（绝对路径）：.opt 无处消费，不做
     };
     let abs = app_paths::library_dir(&app)?.join(rest);
-    if opt_path(&abs).exists() {
+    if opt_is_readable(&opt_path(&abs)) {
         return Ok(false);
     }
     let handle = app.clone();
@@ -523,6 +567,8 @@ mod tests {
         assert!(!text.contains("video") && !text.contains("audio"), "{text}");
         // 元素外内容保留；img 尺寸注入照常工作
         assert!(text.contains("<p>前</p>") && text.contains("<p>正文"), "{text}");
+        // video / audio 换成等量的空占位：后面元素的 CFI 序号不变（3 个被换的元素 → 3 个 span）
+        assert!(text.contains("<p>前</p><span></span><span></span><span></span><p>正文 "), "{text}");
         assert!(
             text.contains(r#"<img src="images/s.png" width="800" height="600">"#),
             "{text}"
@@ -567,9 +613,64 @@ mod tests {
 
     #[test]
     fn strip_av_handles_plain_and_selfclosing_only() {
-        assert_eq!(strip_av_elements("<p>a<video>b</video>c</p>"), "<p>ac</p>");
-        assert_eq!(strip_av_elements(r#"<audio src="x.ogg"/>"#), "");
+        // 换成等量的空占位（保住后面元素的 CFI 序号），不是删掉
+        assert_eq!(strip_av_elements("<p>a<video>b</video>c</p>"), "<p>a<span></span>c</p>");
+        assert_eq!(strip_av_elements(r#"<audio src="x.ogg"/>"#), "<span></span>");
         // 未闭合标签不动（良构 EPUB 不会出现）
         assert_eq!(strip_av_elements("<video>unclosed"), "<video>unclosed");
+    }
+
+    // R2：尺寸表按条目路径建键——不同目录的同名图各用各的尺寸；src 相对 xhtml 所在目录解析
+    #[test]
+    fn optimize_keys_dims_by_entry_path_not_basename() {
+        let dir = temp("opt-dims");
+        let src = dir.join("d.epub");
+        write_zip(
+            &src,
+            &[
+                ("mimetype", b"application/epub+zip".to_vec(), true),
+                ("OEBPS/ch1.xhtml", br#"<img src="images/a.png"><img src="images/a.png?v=2#x">"#.to_vec(), false),
+                ("OEBPS/sub/ch2.xhtml", br#"<img src="../images/a.png"><img src="/OEBPS/images/a.png"><img src="images/a.png">"#.to_vec(), false),
+                ("OEBPS/images/a.png", noise_png(800, 600), false),
+                ("OEBPS/sub/images/a.png", noise_png(640, 480), false),
+            ],
+        );
+        assert_eq!(optimize_epub_file(&src).unwrap(), true);
+        let mut zip = ZipArchive::new(BufReader::new(fs::File::open(dir.join("d.opt.epub")).unwrap())).unwrap();
+        let mut text = |i: usize| {
+            let mut v = Vec::new();
+            zip.by_index(i).unwrap().read_to_end(&mut v).unwrap();
+            String::from_utf8(v).unwrap()
+        };
+        assert_eq!(
+            text(1),
+            r#"<img src="images/a.png" width="800" height="600"><img src="images/a.png?v=2#x" width="800" height="600">"#
+        );
+        // ../images 走到上层的 800×600；sub 目录下的同名图是 640×480——原先按基名建键时两处会拿到同一个尺寸
+        assert_eq!(
+            text(2),
+            "<img src=\"../images/a.png\" width=\"800\" height=\"600\">\
+             <img src=\"/OEBPS/images/a.png\" width=\"800\" height=\"600\">\
+             <img src=\"images/a.png\" width=\"640\" height=\"480\">"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // R1：已有的 .opt 坏了（截断 / 不是 zip）要认得出——启动补生成才会重做
+    #[test]
+    fn opt_is_readable_rejects_missing_truncated_and_plain_files() {
+        let dir = temp("opt-readable");
+        assert!(!opt_is_readable(&dir.join("none.opt.epub")));
+        let src = dir.join("r.epub");
+        write_zip(&src, &[("mimetype", b"application/epub+zip".to_vec(), true)]);
+        assert!(opt_is_readable(&src));
+        let bytes = fs::read(&src).unwrap();
+        let cut = dir.join("cut.epub");
+        fs::write(&cut, &bytes[..bytes.len() / 2]).unwrap();
+        assert!(!opt_is_readable(&cut));
+        let plain = dir.join("plain.epub");
+        fs::write(&plain, b"garbage").unwrap();
+        assert!(!opt_is_readable(&plain));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

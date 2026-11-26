@@ -2192,6 +2192,12 @@ input[type="range"] {
      至少翻页中间看到的是纸色而非白色闪光 */
   background: var(--wr-paper, #f5f0e8);
 }
+/* E10：夜间两档的 --wr-paper 是叠在底色上的 6% 白（半透明），上面这条"实底色兜底"在它们身上落空——
+   翻动时旧页只剩图片本身，新页从图片四周透出来（浅色主题是一整张纸）。这两档改用实色面板色 */
+[data-theme="dark"] .wr-fold-layer,
+[data-theme="ink-dark"] .wr-fold-layer {
+  background: var(--panel-solid);
+}
 .wr-fold-layer::before {
   content: "";
   position: absolute;

@@ -16,6 +16,18 @@ type AnyResources = {
   replacementUrls: (string | null)[];
 };
 
+/** 持有 blob: 地址的两处：Archive（压缩包内路径 → 地址）与 Resources（manifest 顺序的替换地址） */
+type AnyBlobHolders = {
+  urlCache?: Record<string, string>;
+  replacementUrls?: (string | null | undefined)[] | undefined;
+};
+
+function revokeBlobUrls(holder: AnyBlobHolders): void {
+  for (const url of [...Object.values(holder.urlCache ?? {}), ...(holder.replacementUrls ?? [])]) {
+    if (typeof url === "string" && url.startsWith("blob:")) URL.revokeObjectURL(url);
+  }
+}
+
 /** 对 book.resources / book.archive 的实际类打补丁；在 book.ready 后、display 前调用 */
 export function patchEpubjsBook(book: unknown): void {
   const b = book as { resources?: AnyResources; archive?: unknown } | null;
@@ -38,5 +50,19 @@ export function patchEpubjsBook(book: unknown): void {
         return replacementUrls;
       });
     };
+  }
+  // blob 地址释放：上游 Archive.destroy() 对 urlCache 的键（压缩包内路径）调 revoke——地址在值里，
+  // revoke 全是空操作；Resources.destroy() 只把引用置空。每开一本书就漏一批图片 / 字体 / 重写过的 CSS 的 blob，
+  // 直到页面卸载。关书后不该再有东西引用它们（灯箱随阅读页卸载、封面来自 Rust），所以在两处 destroy 前按值 revoke。
+  for (const obj of [b.archive, b.resources]) {
+    const proto = obj ? (Object.getPrototypeOf(obj) as Record<string, unknown> | null) : null;
+    const destroy = proto?.destroy;
+    if (proto && !proto.__wrRevoke && typeof destroy === "function") {
+      proto.__wrRevoke = true;
+      proto.destroy = function (this: AnyBlobHolders) {
+        revokeBlobUrls(this);
+        return (destroy as (this: unknown) => unknown).call(this);
+      };
+    }
   }
 }

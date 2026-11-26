@@ -326,10 +326,6 @@ export async function updateBookMetadata(req: UpdateBookMetadataRequest): Promis
   return invoke<Book>("update_book_metadata", { req });
 }
 
-export async function deleteBook(bookId: string): Promise<void> {
-  return invoke<void>("delete_book", { bookId });
-}
-
 export async function getSettings(): Promise<Record<string, string>> {
   return invoke<Record<string, string>>("get_settings");
 }

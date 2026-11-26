@@ -544,11 +544,11 @@ pub fn read_book_file(app: tauri::AppHandle, book_id: String) -> Result<tauri::i
         .query_row("SELECT library_path FROM books WHERE id = ?1", [&book_id], |r| r.get(0))
         .map_err(|_| format!("书 {book_id} 不存在"))?;
     let v = lp.replace('\\', "/");
+    // library_abs 自己会剥 "library/" 前缀——这里不能再剥一次（原先剥了两次，库内分支恒失败）
     let abs = if Path::new(&v).is_absolute() {
         PathBuf::from(&v)
     } else {
-        let rel = v.strip_prefix("library/").ok_or_else(|| format!("非法书路径: {v}"))?;
-        app_paths::library_abs(&app, &rel)?
+        app_paths::library_abs(&app, &v)?
     };
     let bytes = fs::read(&abs).map_err(|e| format!("failed to read {}: {e}", abs.display()))?;
     Ok(tauri::ipc::Response::new(bytes))

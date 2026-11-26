@@ -197,6 +197,35 @@ export function lazyImagesForFlow(flow: string): boolean {
 }
 
 /**
+ * ZIP 的中央目录结束记录（EOCD，PK\x05\x06）在文件尾部、其后最多跟 64KB 注释：尾部找不到 = 被截断 / 不是 zip。
+ * 只做这个最便宜的完整性判断——它挡的是「落盘中途断电留下的半截 .opt.epub」，不是通用的 zip 校验。
+ */
+export function hasZipEnd(b: Uint8Array): boolean {
+  const tail = b.subarray(Math.max(0, b.length - 22 - 65535));
+  for (let i = tail.length - 22; i >= 0; i--) {
+    if (tail[i] === 0x50 && tail[i + 1] === 0x4b && tail[i + 2] === 0x05 && tail[i + 3] === 0x06) return true;
+  }
+  return false;
+}
+
+/**
+ * 撤掉某主题已注入各章节 iframe 的样式表（epub.js 给每个主题建一张 <style id="epubjs-inserted-css-主题名">）。
+ * 上游 Themes.add 是往这张表里 insertRule 追加而不是替换——每次重选同一主题，规则就多一份。
+ * 撤掉后再 select，epub.js 会按当前规则重建一张。返回撤掉的张数。
+ */
+export function dropThemeSheet(contents: unknown[], theme: string): number {
+  let n = 0;
+  for (const c of contents) {
+    const sheet = (c as { document?: Document } | null)?.document?.getElementById(`epubjs-inserted-css-${theme}`);
+    if (sheet) {
+      sheet.remove();
+      n += 1;
+    }
+  }
+  return n;
+}
+
+/**
  * spread 切换只改列度量不重绘当前内容，会留下按旧度量裁切的残影；
  * 统一路径：spread(mode) → clear() → display(target)。无 target（尚未渲染）时退回 resize。
  */
@@ -324,9 +353,18 @@ export async function createReader(opts: {
     if (!opts.bookId) throw new Error("引用书缺少 bookId");
     bytes = await readBookFile(opts.bookId);
   } else if (/\.epub$/.test(opts.libraryPath)) {
+    let opt: Uint8Array | null = null;
     try {
-      bytes = await readAppDataFile(opts.libraryPath.replace(/\.epub$/, ".opt.epub"));
+      opt = await readAppDataFile(opts.libraryPath.replace(/\.epub$/, ".opt.epub"));
     } catch {
+      // 没有优化副本
+    }
+    // R1：.opt 在、但不是完整的 zip（落盘中途断电 / 被截断）→ 回落原书；坏文件由启动时的补生成重做。
+    // 原先只有「读不到文件」才回落：读得到却打不开时直接报「EPUB 打开失败」
+    if (opt && hasZipEnd(opt)) {
+      bytes = opt;
+    } else {
+      if (opt) logFrontend(`reader: .opt.epub 不完整，回落原书 ${opts.libraryPath}`);
       bytes = await readAppDataFile(opts.libraryPath);
     }
   } else {
@@ -369,12 +407,18 @@ export async function createReader(opts: {
     opts.onError?.(`章节渲染失败：${String(e ?? "displayerror")}`);
   };
   rendition.on?.("displayerror", onDisplayError);
-  // 章节切换重建 iframe——每次 rendered 后重新应用当前主题（否则切章后字体丢失）
+  // 章节切换重建 iframe——每次 rendered 后重新应用当前主题（否则切章后字体丢失）。
+  // selectTheme 先撤旧表：主题 hook 已经给新 iframe 注入过一份，直接 select 会再追加一份
   rendition.on?.("rendered", () => {
-    try { rendition.themes.select(currentTheme); } catch {}
+    try { selectTheme(currentTheme); } catch {}
   });
 
   let currentTheme: Theme = "light";
+  /** 上游 Themes.add 往同一张 <style> 里追加而不是替换：重选前先把该主题已注入的样式表撤掉，规则不会越选越多（E7） */
+  const selectTheme = (t: Theme) => {
+    dropThemeSheet(rendition.getContents?.() ?? [], t);
+    rendition.themes.select(t);
+  };
   let currentFontSizePercent = 120;
   const DEFAULT_TYPO: TypographyParams = {
     lineHeight: 1.9,
@@ -456,10 +500,10 @@ export async function createReader(opts: {
     }
     // 防御+重试：iframe 未就绪时 sheet 为 null——首次失败延迟到 rendition.ready 后重试注入
     try {
-      rendition.themes.select(currentTheme);
+      selectTheme(currentTheme);
     } catch {
       rendition.ready.then(() => {
-        try { rendition.themes.select(currentTheme); } catch {}
+        try { selectTheme(currentTheme); } catch {}
       }).catch(() => {});
     }
   };
@@ -853,7 +897,7 @@ export async function createReader(opts: {
   }
   // 首章 display 完成——此刻 iframe 已创建并渲染，themes.select 才有 document 可注入
   // （registerThemes 的初始调用在 display 之前，sheet 为 null 是必然；dev 版仅靠时序偶然通过）
-  try { rendition.themes.select(currentTheme); } catch {}
+  try { selectTheme(currentTheme); } catch {}
 
   // 冷启动收敛：请求 scrolled 时在首显成功后立即切换（见 renderTo 注释）
   if (requestedFlow === "scrolled") applyFlow("scrolled");
@@ -883,7 +927,7 @@ export async function createReader(opts: {
     setTheme: (theme: Theme) => {
       if (theme === currentTheme) return;
       currentTheme = theme;
-      rendition.themes.select(theme);
+      selectTheme(theme);
     },
     setFontSizePercent: (percent: number) => {
       rendition.themes.fontSize(`${percent}%`);

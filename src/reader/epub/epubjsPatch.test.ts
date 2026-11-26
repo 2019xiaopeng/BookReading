@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 // 对补丁函数做契约测试：伪实例直接调 prototype 方法，不依赖模块单副本
 import { patchEpubjsBook } from "./epubjsPatch";
@@ -81,5 +81,75 @@ describe("epubjs replacementUrls 对齐补丁", () => {
   test("空 book / 无 resources 安全跳过", () => {
     expect(() => patchEpubjsBook(null)).not.toThrow();
     expect(() => patchEpubjsBook({})).not.toThrow();
+  });
+});
+
+describe("epubjs blob 释放补丁（E1：关书时按值 revoke）", () => {
+  /** vitest 的 node 环境里 URL 没有 revokeObjectURL：装一个可观察的替身，用完还原 */
+  function stubRevoke() {
+    const prev = Object.getOwnPropertyDescriptor(URL, "revokeObjectURL");
+    const fn = vi.fn();
+    Object.defineProperty(URL, "revokeObjectURL", { value: fn, writable: true, configurable: true });
+    return {
+      fn,
+      restore: () => {
+        if (prev) Object.defineProperty(URL, "revokeObjectURL", prev);
+        else delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL;
+      },
+    };
+  }
+
+  class FakeArchive {
+    urlCache: Record<string, string> = { "/OEBPS/images/a.jpg": "blob:a", "/OEBPS/fonts/f.woff": "blob:f" };
+    destroyed = 0;
+    destroy() {
+      this.destroyed += 1;
+      this.urlCache = {};
+    }
+  }
+  class FakeBlobResources {
+    replacementUrls: (string | null)[] | undefined = ["blob:a", null, "blob:css", "data:image/png;base64,xxxx"];
+    destroyed = 0;
+    destroy() {
+      this.destroyed += 1;
+      this.replacementUrls = undefined;
+    }
+  }
+
+  test("两处 destroy 前按值 revoke：键 / null / 非 blob 地址不动，原 destroy 照常执行", () => {
+    const { fn: revoke, restore } = stubRevoke();
+    try {
+      const archive = new FakeArchive();
+      const resources = new FakeBlobResources();
+      patchEpubjsBook({ archive, resources });
+      archive.destroy();
+      resources.destroy();
+      expect(revoke.mock.calls.map((c) => c[0])).toEqual(["blob:a", "blob:f", "blob:a", "blob:css"]);
+      expect(archive.destroyed).toBe(1);
+      expect(resources.destroyed).toBe(1);
+      expect(archive.urlCache).toEqual({});
+      expect(resources.replacementUrls).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  test("幂等：重复打补丁不叠加，原 destroy 只执行一次", () => {
+    const { fn: revoke, restore } = stubRevoke();
+    try {
+      const archive = new FakeArchive();
+      patchEpubjsBook({ archive });
+      patchEpubjsBook({ archive });
+      archive.destroy();
+      expect(archive.destroyed).toBe(1);
+      expect(revoke).toHaveBeenCalledTimes(2);
+    } finally {
+      restore();
+    }
+  });
+
+  test("类上没有 destroy：安全跳过，不往 Object.prototype 上写标记", () => {
+    patchEpubjsBook({ archive: { destroy: undefined } });
+    expect((Object.prototype as { __wrRevoke?: boolean }).__wrRevoke).toBeUndefined();
   });
 });
