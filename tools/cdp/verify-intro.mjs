@@ -32,7 +32,7 @@ async function coldStart(theme, viewport) {
     "  window.__intro = { anims: [] };\n" +
     "  (function watch() {\n" +
     "    for (const a of document.getAnimations()) {\n" +
-    "      if (a.animationName === 'wr-intro-in' && a.playState === 'running') { a.pause(); window.__intro.anims.push(a); }\n" +
+    "      if (a.animationName === 'wr-intro-in' && a.playState === 'running') { a.pause(); window.__intro.anims.push(a); const sp = document.getElementById('wr-splash'); if (sp) sp.remove(); }\n" +
     "    }\n" +
     "    if (!window.__introStop) requestAnimationFrame(watch);\n" +
     "  })();\n" +

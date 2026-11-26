@@ -17,8 +17,25 @@
         document.documentElement.dataset.theme=t;
         document.documentElement.style.background=bg;
         document.documentElement.style.colorScheme=(t==="dark"||t==="darkcontrast"||t==="ink-dark")?"dark":"light";
+        document.documentElement.style.setProperty("--wr-splash-bg",bg);
+        // 启动页兜底：8 秒后无论如何撤掉（脚本没起来时别把错误页盖住）
+        setTimeout(function(){var s=document.getElementById("wr-splash");if(s)s.remove()},8000);
       }catch(e){}
     </script>
+    <style>
+      /* V-3 启动画面：页面一加载就显示「图标 + 标题」，盖住加载脚本期间的空档（dev 模式半秒到一秒，打包版短得多）；
+         壳第一次挂载并画出第一帧后由 src/ui/intro.ts 撤掉——放大淡出，与壳体的浮入交叉。
+         样式必须内联：样式表要等脚本加载完才生效 */
+      #wr-splash{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:var(--wr-splash-bg,#FAFAF7);pointer-events:none;transition:opacity .36s ease,transform .46s cubic-bezier(.2,.7,.15,1)}
+      #wr-splash img{width:76px;height:76px;animation:wr-splash-in .6s cubic-bezier(.2,.7,.15,1) both}
+      #wr-splash .t{font:650 26px/1 "Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;color:#16181a;letter-spacing:.04em;animation:wr-splash-in .6s .08s cubic-bezier(.2,.7,.15,1) both}
+      #wr-splash .s{font:400 12px/1 "Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;color:rgba(22,24,26,.55);letter-spacing:.2em;animation:wr-splash-in .6s .16s cubic-bezier(.2,.7,.15,1) both}
+      [data-theme="dark"] #wr-splash .t,[data-theme="darkcontrast"] #wr-splash .t,[data-theme="ink-dark"] #wr-splash .t{color:#f5f5f5}
+      [data-theme="dark"] #wr-splash .s,[data-theme="darkcontrast"] #wr-splash .s,[data-theme="ink-dark"] #wr-splash .s{color:rgba(245,245,245,.55)}
+      #wr-splash.is-leaving{opacity:0;transform:scale(1.06)}
+      @keyframes wr-splash-in{from{opacity:0;transform:translateY(8px) scale(.92)}to{opacity:1;transform:none}}
+      @media (prefers-reduced-motion:reduce){#wr-splash,#wr-splash img,#wr-splash .t,#wr-splash .s{animation:none;transition:none}}
+    </style>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="本地 EPUB、TXT 与漫画阅读器" />
@@ -26,6 +43,11 @@
   </head>
 
   <body>
+    <div id="wr-splash" aria-hidden="true">
+      <img src="/favicon.svg" alt="" draggable="false" />
+      <div class="t">BookReading</div>
+      <div class="s">阅读</div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

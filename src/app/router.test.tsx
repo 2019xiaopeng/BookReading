@@ -137,8 +137,8 @@ describe("V-3 开场动画（只播一次）", () => {
   test("进程内第一次挂载壳才带 .wr-shell--intro；开场动画自己的 animationend 才撤类；壳重挂不重播", async () => {
     introState.pending = true;
     render(tree);
-    expect(hasIntro()).toBe(true);
     await waitFor(() => expect(introState.pending).toBe(false)); // 挂载后标记即消耗
+    await waitFor(() => expect(hasIntro()).toBe(true)); // 壳画出第一帧之后才起动画、才撤启动页
 
     // animationend 会从子孙冒泡：别的动画、以及先结束的侧栏那段都不算
     animationEnd("wr-something-else");
@@ -158,7 +158,7 @@ describe("V-3 开场动画（只播一次）", () => {
   test("壳体那段开场动画结束 → 撤类", async () => {
     introState.pending = true;
     render(tree);
-    expect(hasIntro()).toBe(true);
+    await waitFor(() => expect(hasIntro()).toBe(true));
     const e = new Event("animationend", { bubbles: true });
     Object.defineProperty(e, "animationName", { value: "wr-intro-in" });
     document.querySelector(".wr-shell-body")!.dispatchEvent(e);
