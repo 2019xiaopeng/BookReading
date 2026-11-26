@@ -1,6 +1,6 @@
 [package]
 name = "bookreading"
-version = "3.2.0"
+version = "3.2.1"
 license = "MIT"
 description = "Windows desktop reader for EPUB, TXT, manga folders and image PDFs"
 authors = ["qcb"]
