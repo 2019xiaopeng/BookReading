@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type AnimationEvent, type CSSProperties, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getVersion } from "@tauri-apps/api/app";
@@ -199,6 +199,10 @@ export default function AppShell(props: {
   };
   /** v3.0 D3：非书库视图的上下文信息行（quickFilter 缺席时渲染于同一常驻行容器） */
   contextRow?: ReactNode;
+  /** V-3 开场动画：进程内壳第一次挂载时为 true（只播一次，见 src/ui/intro.ts）；画法在 .wr-shell--intro */
+  intro?: boolean;
+  /** 开场动画播完的回调（animationend 会从子孙冒泡，调用方按动画名过滤） */
+  onIntroEnd?: (e: AnimationEvent<HTMLElement>) => void;
   children: ReactNode;
 }) {
   const navigate = useNavigate();
@@ -427,7 +431,11 @@ export default function AppShell(props: {
 
   return (
     <TooltipProvider>
-    <div className={`wr-shell${bgUrl ? " wr-shell--userbg" : ""}`} style={shellStyle}>
+    <div
+      className={`wr-shell${bgUrl ? " wr-shell--userbg" : ""}${props.intro ? " wr-shell--intro" : ""}`}
+      style={shellStyle}
+      onAnimationEnd={props.onIntroEnd}
+    >
       <TitleBar title={props.title} />
       <div className="wr-shell-body">
       <div className="wr-panel wr-side" data-open={drawerOpen || undefined}>

@@ -234,6 +234,25 @@
   color: var(--wr-ink);
 }
 
+/* V-3 开场动画：冷启动时侧栏与主栏各淡入一次（主栏晚 80ms 起步，共 440ms）。只改 opacity——不动布局、
+   不挡数据加载；类由 AppLayout 在进程内第一次挂载壳时加上、播完撤掉（src/ui/intro.ts）。
+   系统「减少动态效果」由上面的全局回退关掉 */
+.wr-shell--intro .wr-side,
+.wr-shell--intro .wr-main {
+  animation: wr-intro-in 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.wr-shell--intro .wr-main {
+  animation-delay: 80ms;
+}
+@keyframes wr-intro-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* U-23 标题栏叠加后的壳体两段式：标题栏全宽贴顶，body=原 270/1fr 栅格（侧栏 76px 与主栏 76px
    顶线仍同栅格行起点，对齐基线不变）；三档窄窗断点改挂在 body 上（见 M2 U7 段） */
 .wr-shell-body {

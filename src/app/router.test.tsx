@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { useLayoutEffect } from "react";
 
 // 真壳直渲染（不 mock AppShell）：只 mock 壳的 Tauri 面（webview 拖放/版本号/DB 读写），侧栏树数据给空
@@ -24,6 +24,7 @@ vi.mock("../tauri/invoke", async (importOriginal) => {
 
 import { AppLayout } from "./router";
 import { setPageMeta } from "../ui/pageMeta";
+import { introState } from "../ui/intro";
 
 // 假页面照真实页面同款：布局期（useLayoutEffect）注册本页元信息
 function FakeLibrary() {
@@ -102,5 +103,65 @@ describe("AppLayout 常驻壳（批次8 防回归红线）", () => {
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "设置" })).toBeNull());
     expect(screen.getByTestId("page-library")).toBeTruthy();
+  });
+});
+
+describe("V-3 开场动画（只播一次）", () => {
+  /** 阅读页在壳外：进 /read 卸载壳、回 / 重挂 */
+  function Nav({ to, label }: { to: string; label: string }) {
+    const nav = useNavigate();
+    return (
+      <button data-testid={label} onClick={() => nav(to)}>
+        go
+      </button>
+    );
+  }
+  const hasIntro = () => document.querySelector(".wr-shell")?.classList.contains("wr-shell--intro") === true;
+  const animationEnd = (name: string) => {
+    // jsdom 没有 AnimationEvent：手工造一个带 animationName 的 animationend
+    const e = new Event("animationend", { bubbles: true });
+    Object.defineProperty(e, "animationName", { value: name });
+    document.querySelector(".wr-shell")!.dispatchEvent(e);
+  };
+  const tree = (
+    <MemoryRouter initialEntries={["/"]}>
+      <Routes>
+        <Route element={<AppLayout />}>
+          <Route path="/" element={<Nav to="/read/1" label="to-reader" />} />
+        </Route>
+        <Route path="/read/:bookId" element={<Nav to="/" label="to-library" />} />
+      </Routes>
+    </MemoryRouter>
+  );
+
+  test("进程内第一次挂载壳才带 .wr-shell--intro；主栏那段播完才撤类；壳重挂不重播", async () => {
+    introState.pending = true;
+    render(tree);
+    expect(hasIntro()).toBe(true);
+    await waitFor(() => expect(introState.pending).toBe(false)); // 挂载后标记即消耗
+
+    // animationend 会从子孙冒泡：别的动画、以及先结束的侧栏那段都不算
+    animationEnd("wr-something-else");
+    expect(hasIntro()).toBe(true);
+    animationEnd("wr-intro-in"); // target 是壳根自己（不是 .wr-main）
+    expect(hasIntro()).toBe(true);
+
+    // 去阅读页（壳卸载）再回来（壳重挂）：不重播
+    fireEvent.click(screen.getByTestId("to-reader"));
+    await waitFor(() => expect(screen.getByTestId("to-library")).toBeTruthy());
+    expect(document.querySelector(".wr-shell")).toBeNull();
+    fireEvent.click(screen.getByTestId("to-library"));
+    await waitFor(() => expect(screen.getByTestId("to-reader")).toBeTruthy());
+    expect(hasIntro()).toBe(false);
+  });
+
+  test("主栏那段开场动画结束 → 撤类", async () => {
+    introState.pending = true;
+    render(tree);
+    expect(hasIntro()).toBe(true);
+    const e = new Event("animationend", { bubbles: true });
+    Object.defineProperty(e, "animationName", { value: "wr-intro-in" });
+    document.querySelector(".wr-main")!.dispatchEvent(e);
+    await waitFor(() => expect(hasIntro()).toBe(false));
   });
 });
