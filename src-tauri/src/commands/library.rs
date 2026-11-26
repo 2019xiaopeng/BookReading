@@ -687,19 +687,34 @@ pub fn set_book_manual_status(
 // 详情页的删除原先走 delete_book（文件与 DB 行一并硬删），而确认框写的是「移入回收站」——
 // 2026-11-26 审计复核时发现并移除：详情页改调软删 delete_books，与 ⋯ 菜单同一条路。
 
-/// R3：清掉导入 / 写封面 / 生成 .opt 中途失败留下的半截文件（*.part*）。后台线程跑，
-/// 只清 library 根下、修改时间早于一天前的——当天的可能正有导入在写。
+/// R3：清掉导入 / 写封面 / 生成 .opt 中途失败留下的半截文件。后台线程跑，只看 library/books 与 library/covers，
+/// 只删修改时间早于一天前的——当天的可能正有导入在写。
 pub fn sweep_part_files(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         if let Ok(root) = app_paths::library_dir(&app) {
             let cutoff = SystemTime::now() - Duration::from_secs(86_400);
-            let _ = sweep_part_in(&root, cutoff);
+            for sub in ["books", "covers"] {
+                let _ = sweep_part_in(&root.join(sub), cutoff);
+            }
         }
     });
 }
 
-/// 递归删除 dir 下名字含 ".part" 且修改时间早于 cutoff 的文件；返回删掉的个数。
-/// library 根是应用自己的目录（原地引用的书不在这里），正常文件名里不会带 .part。
+/// 是不是本应用自己的半截文件：库内文件一律以书 id（UUID）命名，`.part` 只出现在导入 / 写封面 / 生成 .opt 的
+/// 临时名里（`<id>.epub.part`、`<id>.jpg.part`、`<id>.opt.epub.part-<uuid>`）。库根可以指到用户的任意文件夹——
+/// 不能光凭「名字里有 .part」就删（`报告.part2.docx` 这种是用户的东西）
+fn is_own_part_file(name: &str) -> bool {
+    let b = name.as_bytes();
+    if b.len() <= 36 || b[36] != b'.' || !name.contains(".part") {
+        return false;
+    }
+    b.iter().take(36).enumerate().all(|(i, &c)| match i {
+        8 | 13 | 18 | 23 => c == b'-',
+        _ => c.is_ascii_hexdigit(),
+    })
+}
+
+/// 递归删除 dir 下属于本应用的半截文件（见 is_own_part_file）且修改时间早于 cutoff 的；返回删掉的个数
 fn sweep_part_in(dir: &Path, cutoff: SystemTime) -> std::io::Result<usize> {
     let mut n = 0;
     for entry in fs::read_dir(dir)? {
@@ -709,7 +724,7 @@ fn sweep_part_in(dir: &Path, cutoff: SystemTime) -> std::io::Result<usize> {
         } else if path
             .file_name()
             .and_then(|f| f.to_str())
-            .is_some_and(|f| f.contains(".part"))
+            .is_some_and(is_own_part_file)
             && fs::metadata(&path).and_then(|m| m.modified()).is_ok_and(|t| t < cutoff)
         {
             if fs::remove_file(&path).is_ok() {
@@ -1832,27 +1847,60 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    // R3：.part 孤儿清扫——只动名字带 .part 且早于截止时间的文件（下钻子目录）
+    // R3：.part 孤儿清扫——只动本应用自己的半截文件（UUID 书 id 开头）且早于截止时间的（下钻子目录）；
+    // 库根可能指到用户的文件夹，名字里带 .part 的用户文件不能碰
     #[test]
     fn sweep_part_removes_only_stale_part_files() {
+        const ID: &str = "6f1c2a70-9f3e-4b1a-8c2d-1e2f3a4b5c6d";
         let dir = temp_bg_dir("sweep");
         let books = dir.join("books");
+        let covers = dir.join("covers");
+        let thumbs = covers.join("thumbs");
         fs::create_dir_all(&books).unwrap();
-        fs::write(books.join("b1.epub.part"), b"x").unwrap();
-        fs::write(books.join("b1.opt.epub.part-1234"), b"x").unwrap();
-        fs::write(books.join("b2.epub"), b"book").unwrap();
-        fs::write(dir.join("note.txt"), b"n").unwrap();
+        fs::create_dir_all(&thumbs).unwrap();
+        let own = [
+            books.join(format!("{ID}.epub.part")),
+            books.join(format!("{ID}.opt.epub.part-1234")),
+            covers.join(format!("{ID}.jpg.part")),
+            thumbs.join(format!("{ID}.webp.part")),
+        ];
+        for p in &own {
+            fs::write(p, b"x").unwrap();
+        }
+        fs::write(books.join(format!("{ID}.epub")), b"book").unwrap();
+        // 用户的东西：名字里有 .part / partial，或不是 UUID 开头的 .part
+        let theirs = [
+            dir.join("report.part2.docx"),
+            books.join("notes.partial.txt"),
+            dir.join("b1.epub.part"),
+            books.join("summary.part-1.txt"),
+        ];
+        for p in &theirs {
+            fs::write(p, b"user").unwrap();
+        }
         // 截止时间在一天前：刚写的都算新的，不动
         let past = SystemTime::now() - Duration::from_secs(86_400);
         assert_eq!(sweep_part_in(&dir, past).unwrap(), 0);
-        assert!(books.join("b1.epub.part").exists());
-        // 截止时间在未来：.part 清掉，其余保留
+        assert!(own.iter().all(|p| p.exists()));
+        // 截止时间在未来：自己的半截文件清掉，其余保留
         let soon = SystemTime::now() + Duration::from_secs(60);
-        assert_eq!(sweep_part_in(&dir, soon).unwrap(), 2);
-        assert!(!books.join("b1.epub.part").exists());
-        assert!(!books.join("b1.opt.epub.part-1234").exists());
-        assert!(books.join("b2.epub").exists() && dir.join("note.txt").exists());
+        assert_eq!(sweep_part_in(&dir, soon).unwrap(), 4);
+        assert!(own.iter().all(|p| !p.exists()));
+        assert!(books.join(format!("{ID}.epub")).exists());
+        assert!(theirs.iter().all(|p| p.exists()), "用户文件被动了");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn own_part_file_needs_uuid_stem_and_dot_part() {
+        const ID: &str = "6f1c2a70-9f3e-4b1a-8c2d-1e2f3a4b5c6d";
+        assert!(is_own_part_file(&format!("{ID}.epub.part")));
+        assert!(is_own_part_file(&format!("{ID}.opt.epub.part-7c0e9f36-3c3a-4a4e-9f5e-0b1c2d3e4f50")));
+        assert!(!is_own_part_file(&format!("{ID}.epub")));
+        assert!(!is_own_part_file("b1.epub.part"));
+        assert!(!is_own_part_file("report.part2.docx"));
+        assert!(!is_own_part_file("notes.partial.txt"));
+        assert!(!is_own_part_file(""));
     }
 
     // R4：半截文件不留成 .part 孤儿

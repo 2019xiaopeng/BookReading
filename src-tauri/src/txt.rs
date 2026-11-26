@@ -53,15 +53,21 @@ fn sniff_utf16(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
     }
 }
 
-/// UTF-8 错误序列个数（from_utf8 只报第一处，逐段往后数）
-fn utf8_error_count(mut rest: &[u8]) -> usize {
-    let mut n = 0;
-    while let Err(e) = std::str::from_utf8(rest) {
-        n += 1;
-        let skip = e.valid_up_to() + e.error_len().unwrap_or(rest.len() - e.valid_up_to());
-        rest = &rest[skip..];
+/// 不是严格 UTF-8 时判断它是不是「零星损坏的 UTF-8」：坏处不超过千分之一，且正常的非 ASCII 字符远多于坏处
+/// （说明这确实是 UTF-8 的多语种文本、只是零星坏了几个字节）→ 返回容错解码的结果，坏处是替换符。
+/// 原先只要有一个坏字节就整本落 GB18030，恰好合法时全书乱码。非 ASCII 字符寥寥的不算——
+/// 基本是英文、只夹几个 GBK 汉字的文件，「坏处」正是那几个汉字，得走 GBK
+fn damaged_utf8(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes).into_owned();
+    let (mut bad, mut non_ascii) = (0usize, 0usize);
+    for c in text.chars() {
+        if c == '\u{FFFD}' {
+            bad += 1;
+        } else if !c.is_ascii() {
+            non_ascii += 1;
+        }
     }
-    n
+    (bad * 1000 <= bytes.len() && non_ascii >= 20 * bad).then_some(text)
 }
 
 fn decode_utf16(enc: &'static encoding_rs::Encoding, bytes: &[u8]) -> Result<String, String> {
@@ -87,17 +93,18 @@ pub fn decode_txt(bytes: &[u8]) -> Result<String, String> {
     } else {
         match std::str::from_utf8(bytes) {
             Ok(s) => s.to_string(),
-            // 个别坏字节的 UTF-8（坏序列 ≤ 千分之一）按 UTF-8 容错解码，坏处换成替换符；坏得多才当 GBK。
-            // 原先只要有一个坏字节就整本落 GB18030，恰好合法时全书乱码
-            Err(_) if utf8_error_count(bytes) * 1000 <= bytes.len() => String::from_utf8_lossy(bytes).into_owned(),
-            Err(_) => {
-                // WHATWG "gbk" label is the gb18030 decoder, a superset of GBK
-                let (text, had_errors) = encoding_rs::GBK.decode_with_bom_removal(bytes);
-                if had_errors {
-                    return Err(DECODE_ERR.to_string());
+            // 零星损坏的 UTF-8 按容错解码（坏处换成替换符，见 damaged_utf8）；其余当 GBK
+            Err(_) => match damaged_utf8(bytes) {
+                Some(text) => text,
+                None => {
+                    // WHATWG "gbk" label is the gb18030 decoder, a superset of GBK
+                    let (text, had_errors) = encoding_rs::GBK.decode_with_bom_removal(bytes);
+                    if had_errors {
+                        return Err(DECODE_ERR.to_string());
+                    }
+                    text.into_owned()
                 }
-                text.into_owned()
-            }
+            },
         }
     };
     Ok(strip_noncharacters(text))
@@ -459,7 +466,18 @@ mod tests {
         let text = decode_txt(&bytes).unwrap();
         assert!(text.contains("第一段正文。"), "{text}");
         assert!(text.contains('\u{FFFD}'), "坏字节应换成替换符：{text}");
-        // 坏得多（真 GBK 被当成 UTF-8 时的坏序列量级）才走 GBK：GBK round trip 用例即此路径
+        // 非法 UTF-8 且不是「零星损坏」的都走 GBK：GBK round trip 与下面一条用例即此路径
+    }
+
+    // R6：基本是英文、只夹几个 GBK 汉字的文件——那点「坏处」正是 GBK 汉字，不能当成损坏的 UTF-8
+    #[test]
+    fn decode_txt_keeps_gbk_for_mostly_ascii_text() {
+        let s = format!(
+            "{}注意\n",
+            "It was a bright cold day in April, and the clocks were striking thirteen.\n".repeat(80)
+        );
+        let (bytes, _, _) = encoding_rs::GBK.encode(&s);
+        assert_eq!(decode_txt(bytes.as_ref()).unwrap(), s);
     }
 
     // R6：U+FFFE / U+FFFF 不是 XML 合法字符，输出前剔掉
