@@ -170,8 +170,10 @@ fn find_cover_candidates(doc: &Document) -> (Vec<(String, Option<String>)>, Opti
         ))
     };
     let is_item = |n: &roxmltree::Node| n.is_element() && n.tag_name().name().eq_ignore_ascii_case("item");
-    let is_image = |n: &roxmltree::Node| {
-        n.attribute("media-type").unwrap_or("").to_lowercase().starts_with("image/")
+    let is_image = |n: &roxmltree::Node| match n.attribute("media-type") {
+        Some(m) => m.to_lowercase().starts_with("image/"),
+        // 不合规但存在：清单条目没写 media-type——按 href 的扩展名认，否则这类书的封面会丢
+        None => cover_ext(n.attribute("href").unwrap_or(""), None).is_some(),
     };
 
     let mut out: Vec<(String, Option<String>)> = Vec::new();
@@ -610,6 +612,22 @@ mod tests {
         assert_eq!(image_dimensions(&bytes), Some((40, 60)));
         assert_eq!(percent_decoded("a%2Fb%zz"), None, "非法编码不算解码");
         assert_eq!(percent_decoded("plain.png"), None);
+    }
+
+    // 清单条目没写 media-type（不合规但存在）：按 href 扩展名认图片，封面不能因此丢
+    #[test]
+    fn cover_item_without_media_type_still_counts_as_image() {
+        let opf = r#"<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+          <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>t</dc:title>
+            <meta name="cover" content="img1"/></metadata>
+          <manifest>
+            <item id="img1" href="images/cover.jpg" />
+            <item id="c1" href="text/ch1.xhtml" />
+          </manifest></package>"#;
+        let doc = Document::parse(opf).unwrap();
+        let (candidates, meta) = find_cover_candidates(&doc);
+        assert_eq!(meta, Some(0));
+        assert_eq!(candidates[0].0, "images/cover.jpg");
     }
 
     // ---- B13 封面选最大图（zip 集成）----
