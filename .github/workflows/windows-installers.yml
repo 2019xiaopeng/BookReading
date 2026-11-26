@@ -41,6 +41,11 @@ jobs:
 
       - name: Build Windows installers
         run: npm run tauri build
+        env:
+          # tauri.conf 的 createUpdaterArtifacts=true：没有签名私钥时打包末尾的 updater 签名步骤 exit 1
+          # （此前每次 push main 都败在这里）；与 release.yml 同一对密钥
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Collect installers
         shell: bash

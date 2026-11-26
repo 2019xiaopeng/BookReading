@@ -3102,6 +3102,13 @@ body::after {
   bottom: 84px;
 }
 
+/* V-13 首/末页轻提示（src/reader/ui/edgeHint.ts）：同一个胶囊挪到屏幕正中，淡入淡出由脚本驱动 */
+.wr-toast--center {
+  top: 50%;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+}
+
 /* §8：EPUB 页码徽标（原 pageBadgeStyle 内联迁入；值不变） */
 .wr-page-badge-layer {
   position: absolute;

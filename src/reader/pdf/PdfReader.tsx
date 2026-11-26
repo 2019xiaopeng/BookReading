@@ -26,7 +26,8 @@ import {
 
 /** 与 ImageReaderApi 同形（消费面对齐 ReaderPage）：PDF 无常驻 blob 页（位图是 canvas），getPageUrl 为占位桩 */
 export type PdfReaderApi = {
-  turn: (direction: TurnDirection) => void;
+  /** 返回 false = 已在首 / 末页、没翻动（V-13 轻提示用） */
+  turn: (direction: TurnDirection) => boolean;
   goToPage: (page: number) => void;
   getPageUrl: (page: number) => string | undefined;
   /** 页面面板缩略图：小尺寸渲染→objectURL；不可用返回 undefined */
@@ -102,6 +103,8 @@ function PdfReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated, 
   const cacheKeyRef = useRef("");
   const epochRef = useRef(0);
   const pageCountRef = useRef(0);
+  // V-13：turn 要当场回答「翻动了吗」——state 更新是异步的，这里镜像一份当前页
+  const pageRef = useRef(0);
   const zoomRef = useRef(zoom);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const fitRef = useRef<HTMLDivElement | null>(null);
@@ -137,6 +140,9 @@ function PdfReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated, 
   useEffect(() => {
     pageCountRef.current = pageCount;
   }, [pageCount]);
+  useEffect(() => {
+    pageRef.current = page;
+  }, [page]);
 
   // 模式切换：停自动滚动 + 复位缩放（分页/滚动的缩放几何不同，各模式从 1x 重新开始）
   useEffect(() => {
@@ -564,7 +570,9 @@ function PdfReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated, 
         if (wasZoomed) resetZoom();
         if (settings.mode === "webtoon") {
           const el = scrollRef.current;
-          if (!el) return;
+          if (!el) return true;
+          // 连续滚动没有「页」：已滚到首 / 末再翻就是没翻动（与条漫同一口径）
+          const atEdge = direction === "next" ? el.scrollTop + el.clientHeight >= el.scrollHeight - 1 : el.scrollTop < 1;
           const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
           const opts = {
             top: (direction === "next" ? 1 : -1) * el.clientHeight * 0.85,
@@ -572,9 +580,15 @@ function PdfReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated, 
           };
           if (wasZoomed) requestAnimationFrame(() => el.scrollBy(opts));
           else el.scrollBy(opts);
-          return;
+          return !atEdge;
         }
-        setPage((prev) => Math.min(pageCountRef.current - 1, Math.max(0, prev + (direction === "next" ? 1 : -1))));
+        const count = pageCountRef.current;
+        const next = pageRef.current + (direction === "next" ? 1 : -1);
+        if (count === 0) return true; // 文档还没加载完：无从判断
+        if (next < 0 || next >= count) return false;
+        pageRef.current = next;
+        setPage(next);
+        return true;
       },
       goToPage: (p: number) => {
         setAutoScroll(false);

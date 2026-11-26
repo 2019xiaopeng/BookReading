@@ -240,6 +240,26 @@ pub fn run_update_installer(installer_path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// V-12：清掉应用内更新留下的安装包目录。放在启动时做——启动安装器后本进程随即退出（前端 quit_app），
+/// 进程内的延时清理活不到那时候。更新后首次启动时安装器可能还在运行、占着 setup.exe，隔一会儿再补一次。
+pub fn cleanup_update_dir() {
+    std::thread::spawn(|| {
+        for delay in [Duration::ZERO, Duration::from_secs(90)] {
+            std::thread::sleep(delay);
+            if remove_dir_if_exists(&update_dir()).is_ok() {
+                break;
+            }
+        }
+    });
+}
+
+fn remove_dir_if_exists(dir: &Path) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +309,26 @@ mod tests {
         let v2 = attempt_proxies(None);
         assert_eq!(v2.len(), 3);
         assert_eq!(v2[0], None);
+    }
+
+    #[test]
+    fn update_dir_is_under_temp() {
+        assert!(update_dir().starts_with(std::env::temp_dir()));
+        assert!(update_dir().ends_with("bookreading-update"));
+    }
+
+    /// V-12：只在自己造的临时目录上测，不碰真实的更新目录
+    #[test]
+    fn remove_dir_if_exists_clears_tree_and_tolerates_missing() {
+        let dir = std::env::temp_dir().join(format!("bookreading-update-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // 不存在 = 已经是干净的
+        assert!(remove_dir_if_exists(&dir).is_ok());
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("bookreading_9.9.9_x64-setup.exe"), b"setup").unwrap();
+        std::fs::write(dir.join("sub").join("x.sig"), b"sig").unwrap();
+        assert!(remove_dir_if_exists(&dir).is_ok());
+        assert!(!dir.exists());
     }
 }
 

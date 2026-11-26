@@ -111,6 +111,7 @@ import {
 } from "../reader/settings/epuset";
 import { speak, stop as ttsStop, subscribeTts, ttsSpeaking, ttsSupported } from "../reader/tts";
 import { calcPaperStage } from "../reader/ui/paperStage";
+import { showEdgeHint } from "../reader/ui/edgeHint";
 import { logFrontend } from "../tauri/frontendLog";
 import Drawer from "../ui/Drawer";
 import { showAlert, showConfirm } from "../ui/dialog";
@@ -1251,7 +1252,10 @@ export default function ReaderPage() {
         chrome.dismiss(); // B12：翻页动作即收栏（栏可见时）
         // B13 滚动模式 PageDown/PageUp：章末/章首即时章导航，章中原生滚一屏（键盘优先，不等 400ms 防抖）
         if (settingsRef.current.readingMode !== "paginated" && (e.key === "PageDown" || e.key === "PageUp")) {
-          void controllerRef.current?.scrollStep(e.key === "PageDown" ? 1 : -1);
+          const delta = e.key === "PageDown" ? 1 : -1;
+          if (controllerRef.current && !controllerRef.current.scrollStep(delta)) {
+            showEdgeHint(readerRootRef.current, delta > 0 ? "next" : "prev", "chapter");
+          }
           return;
         }
         void animateTurn(e.key === "ArrowLeft" || e.key === "PageUp" ? "prev" : "next");
@@ -1502,6 +1506,7 @@ export default function ReaderPage() {
     const anim = effectivePageAnimation(settingsRef.current.pageAnimation);
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (!viewTurnSupported()) {
+      // shortcut: 老引擎回退路径不提示首 / 末页（拿不到「页面没变」信号）, 有老 WebView2 用户反馈再说
       await legacyTurn(ctrl, dir, anim, reduced);
       return;
     }
@@ -1509,6 +1514,7 @@ export default function ReaderPage() {
     const body = containerRef.current?.querySelector("iframe")?.contentDocument?.body ?? null;
     const leaf = leafRef.current ?? containerRef.current;
     if (!leaf) return;
+    let moved = true;
     const handle = runViewTurn({
       effect: anim,
       // 即使不播动画也走快照：旧页盖到新页就绪为止，跨章重建 iframe 的空窗不露白
@@ -1518,30 +1524,38 @@ export default function ReaderPage() {
       dark: DARK_THEMES.includes(document.documentElement.dataset.theme ?? ""),
       // 自定义背景图下没有纸面实色：不画折页高光
       paperColor: paper?.style.backgroundImage ? null : turnPaperColor(readerRootRef.current, body),
-      commit: () => ctrl.turn(dir),
+      commit: async () => {
+        const r = await ctrl.turn(dir);
+        moved = r.changed;
+        return r;
+      },
     });
     turnRef.current = handle;
     await handle.done;
     if (turnRef.current === handle) turnRef.current = null;
     ctrl.reportTurn();
+    if (!moved) showEdgeHint(readerRootRef.current, dir > 0 ? "next" : "prev", "page");
   }, [legacyTurn, resetTurnStyles]);
 
   const animateTurn = useCallback(
     (direction: "next" | "prev") => {
       setSelection(null);
       setNoteDraft(null);
+      const ctrl = controllerRef.current;
+      const delta = direction === "next" ? 1 : -1;
       if (imageCtxRef.current.active) {
         // B6：翻页不再被缩放阻塞——ImageReader.turn 内部先复位缩放再翻
-        imageApiRef.current?.turn(direction);
+        if (imageApiRef.current && !imageApiRef.current.turn(direction)) showEdgeHint(readerRootRef.current, direction, "page");
         return;
       }
       // epub 滚动模式无分页语义：键盘/滚轮/热区统一改为上一章/下一章（wheel 仍留给 iframe 原生滚动）
       if (settingsRef.current.readingMode !== "paginated") {
-        controllerRef.current?.chapterNav(direction === "next" ? 1 : -1);
+        // V-13：已在首章 / 末章再翻 → 轻提示（下同）
+        if (ctrl && !ctrl.chapterNav(delta)) showEdgeHint(readerRootRef.current, direction, "chapter");
         return;
       }
       turnQueueRef.current ??= createTurnQueue(doTurn, () => turnRef.current?.interrupt());
-      turnQueueRef.current(direction === "next" ? 1 : -1);
+      turnQueueRef.current(delta);
     },
     [doTurn],
   );
@@ -1550,7 +1564,9 @@ export default function ReaderPage() {
   const navChapter = useCallback((direction: "next" | "prev") => {
     setSelection(null);
     setNoteDraft(null);
-    controllerRef.current?.chapterNav(direction === "next" ? 1 : -1);
+    if (controllerRef.current && !controllerRef.current.chapterNav(direction === "next" ? 1 : -1)) {
+      showEdgeHint(readerRootRef.current, direction, "chapter");
+    }
   }, []);
 
   const openDrawer = useCallback(

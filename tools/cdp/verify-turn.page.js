@@ -1,5 +1,47 @@
 // verify-turn.mjs 的页面侧助手：经 CDP 注入阅读页（独立文件，便于 node --check 校验）。
 // 提供：按键翻页 / 状态快照 / 暂停动画并定位进度（确定性逐帧取证）/ 截图像素统计（判空白）。
+/** 提示胶囊中心相对视口中心的偏移（px）——V-13 要求「屏幕正中」 */
+function centered(el) {
+  const r = el.getBoundingClientRect();
+  return { dx: Math.round(r.left + r.width / 2 - window.innerWidth / 2), dy: Math.round(r.top + r.height / 2 - window.innerHeight / 2), w: Math.round(r.width), h: Math.round(r.height) };
+}
+
+/** V-13 用：视觉书的合成数据——图片页在页面里用 canvas 现画成 PNG；PDF 是手写的最小 PDF（xref 偏移留空，pdf.js 会重建） */
+window.__SYN = {
+  async png(i) {
+    const c = document.createElement("canvas");
+    c.width = 400;
+    c.height = 600;
+    const g = c.getContext("2d");
+    g.fillStyle = ["#f3e9d2", "#dfe9f3", "#e9f3e1", "#f3dfe6", "#ececec"][i % 5];
+    g.fillRect(0, 0, 400, 600);
+    g.fillStyle = "#2b2b28";
+    g.font = "bold 160px sans-serif";
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillText(String(i + 1), 200, 300);
+    const blob = await new Promise((r) => c.toBlob(r, "image/png"));
+    return new Uint8Array(await blob.arrayBuffer());
+  },
+  pdf(n) {
+    const objs = ["<< /Type /Catalog /Pages 2 0 R >>", ""];
+    const kids = [];
+    for (let i = 0; i < n; i++) {
+      kids.push(`${objs.length + 1} 0 R`);
+      objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 600] /Resources << /Font << /F1 ${2 * n + 3} 0 R >> >> /Contents ${objs.length + 2} 0 R >>`);
+      const s = `BT /F1 120 Tf 40 400 Td (${i + 1}) Tj ET`;
+      objs.push(`<< /Length ${s.length} >>\nstream\n${s}\nendstream`);
+    }
+    objs[1] = `<< /Type /Pages /Kids [${kids.join(" ")}] /Count ${n} >>`;
+    objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+    let out = "%PDF-1.4\n";
+    objs.forEach((o, i) => {
+      out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+    });
+    return new TextEncoder().encode(`${out}trailer\n<< /Root 1 0 R /Size ${objs.length + 1} >>\n%%EOF\n`);
+  },
+};
+
 window.__VT = {
   reset() {
     window.__anims.length = 0;
@@ -27,6 +69,11 @@ window.__VT = {
       hl: leaf ? leaf.querySelectorAll(".epubjs-hl").length : 0,
     };
   },
+  /** V-13 首/末页提示胶囊：{ text, opacity }；从没出现过 = null */
+  hint() {
+    const el = document.querySelector(".wr-toast--center");
+    return el ? { text: el.textContent, opacity: getComputedStyle(el).opacity, centered: centered(el) } : null;
+  },
   paperRect(pad) {
     const p = document.querySelector(".wr-reader-paper");
     if (!p) return null;
@@ -38,24 +85,26 @@ window.__VT = {
       height: Math.ceil(b.height) + pad * 2,
     };
   },
-  async waitAnims(timeout) {
+  /** 等已记录的动画出现：which="hint" 等提示胶囊的淡入淡出，否则等翻页的伪元素动画 */
+  async waitAnims(timeout, which) {
+    const list = which === "hint" ? window.__hintAnims : window.__anims;
     const t0 = performance.now();
-    while (!window.__anims.length) {
+    while (!list.length) {
       if (performance.now() - t0 > (timeout || 4000)) return false;
       await new Promise((r) => requestAnimationFrame(r));
     }
     return true;
   },
-  /** 暂停全部伪元素动画并定位到进度 t（0–1） */
+  /** 暂停全部已记录动画（翻页伪元素 + 提示胶囊）并定位到进度 t（0–1） */
   seek(t) {
-    for (const x of window.__anims) {
+    for (const x of [...window.__anims, ...window.__hintAnims]) {
       x.a.pause();
       x.a.currentTime = t * x.duration;
     }
     return window.__anims.map((x) => x.pseudo);
   },
   cancel() {
-    for (const x of window.__anims) {
+    for (const x of [...window.__anims, ...window.__hintAnims]) {
       try {
         x.a.cancel();
       } catch (e) {

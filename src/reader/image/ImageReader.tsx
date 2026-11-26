@@ -35,7 +35,8 @@ import {
 } from "./layout";
 
 export type ImageReaderApi = {
-  turn: (direction: TurnDirection) => void;
+  /** 返回 false = 已在首 / 末页、没翻动（V-13 轻提示用） */
+  turn: (direction: TurnDirection) => boolean;
   goToPage: (page: number) => void;
   /** url of a resident (preload-window) page blob, for the pages panel */
   getPageUrl: (page: number) => string | undefined;
@@ -111,6 +112,8 @@ function ImageReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated
   const epochRef = useRef(0);
   const currentPageRef = useRef(0);
   const shownSpreadRef = useRef<number | null>(null);
+  // V-13：turn 要当场回答「翻动了吗」——state 更新是异步的，这里镜像一份当前序号
+  const spreadIndexRef = useRef<number | null>(null);
   const reportedRef = useRef<number | null>(null);
   const settingsRef = useRef(settings);
   const onRelocatedRef = useRef(onRelocated);
@@ -131,6 +134,9 @@ function ImageReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated
   useEffect(() => {
     autoScrollRef.current = autoScroll;
   }, [autoScroll]);
+  useEffect(() => {
+    spreadIndexRef.current = spreadIndex;
+  }, [spreadIndex]);
 
   // zoom geometry is per-mode (stage fit layer vs webtoon strip): start each mode fresh.
   // paged 下 anchor 从不更新：切模式前先把锚拉回当前页，否则用陈旧 anchor 错误回收当前页邻域再重载（模式切换闪烁根因）
@@ -405,7 +411,9 @@ function ImageReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated
         if (wasZoomed) resetZoom();
         if (settings.mode === "webtoon") {
           const el = scrollRef.current;
-          if (!el) return;
+          if (!el) return true;
+          // 条漫没有「页」：已滚到首 / 末再翻就是没翻动（与自动滚动判到底同一口径）
+          const atEdge = direction === "next" ? el.scrollTop + el.clientHeight >= el.scrollHeight - 1 : el.scrollTop < 1;
           const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
           const opts = {
             top: (direction === "next" ? 1 : -1) * el.clientHeight * 0.85,
@@ -413,13 +421,15 @@ function ImageReaderImpl({ book, theme, settings, turnSpeedMs = 260, onRelocated
           };
           if (wasZoomed) requestAnimationFrame(() => el.scrollBy(opts));
           else el.scrollBy(opts);
-          return;
+          return !atEdge;
         }
-        setSpreadIndex((prev) => {
-          if (prev === null || spreads.length === 0) return prev;
-          const next = direction === "next" ? prev + 1 : prev - 1;
-          return Math.min(spreads.length - 1, Math.max(0, next));
-        });
+        const prev = spreadIndexRef.current;
+        if (prev === null || spreads.length === 0) return true;
+        const next = direction === "next" ? prev + 1 : prev - 1;
+        if (next < 0 || next >= spreads.length) return false;
+        spreadIndexRef.current = next;
+        setSpreadIndex(next);
+        return true;
       },
       goToPage: (page: number) => {
         setAutoScroll(false);

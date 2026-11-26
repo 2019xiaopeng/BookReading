@@ -113,6 +113,8 @@ pub fn run() {
             let _ = generate_cover_thumbs(handle.clone());
             // v2.6.0 A：存量 epub 阅读优化副本幂等补生成（后台线程 + epub-opt-progress 事件报进度，已有跳过）
             let _ = optimize_epub_images(handle.clone());
+            // V-12：清掉上次应用内更新留下的安装包（%TEMP%\bookreading-update）
+            commands::update::cleanup_update_dir();
 
             // 批次19：系统托盘——✕ 最小化到托盘后的常驻入口；左键单击恢复主窗口，右键菜单 显示/退出。
             // 常驻：窗口 hide 后任务栏图标消失（Windows 默认），托盘不随窗口隐藏消失。

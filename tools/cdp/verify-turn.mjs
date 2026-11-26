@@ -2,17 +2,18 @@
 // 前置：① node tools/cdp/make-synth-epub.mjs（生成 temp/synth-turn.epub，合成测试书）
 //       ② Vite dev server 在 14200（npx vite）
 //       ③ 无头 Chrome 在 9333（chrome --headless=new --remote-debugging-port=9333 --user-data-dir=<F 盘临时目录>）
-// 用法：node tools/cdp/verify-turn.mjs [场景片段，逗号分隔：sheet/cross/rapid/input/end/reduced/spread]
+// 用法：node tools/cdp/verify-turn.mjs [场景片段，逗号分隔：sheet/cross/rapid/input/end/edge/reduced/spread]
 // 手法：合成书 + Tauri IPC 假后端 → 应用内真实翻页 → **暂停伪元素动画并定位到指定进度后截图**（确定性逐帧）→ 拼成对照表；
 //       每帧做像素统计（偏离中位亮度的像素占比）判空白；跨章更新期间连拍；连按 / 输入 / 书末 / reduced-motion / 双页各一组断言。
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+//       edge = V-13 首/末页轻提示（EPUB 分页与滚动、漫画、PDF：合成图片与最小 PDF 在页面里现造）。
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { connect, sleep } from "./cdp-lib.mjs";
 import { MOCK, ipcShimSource } from "./ipc-shim.mjs";
 
 const only = (process.argv.find((a) => a.startsWith("only="))?.slice(5) ?? "").split(",").filter(Boolean);
 const OUT = "F:/bookreading-project/temp/turn-shots";
 mkdirSync(OUT, { recursive: true });
-const URL_READER = "http://localhost:14200/read/synth-turn";
+const PAGES = 5; // edge 场景的合成视觉书页数
 const T = [0.06, 0.2, 0.35, 0.5, 0.65, 0.8, 0.94];
 const PAD = 24;
 
@@ -43,13 +44,22 @@ const fail = (scenario, msg) => {
   report.failures.push(`${scenario}: ${msg}`);
 };
 
-/** 打开合成书到阅读页（每次重设假设置：效果 / 主题 / 速度 / 起始位置） */
-async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [1350, 801], state = null, epub = "temp/synth-turn.epub" }) {
+/** 打开合成书到阅读页（每次重设假设置：效果 / 主题 / 速度 / 起始位置）。visual = 视觉书（漫画 / PDF，数据在页面里现造） */
+async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [1350, 801], state = null, epub = "temp/synth-turn.epub", readingMode = "paginated", visual = null }) {
   const epubB64 = epubB64Of(epub);
   if (scriptId) await c.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: scriptId });
   const mock = JSON.parse(JSON.stringify(MOCK));
-  Object.assign(mock.settings, { pageAnimation: effect, theme, turnSpeedMs, layoutMode: "auto", fontSizePercent: "120" });
-  mock.books = [{ ...BOOK, file_size: readFileSync(epub).length }];
+  Object.assign(mock.settings, { pageAnimation: effect, theme, turnSpeedMs, layoutMode: "auto", fontSizePercent: "120", readingMode });
+  const id = visual ? `synth-${visual.kind}` : "synth-turn";
+  if (visual) {
+    const key = visual.kind === "images" ? "image_reader_settings" : "pdf_reader_settings";
+    mock.settings[key] = JSON.stringify({ ...JSON.parse(mock.settings[key]), mode: visual.mode, layout: "single" });
+  }
+  mock.books = [
+    visual
+      ? { ...BOOK, id, format: visual.kind, library_path: visual.kind === "images" ? `library/images/${id}` : `library/pdf/${id}.pdf`, page_count: PAGES, file_size: 0 }
+      : { ...BOOK, file_size: readFileSync(epub).length },
+  ];
   const source =
     ipcShimSource(mock) +
     "\n(() => {\n" +
@@ -62,8 +72,11 @@ async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [13
     "  I.invoke = async (cmd, args = {}) => {\n" +
     "    const a = args;\n" +
     "    switch (cmd) {\n" +
-    '      case "get_book": return a.bookId === "synth-turn" ? { ...M.data.books[0] } : null;\n' +
-    '      case "read_library_file": return epub;\n' +
+    `      case "get_book": return a.bookId === "${id}" ? { ...M.data.books[0] } : null;\n` +
+    `      case "read_library_file": return ${visual?.kind === "pdf" ? `window.__SYN.pdf(${PAGES})` : "epub"};\n` +
+    `      case "list_image_pages": return Array.from({ length: ${PAGES} }, (_, i) => String(i + 1).padStart(3, "0") + ".png");\n` +
+    `      case "list_image_page_meta": return Array.from({ length: ${PAGES} }, () => ({ width: 400, height: 600 }));\n` +
+    '      case "read_image_page": return window.__SYN.png(a.index);\n' +
     '      case "get_reading_state": return M.state ? { ...M.state } : null;\n' +
     '      case "upsert_reading_state": M.state = { book_id: a.bookId, cfi: a.cfi, percent: a.percent, updated_at: 0 }; return null;\n' +
     '      case "list_bookmarks": return [];\n' +
@@ -76,12 +89,15 @@ async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [13
     "      default: return orig(cmd, args);\n" +
     "    }\n" +
     "  };\n" +
-    "  // 记录 WAAPI 伪元素动画（暂停 / 定位进度做确定性取证）\n" +
+    "  // 记录 WAAPI 动画（暂停 / 定位进度做确定性取证）：翻页的伪元素动画进 __anims（既有场景只看这一份），\n" +
+    "  // V-13 提示胶囊的淡入淡出进 __hintAnims——书首 / 书末再翻会弹提示，混在一起会被旧断言当成「播了动画」\n" +
     "  window.__anims = [];\n" +
+    "  window.__hintAnims = [];\n" +
     "  const animate = Element.prototype.animate;\n" +
     "  Element.prototype.animate = function (kf, opts) {\n" +
     "    const a = animate.call(this, kf, opts);\n" +
     "    if (opts && opts.pseudoElement) window.__anims.push({ a, pseudo: opts.pseudoElement, duration: opts.duration });\n" +
+    "    else if (opts && this.classList.contains('wr-toast--center')) window.__hintAnims.push({ a, duration: opts.duration });\n" +
     "    return a;\n" +
     "  };\n" +
     "})();\n" +
@@ -90,9 +106,14 @@ async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [13
   scriptId = r.identifier;
   c.logs.length = 0;
   await c.viewport(viewport[0], viewport[1]);
-  await c.send("Page.navigate", { url: URL_READER });
+  const ready = visual
+    ? `!!document.querySelector(".wr-image-stage ${visual.kind === "images" ? "img" : "canvas"}")`
+    : `!!(document.querySelector(".wr-reader-leaf iframe") && document.querySelector(".wr-reader-leaf .epub-view"))`;
+  // 同一本书重开时地址不变：以 timeOrigin 换代为准，免得在还没被替换的旧文档上判成就绪
+  const origin = await ev(`performance.timeOrigin`).catch(() => 0);
+  await c.send("Page.navigate", { url: `http://localhost:14200/read/${id}` });
   for (let i = 0; i < 120; i++) {
-    const ok = await ev(`!!(document.querySelector(".wr-reader-leaf iframe") && document.querySelector(".wr-reader-leaf .epub-view"))`).catch(() => false);
+    const ok = await ev(`performance.timeOrigin !== ${origin} && ${ready}`).catch(() => false);
     if (ok) break;
     await sleep(250);
   }
@@ -100,7 +121,7 @@ async function open({ effect, theme = "ink", turnSpeedMs = "260", viewport = [13
 }
 
 const state = () => ev(`JSON.stringify(window.__VT.state())`).then(JSON.parse);
-const key = (dir) => ev(`window.__VT.key(${JSON.stringify(dir > 0 ? "ArrowRight" : "ArrowLeft")}); 1`);
+const key = (dir) => ev(`window.__VT.key(${JSON.stringify(typeof dir === "string" ? dir : dir > 0 ? "ArrowRight" : "ArrowLeft")}); 1`);
 async function shot(file) {
   const rect = await ev(`JSON.stringify(window.__VT.paperRect(${PAD}))`).then(JSON.parse);
   const r = await c.send("Page.captureScreenshot", { format: "png", clip: { ...rect, scale: 1 } });
@@ -470,14 +491,22 @@ async function doLong() {
     await open({ effect, theme: "ink", viewport: [1100, 760], epub: "temp/synth-long.epub" });
     await c.send("Emulation.setCPUThrottlingRate", { rate: 3 });
     const inks = [];
+    const blank = [];
     const phases = { update: 0, anim: 0, idle: 0 };
     const t0 = Date.now();
     for (let i = 0; i < 100; i++) {
       await key(1);
       const s = await state();
       const anims = await ev(`window.__anims.length`);
-      const ink = await shot(null);
+      // 每一帧先落盘再统计：空白帧原样留证（补拍的那张往往已经是完整的新章，看不出白屏）
+      const f = `${OUT}/long-cur-${effect}.png`;
+      const ink = await shot(f);
       inks.push(+(ink.ink * 100).toFixed(2));
+      if (ink.ink <= 0.008) {
+        const keep = `${OUT}/blank-${effect}-${i}.png`;
+        renameSync(f, keep);
+        blank.push({ i, f: keep, turning: s.turning, anims, spine: s.spine, scrollLeft: s.scrollLeft, pageWidth: s.pageWidth });
+      }
       phases[s.turning === null ? "idle" : anims ? "anim" : "update"] += 1;
       await ev(`window.__VT.waitIdle(8000)`);
     }
@@ -489,8 +518,134 @@ async function doLong() {
     want(name, end.bands === 0 && end.turning === null && end.iframes === 1, `有残留：${JSON.stringify(end)}`);
     const errs = errors();
     want(name, errs.length === 0, `控制台报错：${errs.slice(0, 3).join(" | ")}`);
-    report.scenarios[name] = { ms, phases, minInk: Math.min(...inks), avgInk: +(inks.reduce((a, b) => a + b, 0) / inks.length).toFixed(2), spine: end.spine, errors: errs };
+    report.scenarios[name] = { ms, phases, minInk: Math.min(...inks), avgInk: +(inks.reduce((a, b) => a + b, 0) / inks.length).toFixed(2), spine: end.spine, blank, errors: errs };
   }
+}
+
+// ───── edge：V-13 到头再翻的轻提示（EPUB 分页 / 滚动、漫画、PDF）─────
+const hintNow = () => ev(`JSON.stringify(window.__VT.hint())`).then(JSON.parse);
+/** 到头再翻一次 → 等翻页收尾与淡入动画 → 把淡入定位到进度 t → 截图（返回提示状态） */
+async function edgePress(file, dir, t = 1) {
+  await ev(`window.__hintAnims.length = 0`);
+  await key(dir);
+  await ev(`window.__VT.waitIdle(8000)`);
+  await ev(`window.__VT.waitAnims(300, "hint")`); // 提示已在显示时再触发没有新动画，等一小会儿即可
+  await ev(`window.__VT.seek(${t})`);
+  const h = await hintNow();
+  if (file) {
+    // 视觉书没有 .wr-reader-paper：整窗截图
+    const rect = await ev(`JSON.stringify(window.__VT.paperRect(${PAD}))`).then(JSON.parse);
+    await c.screenshot(file, rect ? { ...rect, scale: 1 } : undefined);
+  }
+  await ev(`window.__VT.cancel()`);
+  return h;
+}
+/** 连按 n 次方向键（每次间隔 250ms，等页面换完） */
+async function press(dir, n) {
+  for (let i = 0; i < n; i++) {
+    await key(dir);
+    await sleep(250);
+  }
+}
+
+async function doEdge() {
+  const name = "edge";
+  const files = [];
+  const expectHint = async (label, dir, text, file, t = 1) => {
+    const h = await edgePress(file, dir, t);
+    want(name, h && h.text === text, `${label}：提示不对 ${JSON.stringify(h)}`);
+    if (!h) return h;
+    want(name, t < 1 ? Number(h.opacity) < 1 : h.opacity === "1", `${label}：进度 ${t} 时透明度应为${t < 1 ? "小于 1" : " 1"}，实际 ${h.opacity}`);
+    want(name, Math.abs(h.centered.dx) <= 1 && Math.abs(h.centered.dy) <= 1, `${label}：提示不在屏幕正中 ${JSON.stringify(h.centered)}`);
+    if (file) files.push([file.replace(`${OUT}/`, "").replace(".png", ""), `${label} ${h.centered.w}×${h.centered.h}`]);
+    return h;
+  };
+  const webtoonToBottom = async () => {
+    for (let i = 0; i < 6; i++) {
+      // 条漫图片懒加载会改变总高度：反复贴到底，直到稳定
+      await ev(`(() => { const el = document.querySelector(".wr-image-webtoon"); if (!el) return; el.scrollTop = el.scrollHeight; })()`);
+      await sleep(250);
+    }
+  };
+
+  // ① EPUB 分页：正常翻页不弹；书末再翻 → 淡入 → 再触发不叠弹 → 1s 后淡出
+  await open({ effect: "paper", theme: "ink" });
+  await simpleTurn(1);
+  const quiet = await hintNow();
+  want(name, !quiet || quiet.opacity === "0", `正常翻页却弹了提示：${JSON.stringify(quiet)}`);
+  await ev(`(() => { for (let i = 0; i < 80; i++) setTimeout(() => window.__VT.key("ArrowRight"), i * 40); return 1; })()`);
+  await sleep(80 * 40 + 100);
+  await ev(`window.__VT.waitIdle(20000)`);
+  await sleep(600);
+  want(name, (await state()).spine === 8, `没有走到末章：${JSON.stringify(await state())}`);
+  // 连按收尾时提示可能还在显示（显示中再触发不重播淡入）：等它淡完，才拍得到下一次的淡入半程
+  for (let i = 0; i < 60; i++) {
+    const h = await hintNow();
+    if (!h || h.opacity === "0") break;
+    await sleep(100);
+  }
+  await expectHint("EPUB 分页·书末（淡入半程）", 1, "已是最后一页", `${OUT}/edge-epub-end-half.png`, 0.5);
+  await expectHint("EPUB 分页·书末·再触发", 1, "已是最后一页", `${OUT}/edge-epub-end.png`);
+  want(name, (await ev(`document.querySelectorAll(".wr-toast--center").length`)) === 1, "连按叠出了多个提示");
+  await sleep(1300);
+  const gone = await hintNow();
+  want(name, gone && gone.opacity === "0", `1s 后没有淡出：${JSON.stringify(gone)}`);
+  await open({ effect: "paper", theme: "dark" });
+  await expectHint("EPUB 分页·书首（夜间）", -1, "已是第一页", `${OUT}/edge-epub-start-dark.png`);
+
+  // ② EPUB 滚动模式：按章翻——方向键与 PageDown 到头都说「章」
+  await open({ effect: "none", theme: "ink", readingMode: "scrolled" });
+  for (let i = 0; i < 14 && (await state()).spine !== 8; i++) {
+    await key(1);
+    await sleep(450);
+  }
+  want(name, (await state()).spine === 8, `滚动模式没有走到末章：${JSON.stringify(await state())}`);
+  await expectHint("EPUB 滚动·末章再翻", 1, "已是最后一章", `${OUT}/edge-scrolled-end.png`);
+  await ev(`(() => { const sc = document.querySelector(".epub-container"); if (sc) sc.scrollTop = sc.scrollHeight; })()`);
+  await sleep(400);
+  await expectHint("EPUB 滚动·末章底 PageDown", "PageDown", "已是最后一章", `${OUT}/edge-scrolled-pagedown.png`);
+  await open({ effect: "none", theme: "ink", readingMode: "scrolled" });
+  await expectHint("EPUB 滚动·首章再翻", -1, "已是第一章", `${OUT}/edge-scrolled-start.png`);
+
+  // ③ 漫画（假设置是 RTL：方向键右 = 往前翻）
+  await open({ effect: "none", visual: { kind: "images", mode: "paged" } });
+  await expectHint("漫画分页（RTL）·书首", 1, "已是第一页", `${OUT}/edge-img-paged-start.png`);
+  await press(-1, 6);
+  await expectHint("漫画分页（RTL）·书末", -1, "已是最后一页", `${OUT}/edge-img-paged-end.png`);
+  await open({ effect: "none", visual: { kind: "images", mode: "webtoon" } });
+  // RTL 条漫：方向键右 = 往回（书首），左 = 往后（书末）
+  await expectHint("漫画条漫·书首", 1, "已是第一页", `${OUT}/edge-img-webtoon-start.png`);
+  await webtoonToBottom();
+  await expectHint("漫画条漫·书末", -1, "已是最后一页", `${OUT}/edge-img-webtoon-end.png`);
+
+  // ④ PDF（假设置非 RTL）
+  await open({ effect: "none", visual: { kind: "pdf", mode: "paged" } });
+  await expectHint("PDF 分页·书首", -1, "已是第一页", `${OUT}/edge-pdf-paged-start.png`);
+  await press(1, 6);
+  await expectHint("PDF 分页·书末", 1, "已是最后一页", `${OUT}/edge-pdf-paged-end.png`);
+  await open({ effect: "none", visual: { kind: "pdf", mode: "webtoon" } });
+  await expectHint("PDF 连续滚动·书首", -1, "已是第一页", `${OUT}/edge-pdf-webtoon-start.png`);
+  await webtoonToBottom();
+  await expectHint("PDF 连续滚动·书末", 1, "已是最后一页", `${OUT}/edge-pdf-webtoon-end.png`);
+
+  // ⑤ 系统「减少动态效果」：直接出现、不建动画、满 1s 直接移除
+  await c.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+  await open({ effect: "paper", theme: "ink" });
+  await ev(`window.__hintAnims.length = 0`);
+  await key(-1);
+  await ev(`window.__VT.waitIdle(8000)`);
+  await sleep(150);
+  const r0 = await hintNow();
+  want(name, r0 && r0.text === "已是第一页" && r0.opacity === "1", `reduced-motion 下提示不对：${JSON.stringify(r0)}`);
+  want(name, (await ev(`window.__hintAnims.length`)) === 0, "reduced-motion 下提示仍建了动画");
+  await sleep(1100);
+  want(name, (await hintNow()) === null, "reduced-motion 下提示满 1s 后应直接移除");
+  await c.send("Emulation.setEmulatedMedia", { features: [] });
+
+  const errs = errors();
+  want(name, errs.length === 0, `控制台报错：${errs.slice(0, 3).join(" | ")}`);
+  report.scenarios[name] = { files, errors: errs };
+  await buildSheet("edge", files);
 }
 
 const PLAN = {
@@ -498,6 +653,7 @@ const PLAN = {
   legacy: doLegacy,
   figures: doFigures,
   chrome: doChrome,
+  edge: doEdge,
   sheet: async () => {
     for (const [effect, dir, theme, name] of [
       ["slide", 1, "ink", "ink-slide-next"],
@@ -534,7 +690,7 @@ const PLAN = {
   reduced: doReduced,
 };
 
-const order = ["sheet", "cross", "rapid", "input", "end", "reduced", "spread", "figures", "chrome", "legacy", "long"];
+const order = ["sheet", "cross", "rapid", "input", "end", "edge", "reduced", "spread", "figures", "chrome", "legacy", "long"];
 for (const id of order) {
   if (only.length && !only.some((o) => id.includes(o))) continue;
   try {

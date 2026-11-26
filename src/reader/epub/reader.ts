@@ -157,9 +157,10 @@ export type ReaderController = {
   /** turn 之后的 relocated 上报（不在更新回调里跑：它内部也用 rAF） */
   reportTurn: () => void;
   display: (target?: string) => Promise<void>;
-  chapterNav: (delta: number) => void;
-  /** B13 滚动模式翻屏（PageDown/PageUp）：章末/章首即时章导航，章中滚动一屏；返回触发的章方向或 null */
-  scrollStep: (dir: 1 | -1) => 1 | -1 | null;
+  /** 返回 false = 已在首章 / 末章、没翻动（V-13 轻提示用） */
+  chapterNav: (delta: number) => boolean;
+  /** B13 滚动模式翻屏（PageDown/PageUp）：章末/章首即时章导航，章中滚动一屏；返回 false = 已到书的首尾、没动 */
+  scrollStep: (dir: 1 | -1) => boolean;
   progressCfi: (percentage: number) => string | null;
   setTheme: (theme: Theme) => void;
   setFontSizePercent: (percent: number) => void;
@@ -786,21 +787,22 @@ export async function createReader(opts: {
     }
   })();
 
-  const chapterNav = (delta: number) => {
+  const chapterNav = (delta: number): boolean => {
     try {
-      if (!delta) return;
+      if (!delta) return true;
       const loc = rendition.currentLocation?.();
       let idx: number | null = loc?.start?.index;
       if (typeof idx !== "number" || !Number.isFinite(idx) || idx < 0) idx = spineIndexFromCfi(loc?.start?.cfi);
-      if (idx === null) return;
+      if (idx === null) return true;
       const count: number = book.spine?.spineItems?.length ?? 0;
       const next = Math.min(count - 1, Math.max(0, idx + delta));
-      if (next === idx) return;
+      if (next === idx) return false;
       const href = book.spine.get?.(next)?.href;
       if (typeof href === "string" && href) void rendition.display(href);
     } catch (e) {
       logOnce("reader.chapterNav", `reader: chapterNav failed ${String(e)}`);
     }
+    return true;
   };
 
   /**
@@ -914,21 +916,20 @@ export async function createReader(opts: {
     },
     setReadingMode: (mode: ReadingMode) => applyFlow(mode),
     chapterNav,
-    /** B13 滚动模式键盘翻屏：章末/章首即时 chapterNav，章中原生滚动一屏。返回触发的章方向（null=章内滚动） */
+    /** B13 滚动模式键盘翻屏：章末/章首即时 chapterNav，章中原生滚动一屏。返回 false = 已到书的首尾、没动 */
     scrollStep: (dir: 1 | -1) => {
       try {
-        if (currentFlow !== "scrolled") return null;
+        if (currentFlow !== "scrolled") return true;
         const scroller = opts.container.querySelector<HTMLElement>(".epub-container");
-        if (!scroller) return null;
+        if (!scroller) return true;
         if (scrollEdgeDirection(scroller.scrollTop, scroller.clientHeight, scroller.scrollHeight, dir) === dir) {
-          chapterNav(dir);
-          return dir;
+          return chapterNav(dir);
         }
         scroller.scrollBy({ top: dir * Math.max(1, scroller.clientHeight - 48), behavior: "auto" });
-        return null;
+        return true;
       } catch (e) {
         logOnce("reader.scrollStep", `reader: scrollStep failed ${String(e)}`);
-        return null;
+        return true;
       }
     },
     progressCfi: (percentage: number) => {
